@@ -14,3 +14,8 @@ Multi-use Agent Systems
 | 4 | [工程开发文档](docs/engineering.md) | 指导 AI 按顺序编码、测试、验收、运行与交付 |
 
 当前处于设计阶段，业务代码尚未实现。后续建设顺序与进度以工程开发文档为准。
+# TODOS
+1. AGENTS.md、skill资源版本、Ageng运行时工程资源均采用git版本管理合理吗？
+2. 按照当前方案，发送给LLM的上下文是从哪里来的，最原始的上下文记录是怎么管理的？
+3. SSE采用AG‑UI协议
+4. 技术方案的runtime模块粒度还是有点大，再细分下

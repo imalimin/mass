@@ -9,111 +9,162 @@
 
 ## T00 技术基线与依赖
 
-### T00.1 运行形态
+### T00.1 单服务运行形态
 
-遵循用户已指定的技术约束：后端 Go，前端 Node.js 技术生态；Agent 使用 AGENTS.md 与指定版本 Skills；MVP 无沙箱，内置工具直接在本服务执行。
+本节选型按用户要求固定：后端 Go，前端独立工程位于 `./frontend`，前后端由同一个 Go 进程提供服务；数据库 MariaDB；工程资源持久化采用字节跳动火山引擎 TOS；LLM 接入统一使用 CloudWeGo Eino；首版采用最简账号密码登录。Agent 仍使用 AGENTS.md 与指定版本 Skills，MVP 不接入沙箱。
 
-建议采用 React + TypeScript + Vite，单个 Go 服务承载 API、调度器和执行器，PostgreSQL 保存业务数据和运行事件，本地持久化目录保存文件及大载荷。生产环境由 Go 提供构建后的静态页面，Node.js 只用于开发、构建与测试。
+交付为一个 `mass` 可执行文件、一个服务配置入口和一个监听地址。同一进程提供页面、API、SSE、文件下载、调度器及 Agent 执行器，不拆 Node.js 服务、BFF、Worker 或模型代理服务。MariaDB、TOS 和实际模型端点是外部基础依赖，“单服务”指只部署一个 MASS 应用服务，并不将这些外部依赖嵌入 Go 进程。
 
-MVP 不依赖 Redis、独立消息队列、向量数据库、对象存储服务或通用 Agent 编排框架。首版模型适配通过标准库 HTTP 实现，避免隐藏重试与无法捕获实际载荷的封装。
+前端采用 React + TypeScript + Vite，源码和 package.json/package-lock.json 全部在 `frontend/`。构建生成 `frontend/dist`，构建脚本复制到后端嵌入目录，通过 Go embed 编入二进制。Node.js 仅用于构建、测试或文件构建监听；默认开发流程也由 Go 统一提供页面，不要求另开 Vite HTTP 服务。
+
+运行期间不持久化业务文件到本地：版本资源、附件、运行工作区文件、产物及完整 Trace 原始载荷均进入 TOS，元数据及状态进入 MariaDB。Go 仅使用有界内存缓冲，不提供本地磁盘回退。本地源码、配置和构建产物不属于运行中的业务资源持久化。
+
+MVP 不增加 Redis、独立消息队列、向量数据库或独立认证服务。Eino 以 Go 库方式嵌入 MASS，并不等同于具体模型供应商或模型托管服务。
 
 ### T00.2 依赖清单
 
-具体补丁版本在工程初始化时锁定到 go.mod/go.sum、工具版本配置和 package-lock.json；不以 latest 作为可复现构建输入。依赖兼容性在安装时复核。
+精确版本在初始化时锁定至 go.mod/go.sum、工具配置和 `frontend/package-lock.json`，不以 latest 作为可复现构建输入。
 
-| 模块 | 技术与依赖 | 作用及选择 |
+| 模块 | 技术与依赖 | 用途 |
 | --- | --- | --- |
-| M13 服务基础 | Go net/http、ServeMux、context、log/slog、embed | HTTP、取消传播、结构化日志和静态资源 |
-| 存储基础 | PostgreSQL；github.com/jackc/pgx/v5、pgxpool | 事务、连接池、显式空间过滤 |
-| SQL 与迁移 | sqlc、github.com/pressly/goose/v3 | 生成查询代码、执行版本化 SQL 迁移 |
-| M01 身份 | crypto/rand、crypto/sha256、crypto/subtle；golang.org/x/crypto/argon2 | 随机登录令牌、令牌摘要、恒定时间比较、Argon2id 口令摘要 |
-| M02 定义 | go.yaml.in/yaml/v4；encoding/json；crypto/sha256 | 配置解析、内部标准表示、内容完整性 |
-| M02/M09 校验 | github.com/santhosh-tekuri/jsonschema/v6 | 运行时参数和配置 Schema 校验 |
-| M03 凭证 | crypto/aes、crypto/cipher | AES-GCM 加密，密钥不存入业务数据库 |
-| M04—M06 运行 | pgx 事务、context、sync、time | 幂等、并发准入、认领、执行和取消 |
-| M07 上下文 | 自有组装/压缩模块；模型对应计数器适配 | 可控预算与可追踪摘要，不伪造统一精确 Token 计数 |
-| M08 模型 | net/http、encoding/json、io | 请求体捕获、流式协议解码、显式重试 |
-| M10 Trace | PostgreSQL、JSONB、BlobStore、net/http | 事件索引、原始载荷、SSE 续传 |
-| M11 文件 | os.Root、io、crypto/sha256 | 目录边界、有限读取、内容校验 |
-| M12 页面 | react、react-dom、typescript、vite、@vitejs/plugin-react | 前端 SPA |
-| M12 路由/查询 | react-router；@tanstack/react-query | 页面路由、服务端状态缓存 |
-| M12 编辑/预览 | monaco-editor；react-markdown、remark-gfm | 定义编辑、差异查看、受限 Markdown 预览 |
-| API 类型 | OpenAPI 3.1；openapi-typescript | 机器可读接口与生成 TypeScript 类型 |
-| 测试工具 | Go testing/httptest；vitest；@playwright/test | 单元、协议、集成与端到端测试 |
+| M13 服务基础 | Go net/http、ServeMux、context、log/slog、embed | 一个进程提供所有应用能力及前端资源 |
+| 数据访问 | MariaDB/InnoDB；database/sql；github.com/go-sql-driver/mysql | 连接池、显式 SQL、事务和空间过滤 |
+| 迁移 | github.com/pressly/goose/v3，mysql 方言 | 同一二进制 migrate 子命令执行迁移；MVP 不引入 SQL 代码生成器 |
+| M01 身份 | golang.org/x/crypto/bcrypt；crypto/rand、crypto/sha256 | 密码校验、随机会话令牌和令牌摘要 |
+| M02 定义 | go.yaml.in/yaml/v4；encoding/json、crypto/sha256 | 定义解析、标准表示、内容摘要 |
+| M02/M09 校验 | github.com/santhosh-tekuri/jsonschema/v6 | 配置和工具参数运行时校验 |
+| M03 凭证 | crypto/aes、crypto/cipher | 供应商凭证加密，主密钥从统一配置的秘密来源注入 |
+| M04—M06 运行 | database/sql、context、sync、time | 幂等、事务认领、并发与取消 |
+| M07 上下文 | 平台上下文策略 + Eino schema/model | 消息转换、摘要调用和模型对应预算 |
+| M08 模型 | github.com/cloudwego/eino；对应 eino-ext 模型组件 | 统一模型接口、工具定义和流式结果 |
+| M08 Trace 捕获 | Eino callbacks + 自定义 http.RoundTripper | 语义事件和实际 HTTP 载荷分别记录 |
+| M10 Trace | MariaDB JSON、TOS、net/http | 事件索引、原文对象与 SSE 续传 |
+| M11 对象存储 | github.com/volcengine/ve-tos-golang-sdk/v2/tos | TOS 上传、读取、元信息、分片与清理 |
+| M12 前端 | React、TypeScript、Vite、React Router、TanStack Query | frontend 工程中的页面、路由与查询 |
+| M12 编辑/预览 | monaco-editor、react-markdown、remark-gfm | 定义编辑、差异和受限预览 |
+| API 类型 | OpenAPI 3.1、openapi-typescript | HTTP 契约和前端类型 |
+| 测试 | Go testing/httptest、Vitest、Playwright | 单元、协议、MariaDB/TOS 集成与浏览器验证 |
 
-UI 基础组件先采用本地封装与普通样式，不额外引入一套未经选择的组件库。浏览器本地状态优先组件状态和 reducer，不额外引入全局状态框架。
+数据库驱动使用 [go-sql-driver/mysql](https://github.com/go-sql-driver/mysql)；Repository 手写带空间条件的 SQL，通过 `sql.Tx` 保持事务边界；[goose](https://pressly.github.io/goose/)作为库集成，不要求额外常驻进程。
 
-[YAML 官方仓库](https://github.com/yaml/go-yaml)推荐新项目采用 v4；[jsonschema/v6](https://pkg.go.dev/github.com/santhosh-tekuri/jsonschema/v6)提供运行时校验；它们的具体 API 以锁定版本为准。配置解析限制文件大小、层级和别名展开，拒绝未知配置字段与非预期多文档输入；Schema 引用限定为平台注册的本地资源，禁止任意网络加载。
+[YAML](https://github.com/yaml/go-yaml)与 [JSON Schema](https://pkg.go.dev/github.com/santhosh-tekuri/jsonschema/v6)负责配置解析和校验。限制配置大小及深度，拒绝未知字段和非预期多文档输入，Schema 引用只允许平台注册资源，不动态访问外部网络。
 
-[pgx](https://github.com/jackc/pgx)负责数据库连接；[sqlc](https://docs.sqlc.dev/en/latest/howto/generate.html)生成查询代码但不执行迁移；迁移使用 [goose](https://pressly.github.io/goose/)。迁移文件使用固定宽度序号或时间戳，确保读取顺序一致。
+### T00.3 MariaDB 数据与约束
 
-### T00.3 数据基础
-
-多租户数据统一带 space_id；资源访问同时校验身份、成员关系、操作权限和对象归属。Repository 不提供默认跨空间查询；后台任务使用明确的系统身份和空间范围。
+采用 InnoDB、utf8mb4、UTC 时间和明确的事务边界；ID 与幂等键用二进制或大小写敏感字段。SQL 占位符为 `?`，通过 database/sql 传参。JSON 字段存结构化查询数据，原始请求/响应字节存 TOS；MariaDB JSON 是带校验的文本类型，不依赖二进制 JSON 存储或其索引行为。[MariaDB JSON 文档](https://mariadb.com/docs/server/reference/data-types/string-data-types/json)
 
 | 数据对象 | 关键内容和约束 |
 | --- | --- |
-| users / auth_sessions | 用户、口令摘要；会话令牌摘要、到期及撤销时间 |
-| spaces / space_members | 空间；用户成员关系和角色唯一 |
-| agents / agent_drafts / agent_versions | 元数据、草稿 revision、不可变内容与版本号；默认版本引用 |
-| skills / skill_drafts / skill_versions | 独立草稿、版本及资源清单 |
-| agent_version_skills | Agent 版本到准确 SkillVersion ID、显示版本号及加载顺序 |
-| model_configs / credentials | 模型能力和参数；密文、key_id、nonce、凭证版本 |
-| sessions / messages | 固定定义引用、历史顺序、消息/协议块与完成状态 |
-| context_summaries | 来源消息范围、摘要内容、生成调用、策略版本 |
-| runs / run_snapshots | 状态、执行归属、预算、取消请求、有效配置、版本/工具快照 |
-| idempotency_keys | 空间、主体、操作、键、请求摘要、对应结果 |
-| trace_events | Run 内序号、span 关系、事件类型、时间和载荷引用 |
-| blobs / artifacts | 内容位置、大小、摘要、归属、引用和保留状态 |
-| audit_logs | 管理操作主体、对象、动作、结果及时间 |
+| users / auth_sessions | username、password_hash；会话令牌摘要、到期时间 |
+| spaces / space_members | 空间、成员归属、is_owner；不引入细粒度权限表 |
+| agents / agent_drafts / agent_versions | 草稿 revision、内容对象引用、不可变版本和默认指针 |
+| skills / skill_drafts / skill_versions | 方法内容、草稿、版本及 TOS 资源清单 |
+| agent_version_skills | AgentVersion 到准确 SkillVersion、显示版本号和顺序 |
+| model_configs / credentials | Eino 组件类型、实际模型配置、加密供应商凭证 |
+| sessions / messages | 固定定义、历史顺序、消息及协议块引用 |
+| context_summaries | 来源消息范围、内容引用、生成调用和策略版本 |
+| runs / run_snapshots | 状态、预算、归属、取消、有效定义/模型/工具快照 |
+| session_active_runs | 每个 Session 唯一的活跃 Run 占用记录 |
+| idempotency_keys | 空间、主体、操作、幂等键、请求摘要和结果引用 |
+| trace_events | Run 内序号、span、事件类型、时间、JSON 载荷或 TOS 引用 |
+| blobs / workspace_files / artifacts | TOS key、可选 version_id、SHA-256、大小；逻辑路径及当前对象版本 |
+| audit_logs | 发布、成员、凭证等管理操作及结果 |
 
-发布内容和快照不可修改；默认指针、归档状态属于独立可变元数据。迁移账号和应用账号分离，应用账号不具有修改结构的权限。
-
-关键约束示意，完整迁移需在对应开发阶段补齐外键和列定义：
+MariaDB 不使用带 WHERE 的部分唯一索引。通过独立占用表保证同会话只有一个活跃 Run；提交时与 Run 创建同事务插入，确认运行结束后与终态事件同事务删除。下例是迁移片段，父表须具备相同类型和联合唯一约束：
 
 ```sql
-CREATE UNIQUE INDEX runs_one_active_per_session
-  ON runs(space_id, session_id)
-  WHERE status IN ('queued', 'running');
+CREATE TABLE session_active_runs (
+    space_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    session_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    run_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    PRIMARY KEY (space_id, session_id),
+    UNIQUE KEY active_run (space_id, run_id),
+    CONSTRAINT active_session_fk FOREIGN KEY (space_id, session_id)
+      REFERENCES sessions(space_id, id),
+    CONSTRAINT active_run_fk FOREIGN KEY (space_id, run_id)
+      REFERENCES runs(space_id, id)
+) ENGINE=InnoDB;
 
 CREATE UNIQUE INDEX trace_events_run_sequence
   ON trace_events(space_id, run_id, sequence);
-
 CREATE UNIQUE INDEX request_idempotency
-  ON idempotency_keys(space_id, actor_id, operation, key);
-
--- 所有被联合外键引用的父表需先声明 UNIQUE(space_id, id)。
-ALTER TABLE agent_version_skills
-  ADD CONSTRAINT dependency_skill_same_space
-  FOREIGN KEY (space_id, skill_version_id)
-  REFERENCES skill_versions(space_id, id) ON DELETE RESTRICT;
+  ON idempotency_keys(space_id, actor_id, operation, idempotency_key);
 ```
 
-同时建立 AgentVersion 侧的同空间外键以及会话、Run、Blob 引用的同空间约束。运行状态更新带旧状态或 revision 条件。MVP 不把尚未启用的数据库行级安全当作隔离保证。
+版本及依赖、会话、对象元数据采用包含 space_id 的联合外键，避免跨空间关联；被引用版本使用删除限制。状态更新带旧状态条件，草稿使用 revision。版本内容不可修改，默认指针和归档状态单独可变。
+
+DDL 与业务事务分开执行，不能假设所有迁移语句都可事务回滚。死锁只重试尚无外部副作用的数据库事务；未知提交结果按幂等键核实，不重新执行整个 Run。
 
 ### T00.4 服务契约约定
 
-API 前缀 `/api/v1`。除认证接口外，业务路径以 `/spaces/{space_id}` 开头。路径中的 space_id 不是授权证明。
+所有页面与 API 同源、同端口。API 前缀 `/api/v1`；业务路径以 `/spaces/{space_id}` 开头，传入空间 ID 仍须做成员归属检查。API 未命中不能返回 SPA 页面。
 
-OpenAPI 定义请求、响应、分页、错误、幂等行为；`api/events/` 保存事件 Schema；`db/migrations/` 是表结构的可执行来源。它们是工程文件，不新增为第五份说明文档。
+OpenAPI、事件 Schema 和数据库迁移分别存放在 `api/openapi.yaml`、`api/events/` 和 `db/migrations/`，它们是工程文件，不新增建设文档。
 
-错误统一包含 `code`、`message`、`request_id` 和非敏感 details；采用明确的 HTTP 状态。列表使用游标分页；大型载荷单独授权获取。事件序号在 JSON/前端传输时用十进制字符串，避免整数精度丢失。
+错误返回 code、message、request_id 和非敏感 details；列表使用游标，大载荷由 Go 服务鉴权后从 TOS 代理读取。事件 sequence 在数据库用 bigint，传到前端用十进制字符串。
 
-## T01 M01 身份、成员与空间权限
+### T00.5 一个配置入口
 
-依赖：net/http、Argon2id、crypto/rand、pgx。首版采用账号密码和服务端登录会话，初始管理员通过本地初始化命令创建，新增成员由授权管理员管理；公开注册、密码邮件找回暂不实现。
+采用一个 `mass.yaml`，环境变量仅覆盖同一份配置树或提供秘密值；`serve`、`migrate`、`user` 等子命令共用它。以下是设计样例，`*_env` 表示程序明确读取该环境变量，不依赖 YAML 自动插值：
 
-登录令牌使用高熵随机值，数据库仅保存摘要，Cookie 设置 HttpOnly、Secure、SameSite=Lax。写请求校验 CSRF Token 和来源，登录失败限速。口令保存算法版本、盐和参数，参数在目标主机校准；比较使用恒定时间处理。
+```yaml
+http:
+  listen: ":8080"
+  public_url: "https://mass.example.com"
+database:
+  dsn_env: "MASS_MARIADB_DSN"
+tos:
+  endpoint_env: "MASS_TOS_ENDPOINT"
+  region_env: "MASS_TOS_REGION"
+  bucket_env: "MASS_TOS_BUCKET"
+  prefix: "mass/"
+  access_key_env: "MASS_TOS_ACCESS_KEY"
+  secret_key_env: "MASS_TOS_SECRET_KEY"
+auth:
+  session_ttl: "24h"
+  cookie_secure: true
+llm:
+  framework: "eino"
+  provider: "ark" # 可替换的首个组件示例，不代表已确定实际模型供应商
+  model_env: "MASS_LLM_MODEL"
+  api_key_env: "MASS_LLM_API_KEY"
+secrets:
+  master_key_env: "MASS_MASTER_KEY"
+runtime:
+  max_concurrent_runs: 4 # 示例值，部署时配置
+```
 
-角色默认 owner/editor/viewer；权限动作包括 agent.read/write/publish、skill.read/write/publish、run.create/cancel/read、trace.read、credential.manage。viewer 不默认允许创建 Run；编辑者可使用获授权模型但不能读取凭证明文。避免删除最后一个 owner。
+前端 API 使用相对路径，不单独保存另一套后端地址。TOS endpoint/region/bucket 与实际模型仍需用户环境提供，不猜测真实值。配置与二进制可存在本地，工程资源与历史状态不依赖本地目录。
 
-HTTP 中间件构造 Principal；应用服务再针对具体对象鉴权。身份会话到期、成员移除时终止后续订阅与操作。SSE 定期重新验证会话/成员状态；运行每次模型和工具调用前检查当前使用权限。
+此配置管理服务部署和模型接入默认值；空间内的模型选择与凭证是 MariaDB 中的业务配置。初始化时可显式导入默认模型，之后以空间配置为准，重启不得覆盖用户修改；Run 保存最终解析结果及来源，避免文件与数据库互相覆盖。
 
-接口范围：`POST /auth/login`、`POST /auth/logout`、`GET /auth/me`；空间创建、成员列表、添加/修改/移除成员。未授权对象返回一致的拒绝或不存在行为，不通过错误内容泄露跨空间信息。
+## T01 M01 最简密码登录与空间归属
+
+依赖：net/http、bcrypt、crypto/rand、crypto/sha256、database/sql。首版只实现“账号密码校验 → 建立会话 → 查询当前用户 → 退出”，不接入 OAuth/SSO、验证码、注册找回、JWT 刷新体系或通用 RBAC 框架。
+
+用户记录存 username 和 bcrypt password_hash；使用同一个 `mass user create --config mass.yaml` 子命令初始化用户，密码通过交互输入或指定秘密来源提供，不作为明文命令参数或配置常量。支持多个用户，不能用全局共享密码代替用户身份。
+
+最小认证流程：
+
+```text
+POST /api/v1/auth/login(username, password)
+→ 查询用户并调用 bcrypt.CompareHashAndPassword
+→ 生成随机会话令牌，将令牌摘要和到期时间保存到 MariaDB
+→ 设置 HttpOnly Cookie
+→ 后续请求根据 Cookie 找到 user_id，并检查资源的 space_id 归属
+```
+
+Cookie 使用 SameSite=Lax，HTTPS 下 Secure；本地回环地址开发可显式关闭 Secure。会话固定到期，不做自动续期或 refresh token。退出删除会话；登录失败统一错误，密码与会话令牌不写日志。
+
+同源写请求校验 Origin 和预期 Content-Type；文件上传同样验证来源。保持基础防跨站请求措施，不建立独立 CSRF Token 子系统。SSE 复用同源 Cookie，定期检查登录是否到期，不把令牌放到 URL。
+
+空间隔离仍保留：用 space_members 检查成员关系，用 is_owner 区分基础管理操作。MVP 不维护角色矩阵和逐动作授权配置；成员可操作本空间 Agent/Skill/Run，owner 管理成员和模型凭证。首版账号及成员配置可由同一二进制的管理子命令完成，前端先提供登录、退出、当前用户和空间切换。
+
+接口最少为 `POST /auth/login`、`POST /auth/logout`、`GET /auth/me` 和当前用户空间列表；用户未登录或不属于目标空间时拒绝读取，包括 SSE、TOS 文件代理与历史载荷。复杂用户管理页面不作为首版认证阻塞项。
 
 ## T02 M02 定义、Skill 依赖与发布
 
-依赖：YAML v4、JSON Schema、pgx/sqlc、BlobStore。内容结构如下：
+依赖：YAML v4、JSON Schema、database/sql、TOS BlobStore。内容结构如下：
 
 ```text
 agent: AGENTS.md + agent.yaml + assets/
@@ -174,11 +225,11 @@ func (s *CatalogService) PublishAgent(ctx context.Context, in PublishInput) (Ver
 
 调试使用同一解析与校验链创建不可变 snapshot。默认版本切换不改版本内容；归档只阻止新的选择，不破坏原有引用。删除未引用草稿资源和发布版本保留使用不同策略。
 
-接口组：Agent/Skill 创建、草稿 GET/PUT（携带 revision）、资源上传、发布、版本列表/详情/差异、依赖查询、归档；Agent 另有默认版本切换与调试快照创建。
+接口组：Agent/Skill 创建、草稿 GET/PUT（携带 revision）、TOS 资源上传、发布、版本列表/详情/差异、依赖查询、归档；Agent 另有默认版本切换与调试快照创建。
 
 ## T03 M03 模型配置与凭证
 
-依赖：pgx、AES-GCM、crypto/rand。模型配置包含 provider、model_id、能力与容量、非秘密参数、批准端点和 credential_ref。一般空间用户从批准端点选择，不直接指定任意网络地址。
+依赖：database/sql、AES-GCM、crypto/rand。模型配置包含 provider、model_id、能力与容量、非秘密参数、批准端点和 credential_ref。一般空间用户从批准端点选择，不直接指定任意网络地址。
 
 凭证密文关联 space_id、credential_id 和 key_id 作为附加认证数据；每次加密生成唯一 nonce。主密钥通过服务配置的秘密文件或环境注入，不提交仓库，不与密文一起作为数据库字段保存。明确密钥轮换和旧备份解密的要求。
 
@@ -190,54 +241,54 @@ Run 固定非秘密有效配置和凭证引用；每次实际调用重新验证�
 
 ## T04 M04 会话、消息与 Run
 
-依赖：pgx/sqlc、crypto/sha256、context。Session 固定发布版本或调试快照；Run 快照记录准确 Skill 版本、有效模型/上下文配置、工具 Schema/实现版本、平台指令版本和服务构建标识。
+依赖：database/sql、crypto/sha256、context。Session 固定发布版本或调试快照；Run 快照记录准确 Skill 版本、有效模型/上下文配置、工具 Schema/实现版本、平台指令版本和服务构建标识。
 
-提交事务锁定 Session，检查无活跃 Run，保存用户消息、快照、queued Run、幂等记录及初始 Trace 事件。相同主体/操作/幂等键且请求摘要相同返回原结果；内容不同返回 409。默认版本只在创建新 Session 时解析。
+提交事务锁定 Session，保存用户消息、快照、queued Run、session_active_runs 占用、幂等记录及初始 Trace 事件；占用主键冲突时整个事务回滚。相同主体/操作/幂等键且请求摘要相同返回原结果；内容不同返回 409。默认版本只在创建新 Session 时解析。
 
 幂等处理必须在返回“已有活跃 Run”之前识别同一次请求的重试；两个并发相同请求通过唯一约束裁决，并读取赢家结果，不另建 Run。
 
 终态固定为 succeeded/failed/cancelled；queued/running 属于活跃状态。`cancel_requested_at` 表达请求取消，不直接证明工具已停止。queued 可原子转 cancelled；running 由执行器确认结束后转终态。
 
-最终回复、Run 终态、usage 汇总和 run.finished 同事务提交。部分助手输出保留在 Trace 中，失败时不作为完整回复提交。下一轮历史保留完成的协议块；失败的副作用以已完成/失败/未知说明进入后续上下文，不拼入缺少配对的不完整工具链。
+最终回复、Run 终态、usage 汇总、删除 session_active_runs 占用和 run.finished 同事务提交。部分助手输出保留在 Trace 中，失败时不作为完整回复提交。下一轮历史保留完成的协议块；失败的副作用以已完成/失败/未知说明进入后续上下文，不拼入缺少配对的不完整工具链。
 
 接口组：`POST /sessions`、`GET /sessions/{id}/messages`、`POST /sessions/{id}/runs`、`GET /runs/{id}`、`POST /runs/{id}/cancel`。提交返回 202 和 Run ID；重复提交可返回原 Run 及其当前状态。
 
-## T05 M05 调度、认领与停止
+## T05 M05 单进程调度、认领与停止
 
-依赖：PostgreSQL、context、sync、time。runs 表是任务来源，内存通知用于唤醒，轮询用于补漏。并发名额按平台和空间控制，先获名额再认领；MVP 不支持多个调度服务同时执行。
+依赖：MariaDB/InnoDB、database/sql、context、sync、time。调度器与 API、前端资源服务在同一个 Go 进程中。runs 表是任务来源，内存通知用于唤醒，轮询补漏；平台与空间并发由进程内准入器限制。
 
-队列认领在短事务内执行，限定已获准空间，并在同一事务写入 run.started：
+MVP 由一个 dispatcher 串行认领，再交给受限 goroutine 执行。不要求队列 SKIP LOCKED 能力；一个认领事务只完成下列数据库操作，不能跨模型或 TOS 请求持有行锁：
 
 ```sql
-WITH candidate AS (
-    SELECT id FROM runs
-    WHERE space_id = $1 AND status = 'queued'
-      AND cancel_requested_at IS NULL
-    ORDER BY created_at, id
-    FOR UPDATE SKIP LOCKED
-    LIMIT 1
-)
-UPDATE runs AS r
-SET status = 'running', owner_id = $2,
-    started_at = now(), heartbeat_at = now()
-FROM candidate AS c
-WHERE r.id = c.id AND r.space_id = $1
-RETURNING r.*;
+START TRANSACTION;
+SELECT id FROM runs
+WHERE space_id = ? AND status = 'queued'
+  AND cancel_requested_at IS NULL
+ORDER BY created_at, id
+LIMIT 1 FOR UPDATE;
+
+-- 应用取出 ID 后，用同一 sql.Tx 更新并检查 RowsAffected == 1。
+UPDATE runs
+SET status = 'running', owner_id = ?, started_at = UTC_TIMESTAMP(6),
+    heartbeat_at = UTC_TIMESTAMP(6)
+WHERE space_id = ? AND id = ? AND status = 'queued';
+-- 同事务分配事件序号并插入 run.started。
+COMMIT;
 ```
 
-SKIP LOCKED 适用于队列竞争，不提供外部副作用的恰好一次保证。[PostgreSQL SELECT 文档](https://www.postgresql.org/docs/current/sql-select.html)
+增加 `(space_id, status, created_at, id)` 索引，先获得并发名额再认领。`FOR UPDATE` 必须运行在有效事务内。[MariaDB 行锁文档](https://mariadb.com/docs/server/reference/sql-statements/data-manipulation/selecting-data/for-update)
 
-调度器启动时持有专用数据库连接上的单实例 advisory lock；未取得锁则拒绝成为执行实例。持有连接失效时停止认领和后续动作，运维不能在旧进程是否退出未知时强行接管。该锁是单实例防误启动措施，不宣称提供分布式故障切换。
+服务启动用独立 `*sql.Conn` 持有 `GET_LOCK('mass:<database>:runtime', 0)`，返回 1 才成为执行实例，退出在同连接 RELEASE_LOCK 并关闭。该连接不能借出到连接池；锁随连接而非事务生命周期存在。持锁连接异常时停止接单和后续动作，不能宣称它提供自动故障切换或副作用恰好一次。[MariaDB GET_LOCK](https://mariadb.com/docs/server/reference/sql-functions/secondary-functions/miscellaneous-functions/get_lock)
 
-维护运行 owner、heartbeat；确认旧进程退出后，将遗留 running 标为 failed/interrupted，保留未完成调用；queued 可继续调度。不可仅因心跳超时重放有副作用任务。
+Run context 派生自服务执行生命周期，不使用提交请求的 context。取消先写 MariaDB，再通知执行器；queued 取消与占用释放同事务，running 直到实际停止才释放占用。断开浏览器不会自动取消。
 
-Run context 派生自服务执行生命周期，不使用提交 HTTP 请求的 context。取消信号持久化并通知在执行 Run；即使内存通知丢失，检查点也会读取取消状态。
+确认旧进程退出后，重启将遗留 running 标记为 interrupted 失败，保存未完成调用并释放占用；queued 继续调度。资源从 MariaDB/TOS 恢复，不读取宿主工作目录，也不自动重做未知副作用。
 
-退出时停止接单和认领，尝试有界完成或取消在执行任务，刷写事件。工具未停止前不释放会话或并发名额；goroutine 不能被安全地强杀，无法及时退出时由进程级停机处理并标记中断。
+停机先停止接单和认领，有界等待或取消已有执行，刷写 Trace；无法停止的工具由进程退出终止，重启时标记中断，而不是提前报告成功取消。
 
 ## T06 M06 执行循环
 
-依赖：ContextBuilder、ModelGateway、ToolDispatcher、TraceRecorder、RunStore。执行器只操作这些端口，不直接引用供应商协议或 SQL。
+依赖：ContextBuilder、基于 Eino 的 ModelGateway、ToolDispatcher、TraceRecorder、RunStore。执行器负责 MASS 的版本、预算与生命周期；模型调用统一走 Eino 组件，不直接实现供应商 SDK。MVP 保留这一个显式执行循环，不再套一层 Eino Agent 的完整循环，避免重复调度工具和预算。后续如切换 Eino ADK，需要迁移相同的权限、上下文与 Trace 约束。
 
 核心循环骨架如下；Gateway、Tools 和终结器负责各自动作前后的持久化，所有错误必须传播。`Build` 内的摘要也走同一 Gateway 并计入预算：
 
@@ -249,8 +300,8 @@ func (e *Executor) Execute(ctx context.Context, run RunSnapshot) error {
         if err != nil { return err }
         reply, err := e.Model.Call(ctx, run, input)
         if err != nil { return err }
+        if !reply.Complete { return ErrIncompleteModelOutput }
         if len(reply.ToolCalls) == 0 {
-            if !reply.Complete { return ErrIncompleteModelOutput }
             return e.Runs.CompleteWithReply(ctx, run, reply)
         }
         for _, call := range reply.ToolCalls {
@@ -270,7 +321,7 @@ func (e *Executor) Execute(ctx context.Context, run RunSnapshot) error {
 
 ## T07 M07 上下文组装、预算与摘要
 
-依赖：固定内容解析器、消息仓储、BlobStore、ModelGateway、模型计数适配器；无统一第三方 Agent 框架。
+依赖：固定内容解析器、MariaDB 消息仓储、TOS BlobStore、Eino schema/model 与模型计数适配器。业务上下文策略由 MASS 管理，模型输入转换为 Eino 消息；摘要也通过同一 Eino 网关调用。
 
 MVP 按指定顺序加载所有绑定 Skill 的 SKILL.md，assets 按需读取。上下文顺序为平台规则、Agent 指令、Skill 指令、历史摘要、最近完整对话单元、当前输入及本轮交互。平台指令版本在快照中固定，权限校验独立于这些文本。
 
@@ -295,85 +346,128 @@ ContextManifest 保存来源 ID/版本/摘要值、消息范围、顺序、工�
 
 检查接口返回 Manifest、处理原因与实际 input 对照；输入缩略图或节选不能冒充完整 input。原始消息与 Trace 不因上下文压缩而被改写。
 
-## T08 M08 模型适配与实际载荷记录
+## T08 M08 基于 Eino 的 LLM 接入与完整 Trace
 
-依赖：net/http、encoding/json、io。首版先实现 FakeProvider 测试协议，再实现一个明确供应商；真实供应商、模型及允许端点在该模块开始前补齐本节，其他模块无需等待凭证。
+### T08.1 框架与模块边界
 
-统一模型端口示意（省略业务 DTO 定义）：
+统一采用 `github.com/cloudwego/eino` 的 model/schema 接口及 `eino-ext` 模型组件。MASS 的 M08 包装 Eino，M06 负责执行与工具循环，M07 管理上下文，M09 保留工具权限和 TOS 工作区访问边界。Eino 是进程内框架，不额外启动 LLM 服务，也不代替实际模型 endpoint 与凭证。
+
+首版使用 `model.ToolCallingChatModel`、`schema.Message`、`schema.ToolInfo`，通过 `Generate`/`Stream` 接入实际模型。工具用 `WithTools` 绑定到当前调用实例，避免并发共享模型上原地修改工具集合。模型能力和协议信息通过组件适配，不丢弃继续对话所需字段。[Eino 模型接口](https://github.com/cloudwego/eino/blob/main/components/model/interface.go)
+
+Eino ADK/Graph 可以后续承接更复杂编排，首版不同时启用两个完整 Agent 循环。所有自有组件仍采用 Eino 的模型接口进行真调用和 FakeChatModel 测试，不能以另写一套 HTTP 模型服务替代 Eino。
+
+### T08.2 核心调用代码
+
+以下片段演示 Eino 流的单一消费路径。业务 DTO 转换、授权、预算、完整性判定及 SQL/TOS 事务在网关外层，`record` 回调必须落库成功后才返回。引用的框架 API 以初始化时锁定版本为准：
 
 ```go
-type PreparedRequest struct {
-    Provider string
-    Model    string
-    Body     []byte // 最终实际发送字节；此后禁止重新序列化
-    Purpose  string // task 或 summary
-}
+package modelgateway
 
-type ModelFrame struct {
-    Raw        []byte // 供应商原始响应帧
-    Normalized []byte // 统一事件表示，可为空
-}
+import (
+    "context"
+    "errors"
+    "io"
 
-type ModelProvider interface {
-    Prepare(context.Context, ModelInput) (PreparedRequest, error)
-    Stream(context.Context, PreparedRequest, CredentialRef,
-        func(ModelFrame) error) (ModelResult, error)
+    "github.com/cloudwego/eino/components/model"
+    "github.com/cloudwego/eino/schema"
+)
+
+func StreamWithTools(ctx context.Context, base model.ToolCallingChatModel,
+    messages []*schema.Message, tools []*schema.ToolInfo,
+    record func(context.Context, *schema.Message) error) ([]*schema.Message, error) {
+    bound, err := base.WithTools(tools)
+    if err != nil { return nil, err }
+    reader, err := bound.Stream(ctx, messages)
+    if err != nil { return nil, err }
+    defer reader.Close()
+    var chunks []*schema.Message
+    for {
+        chunk, err := reader.Recv()
+        if errors.Is(err, io.EOF) { return chunks, nil }
+        if err != nil { return nil, err }
+        if err := record(ctx, chunk); err != nil { return nil, err }
+        chunks = append(chunks, chunk)
+    }
 }
 ```
 
-网关先调用 Prepare，保存确切 Body、允许记录的非秘密请求元信息及 model.started，然后 Stream 使用同一 Body 发送。认证头在传输时注入，不进入 Trace。body 若包含意外秘密，按策略拒绝发送或明确脱敏记录；不能悄悄改变记录与真实载荷的关系。
+此片段假定外层已限制总输出容量，生产实现按界限聚合或外存；不能无限累积 chunks。`io.EOF` 只代表流结束，是否完整仍需检查 finish reason、工具 JSON、截断和供应商 usage。使用 Eino 对应版本的消息合并能力处理工具参数增量，不能逐片段当作完整工具调用执行。
 
-Stream 每次回调的帧先持久化再对外展示；回调错误需要中止请求。响应主体无论成功、非成功状态、解码失败都记录已接收内容及完成性，设置最大接收量与流式空闲超时。不能先整体读入内存再落盘。
+### T08.3 两层 Trace
 
-供应商 opaque state、工具协议 ID、结束原因与 usage 原样保存或作为协议扩展保留；不把供应商 A 的状态转交给 B。模型网关不做隐藏重试，每次尝试拥有独立 span 和原始载荷；已经出现部分输出后失败，不自动拼接下一次输出。
+Eino callbacks 用于模型输入输出、错误、耗时等语义层记录，但不能当作供应商实际 HTTP 原文。实际 input/output 捕获通过注入组件 HTTPClient 的自定义 `http.RoundTripper` 完成，两者通过 Run/span/attempt 关联。[Eino callbacks 概述](https://www.cloudwego.io/docs/eino/overview/)
 
-采用 HTTP 客户端的连接、响应头和流空闲控制，不将很短的总超时套在流式请求上；Run 总超时由 context 控制。批准端点禁止跟随到未批准地址的重定向，防止凭证被带往其他地址。
+请求在 Eino/供应商 SDK 完成序列化后由 Transport 捕获：限制容量、保存最终请求体至 TOS、提交引用及 model.started，之后才发送相同字节；认证头和签名查询参数不记录。拒绝不受支持的请求流，不默默跳过捕获。
 
-## T09 M09 内置工具与文件边界
+响应以包装的 Body 接收并按有界块写入 TOS，再把已保存的字节交给 Eino 解码；保留原始顺序、错误状态码和解码失败的原文。慢存储可产生有界背压，持久化失败立即取消模型请求。Eino 语义事件和原文区块分别保存，通过清单关联；流被提前 Close 或中断时标记 incomplete。
 
-依赖：自有 Registry/Dispatcher、JSON Schema、os.Root、context。Registry 启动时注册工具及 Schema，禁止重复名称；预编译受信 Schema，工具参数校验失败返回结构化错误。
+最终请求体在 SDK 传输层捕获，不能由平台重新序列化并当作实际请求。元信息里去掉 API Key，载荷如果必须脱敏则明确标记，不能冒充逐字原文。
 
-工具定义包含 name、implementation_version、input_schema、output_contract、required_permission、side_effect、timeout、max_output_bytes。Run 冻结实际定义及工具实现版本；不兼容升级使用新标识或明确迁移，历史 Agent 版本不等于冻结工具二进制。
+### T08.4 首个供应商与重试
 
-首批工具：read_file、write_file、list_files、read_skill_resource。工具只接收当前工作区和准确 Skill 版本的只读资源能力，不接收任意宿主路径。拒绝执行 Skill 上传脚本、任意 Shell、自定义 HTTP 和 MCP。
+Eino 的选择不自动确定模型供应商。建议先验证 `github.com/cloudwego/eino-ext/components/model/ark`，实际 provider/model/endpoint 由部署配置确认；若使用其他 Eino 组件，必须同样支持自定义 HTTP 捕获和完整协议数据。
 
-目录访问优先使用 os.Root，不能仅用字符串前缀或“先解析符号链接再普通打开”。os.Root 防止路径/符号链接越界，但不提供进程隔离，也不防御特权挂载。[Go os.Root 文档](https://pkg.go.dev/os#Root)
+Ark 组件配置可注入 HTTPClient 并设置 RetryTimes；初版将 RetryTimes 显式设为 0，网关负责有界重试和每次尝试记录。以下是已批准端点和凭证解析后的构造片段：
 
-下面为可独立编译的受限读取核心示例。调用方负责打开当前 Run 的 root、授权和记录；资源目录只允许服务创建普通文件，禁止特殊文件及不受控解包：
+```go
+noRetry := 0
+chatModel, err := ark.NewChatModel(ctx, &ark.ChatModelConfig{
+    APIKey: apiKey,
+    Model: modelID,
+    BaseURL: approvedBaseURL,
+    HTTPClient: tracedHTTPClient,
+    RetryTimes: &noRetry,
+})
+```
+
+`tracedHTTPClient` 同时负责批准端点/重定向检查和请求记录，必须传递调用 context；不因使用 SDK 而启用看不见的重试。非成功响应、流中断及部分输出后的失败分别记录，不拼接新尝试为同一个成功响应。[Ark 官方组件源码](https://github.com/cloudwego/eino-ext/blob/main/components/model/ark/chatmodel.go)
+
+FakeChatModel 实现同一个 Eino 模型接口；本地假 HTTP 供应商验证真实 Eino 扩展组件的序列化和原文捕获。完整 Trace 验证通过前不将该组件标记为接入完成。
+
+## T09 M09 内置工具与对象工作区
+
+依赖：Registry/Dispatcher、JSON Schema、TOS WorkspaceStore、context。保留 read_file、write_file、list_files、read_skill_resource 名称，但“文件”是运行工作区中的逻辑文件，不访问宿主磁盘，不挂载 TOS 为本地文件系统。
+
+工具定义包含名称、实现版本、参数 Schema、输出结构、基础空间/Agent 允许列表、超时、最大输入输出和副作用类型。实际版本与 Schema 固定到 Run 快照；不兼容升级用新标识或明确迁移。
+
+WorkspaceStore 使用 `(space_id, run_id, logical_path)` 查找 MariaDB 中的对象映射，再访问 TOS。调用方只能提供逻辑路径，不能提供 bucket、完整对象 key、预签名 URL 或其他空间 ID。Skill 资源从固定 SkillVersion 的只读清单读取，禁止写文件工具修改。
+
+逻辑路径校验核心示例：
 
 ```go
 package workspace
 
 import (
     "fmt"
-    "io"
-    "os"
+    "path"
+    "strings"
 )
 
-func ReadLimited(root *os.Root, name string, limit int64) ([]byte, error) {
-    if limit <= 0 || limit > 64<<20 {
-        return nil, fmt.Errorf("invalid read limit")
+func ValidateLogicalPath(name string) (string, error) {
+    if name == "" || len(name) > 1024 || path.IsAbs(name) ||
+        strings.ContainsAny(name, "\\\x00") {
+        return "", fmt.Errorf("invalid workspace path")
     }
-    f, err := root.Open(name)
-    if err != nil { return nil, err }
-    defer f.Close()
-    info, err := f.Stat()
-    if err != nil { return nil, err }
-    if !info.Mode().IsRegular() { return nil, fmt.Errorf("not a regular file") }
-    data, err := io.ReadAll(io.LimitReader(f, limit+1))
-    if err != nil { return nil, err }
-    if int64(len(data)) > limit { return nil, fmt.Errorf("file exceeds read limit") }
-    return data, nil
+    for _, part := range strings.Split(name, "/") {
+        if part == "" || part == "." || part == ".." {
+            return "", fmt.Errorf("invalid workspace path segment")
+        }
+    }
+    return name, nil
 }
 ```
 
-写入检查单文件和空间限额，在工作区内部临时写、完成后替换目标，防止半写文件被当作成功结果；不允许覆盖已发布资源。文件输出上限、工具结果保留上限、进入模型的节选上限是不同限制，分别配置。
+参数通过 JSON 传入且只解码一次，校验后的路径不能再做 URL 解码。数据库路径字段使用一致的大小写敏感比较；逻辑路径不直接拼成可访问对象 key。MVP 不实现符号链接、硬链接或归档自动解包。
 
-Dispatcher 先检查运行状态、Agent 允许列表和空间权限，再持久化 tool.started，执行并保存完整已接收结果后写 tool.completed/tool.failed。输出超限明确标记；不把未接收到的部分声明为完整。权限不是靠 Markdown 或模型自觉维持。
+`write_file` 先把新内容写入唯一且不可变的 TOS 对象，再用 revision 条件事务更新 workspace_files 指针并写 tool.completed；原内容不会被原地覆盖。返回成功前对象内容和元数据均已确认。`read_file` 按该版本读取，`list_files` 查询逻辑目录索引，`read_skill_resource` 只能读取快照引用的资源。
+
+超时后对象可能已上传但数据库未引用，应记为待核实或孤儿并延迟回收，不盲目重做工具。一次工具调用的映射更新与 call_id/幂等记录关联，重试不能重复产生新逻辑效果。
+
+Dispatcher 执行前校验登录主体的空间归属、Agent 工具列表、预算和取消状态，持久化 tool.started；执行后保存完整接收结果和结构化错误。内置工具不开放 Shell、用户脚本、自定义 HTTP 或 MCP，执行仍发生在当前 Go 进程。
 
 ## T10 M10 完整 Trace、用量、审计与 SSE
 
-依赖：pgx、JSONB、BlobStore、net/http。Trace 是不采样的业务记录，服务日志与未来运维链路采样不得替代它。
+依赖：database/sql、MariaDB JSON、TOS BlobStore、net/http。Trace 是不采样的业务记录，服务日志与未来运维链路采样不得替代它。
 
 ### T10.1 数据契约
 
@@ -390,22 +484,23 @@ Dispatcher 先检查运行状态、Agent 允许列表和空间权限，再持久
 | tool.completed / tool.failed | 完整接收结果、错误、副作用状态 |
 | run.cancel_requested / run.finished | 取消来源、最终状态、结果引用及汇总用量 |
 
-原始载荷以字节 Blob 保存，JSONB 只保存查询结构，不能以重序列化后的内容冒充供应商原文。响应中未返回的内部推理不属于 Trace。非流式响应也必须记录实际体和解析失败。
+原始载荷以 TOS 字节对象保存，MariaDB JSON 只保存查询结构，不能以重序列化后的内容冒充供应商原文。响应中未返回的内部推理不属于 Trace。非流式响应也必须记录实际体和解析失败。
 
-大载荷按流分块写入受控临时对象，每段完成后提交引用；Run 结束时形成完整清单。最终完整性标识只有在全部已接收帧保存后才置为 complete。可按有界时间/字节批量写入，但崩溃造成的未落盘尾部需标为 incomplete，不能承诺无故障窗口。
+大载荷按有界内存区块写入 TOS 不可变对象，每段成功后提交引用；Run 结束时形成完整清单。尚未完成的 multipart 不算已持久化可读区块，不可提前向前端确认。最终完整性标识只有在全部已接收帧保存后才置为 complete。可按有界时间/字节批量写入，但崩溃造成的未持久化尾部需标为 incomplete，不能承诺无故障窗口。
 
 ### T10.2 顺序与事务
 
 所有写入方包括取消请求都通过统一事务分配序号。下面语句在同一事务中执行；分配或插入失败整体回滚：
 
 ```sql
--- $1 = space_id, $2 = run_id；返回的 last_sequence 用于事件插入。
-UPDATE runs SET last_sequence = last_sequence + 1
-WHERE space_id = $1 AND id = $2
-RETURNING last_sequence;
-
--- 后续 INSERT 的 sequence 使用上面返回值，禁止单独提交序号更新。
--- 若本次同时改变运行状态，状态 UPDATE 与事件 INSERT 也在此事务中。
+START TRANSACTION;
+SELECT last_sequence FROM runs
+WHERE space_id = ? AND id = ? FOR UPDATE;
+-- 应用计算 next_sequence = last_sequence + 1。
+UPDATE runs SET last_sequence = ? WHERE space_id = ? AND id = ?;
+-- 同一 sql.Tx INSERT trace_events，sequence 使用 next_sequence。
+-- 若改变运行状态，状态更新与事件写入也在这个事务中。
+COMMIT;
 ```
 
 不使用无锁 `max(sequence)+1`。大 Blob 必须先持久化，再提交引用；关键 Trace 写入失败时停止后续模型/工具操作，现有动作结果未知则保留未知。业务操作与其状态/事件事务写入，网络请求不包在数据库事务内。
@@ -457,19 +552,72 @@ sequence 必须来自已验证的十进制序号，不能使用任意用户文�
 
 管理审计另外记录成员、发布、默认版本及凭证变更；不包含凭证原值。
 
-## T11 M11 Blob、工作区与产物
+## T11 M11 TOS 持久化、工作区与产物
 
-依赖：os.Root、crypto/sha256、pgx。BlobStore 接口覆盖 PutImmutable、Open、Stat、ReleaseReference；任何读取必须获得受权的空间与对象引用，不能任意传宿主路径。
+### T11.1 统一对象存储
 
-存储布局为 `data/blobs/{space_id}/{blob_id}`、`data/workspaces/{space_id}/{run_id}`；ID 由后端生成。内容摘要用于完整性而不是跨空间存在性查询。MVP 不进行跨空间去重。
+采用火山引擎 TOS 官方 Go SDK `github.com/volcengine/ve-tos-golang-sdk/v2/tos`，通过 endpoint、region、bucket 和凭证创建 ClientV2。MASS 中所有需要持久保留的工程资源都由它承接，不实现生产本地 BlobStore，不在失败时写宿主磁盘备用。[TOS 官方 SDK](https://github.com/volcengine/ve-tos-golang-sdk)
 
-先写临时文件、关闭前同步内容、完成原子替换，再写数据库引用；要承诺掉电恢复时还需同步目录项，并在目标文件系统验证语义。数据库失败留下的孤儿内容按时间宽限期及实际引用查询回收，避免与正在提交的版本竞争。
+对象 key 由服务生成，例如 `mass/{space_id}/objects/{object_id}`；保存对象类型、SHA-256、字节数、ETag、可选 version_id 与状态。路径映射、引用关系和当前版本在 MariaDB 中。不得把 ETag 直接当作内容 SHA-256，也不依赖 TOS Bucket 版本控制替代 Agent/Skill 的业务版本。
 
-上传限制总大小、类型和数量，不执行上传内容。首版不自动解包任意归档，以免引入特殊文件、链接和解压容量问题。下载通过鉴权 Handler 使用安全文件名和 Content-Disposition，活动文件不直接作为静态站点公开。
+| 资源 | 持久化方式 |
+| --- | --- |
+| AGENTS.md、SKILL.md、模板、版本 assets | 不可变 TOS 对象 + MariaDB 发布版本清单 |
+| 用户附件、工具产物 | TOS 对象 + 授权元数据 |
+| 运行工作区文件 | TOS 内容版本 + workspace_files 逻辑路径及 revision |
+| 模型实际请求/响应、工具完整大结果 | 有序 TOS 区块 + Trace 清单/完整性状态 |
+| 运行、会话、事件索引、空间和权限 | MariaDB；不依赖本地文件 |
 
-运行结束先归档需要保留的文件，生成 Artifact 记录，再清理工作区。已引用版本资源不因 Run 清理被删除；Trace 保留策略与 Artifact 保留策略可分别配置。清理任务需报告缺失、失败和过期，不能静默破坏记录。
+普通上传使用流/有界缓冲直接发送 TOS，大文件使用受限并发 multipart；不使用 SDK 的本地文件上传/下载帮助方法。配置和编译产物属于部署输入，可以存在本地，但不能存用户运行内容。
 
-备份由数据库、已引用 Blob 和密钥恢复材料共同组成。数据库恢复时要核验 Blob 摘要和引用完整性，不接受“能启动”作为完整恢复证明。
+### T11.2 对象写入示例
+
+下面只展示已授权、已分配唯一 key 的小对象上传；大小上限、凭证初始化、SHA-256 计算、状态和元数据事务由调用方提供。使用 SDK 的禁止覆盖选项，避免版本内容被原地替换：
+
+```go
+package blob
+
+import (
+    "bytes"
+    "context"
+
+    "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
+)
+
+func PutNewObject(ctx context.Context, client *tos.ClientV2,
+    bucket, key string, data []byte) error {
+    _, err := client.PutObjectV2(ctx, &tos.PutObjectV2Input{
+        PutObjectBasicInput: tos.PutObjectBasicInput{
+            Bucket: bucket, Key: key,
+            ContentLength: int64(len(data)),
+            ForbidOverwrite: true,
+        },
+        Content: bytes.NewReader(data),
+    })
+    return err
+}
+```
+
+GetObjectV2 成功后必须关闭返回结果的 Content（io.ReadCloser），使用有界流传输给工具或用户。具体 SDK 字段和 multipart/重试行为用锁定版本验证。[TOS Go API](https://pkg.go.dev/github.com/volcengine/ve-tos-golang-sdk/v2/tos)
+
+### T11.3 跨存储一致性
+
+1. MariaDB 记录上传意图、对象 ID 和用途，暂不可被业务引用。
+2. 上传到新 TOS key；收到成功或通过受控 Head/Get 核实内容后，将对象标为 ready。
+3. 发布、写文件或完成工具结果的事务只引用 ready 对象，维护业务引用和 revision。
+4. DB 提交失败留下未引用对象；有宽限期地查询上传状态和引用，回收确认无引用对象，并清理超时 multipart。
+
+TOS 与 MariaDB 没有共同事务；不能使用“本地 rename 后提交数据库”的假设。响应丢失时根据对象 ID、摘要和请求记录核实，不盲目覆盖或把对象缺失当作成功。引用删除与回收需锁定元数据、设置 deleting 状态并拒绝新引用，防止 GC 与发布竞争。
+
+读取私有 Bucket 必须由 Go 服务先做用户/空间鉴权，再从 TOS 流式代理；浏览器不获得 AK/SK，不要求直连 TOS 或额外 CORS 服务。前端静态资源来自 Go 二进制，业务附件来自 TOS，二者不混淆。
+
+### T11.4 保留、恢复与故障
+
+运行结束时将应保留的逻辑文件关联为 Artifact；清理工作区只移除不再需要的逻辑引用，不删除仍被版本、Trace 或产物引用的对象。TOS 生命周期策略必须与应用引用策略协调，不能按前缀盲删活跃内容。
+
+TOS 不可用或对象无法确认保存时，拒绝新的相关写操作，停止后续 Agent 动作；不得回退到本地持久化。可以保留有限内存中的未完成块，但重启后不声称其已保存。
+
+恢复需要 MariaDB 备份、仍保留的 TOS 对象及解密材料；数据库备份不包含对象内容。恢复验收校验对象清单/摘要和缺失状态。删除 MASS 主机运行目录后，登录状态、已发布资源和历史产物仍应能从数据库与 TOS 读取；中断执行本身按 T05 失败处理，不自动续跑。
 
 ## T12 M12 前端管理与调试
 
@@ -477,7 +625,7 @@ sequence 必须来自已验证的十进制序号，不能使用任意用户文�
 
 ### T12.1 页面与数据流
 
-按 features/agents、skills、sessions、debug、runs、settings 组织。公共组件为定义编辑器、版本差异、依赖选择、Trace 时间线、原始载荷查看、上下文检查和产物列表。
+前端源码只放在 `frontend/src/`，按 features/agents、skills、sessions、debug、runs、settings 组织；package.json、lockfile、Vite 配置和前端测试均位于 `frontend/`。公共组件为定义编辑器、版本差异、依赖选择、Trace 时间线、原始载荷查看、上下文检查和产物列表。
 
 查询键统一包含 space_id，详情继续包含对象及版本 ID；变更后只失效相关查询。切换空间关闭旧 SSE、撤销旧请求、清理私有缓存和未保存表单。草稿保存携带 revision，409 时提示差异，不自动覆盖。
 
@@ -512,17 +660,39 @@ export function appendEvent(state: RunView, event: RunEvent): RunView {
 
 事件协议符合 SSE 的 id/event/data 格式，参考 [MDN SSE](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events)。大型输入输出按需获取，缩略显示必须可查看或下载完整内容；无法取得时显示明确状态。
 
-## T13 M13 服务组装、配置与运维基础
+## T13 M13 单服务组装、前端嵌入与配置
 
-依赖：net/http、ServeMux、slog、embed、pgxpool。构造器显式注入实现，服务入口统一管理模块生命周期，避免全局数据库和跨空间缓存单例。
+依赖：net/http、ServeMux、slog、embed、database/sql、Eino、TOS SDK。一个 `cmd/mass` 入口构造数据库、TOS、模型组件、调度与 API，不启动独立前端、Worker 或 LLM 代理进程。
 
-中间件顺序覆盖 request_id、请求大小限制、错误恢复、认证、空间授权和日志。SSE 使用专门长连接配置，不套用普通短请求总超时；Web 静态资源采用构建产物，API 未命中不落入 SPA 页面回退。
+前端构建链固定为：`npm --prefix frontend ci` → 类型检查/测试 → `npm --prefix frontend run build` → 复制 frontend/dist 到 internal/transport/http/ui/dist → Go 构建。后端嵌入目录是生成物，不手工维护另一份前端源码；所有 Go 编译/测试任务需先准备嵌入资源。
 
-`/health/live` 表示进程存活，`/health/ready` 检查必要数据库/schema/存储与配置；不把某个外部模型临时不可用直接等同于整个管理服务死亡。启动检查关键配置，不启动时静默修改数据库结构。
+嵌入示例位于后端 `internal/transport/http/ui/assets.go`：
 
-配置至少包括数据库连接、数据目录、主密钥来源、会话设置、平台/空间并发、模型/工具限额、SSE 心跳与写入超时、Trace/Artifact 保留策略、服务构建标识。开发默认值与生产必填项分开校验；示例配置只含占位值。
+```go
+package ui
 
-统计排队与活动 Run、模型失败率、工具失败率、Trace 写入失败、磁盘空间和数据库连接。运维日志带 request_id/space_id/run_id，不复制敏感交互内容。停机与异常恢复按 T05，备份按 T11。
+import (
+    "embed"
+    "io/fs"
+)
+
+//go:embed all:dist
+var built embed.FS
+
+func Assets() (fs.FS, error) {
+    return fs.Sub(built, "dist")
+}
+```
+
+同一 ServeMux 下 `/api/v1/` 提供 API/SSE，`/health/` 提供健康检查，`/` 提供静态页面及前端路由回退。仅合法页面路径回退 index.html；不存在的 API、健康接口和静态文件返回实际错误。SPA 使用相对 API 地址，同源 Cookie，无反向代理拼接前后端的必需配置。
+
+标准开发入口使用前端 build/watch 和 Go 重建/重启，浏览器始终只访问 Go 地址。构建监听不是额外应用服务；不把 Vite dev server、SSR 或 Node 常驻进程设为必需条件。
+
+统一配置仅有 T00.5 的 `mass.yaml` 入口；同一二进制提供 `serve`、`migrate`、`user`/`member` 管理子命令。前端不维护 API base URL 配置，模型与 TOS 秘密不会编入页面。
+
+`/health/live` 表示进程存活；`/health/ready` 检查 MariaDB schema、配置及必要 TOS 连通/授权状态，使用有界缓存避免每次探针都发云请求。外部模型暂时不可用以调用错误呈现，不使整个管理服务伪装进程死亡。
+
+服务日志输出到 stdout，附 request_id/space_id/run_id，不复制用户原始内容。监控队列、并发、模型错误、Trace/TOS 写入失败、上传字节数和数据库连接；不配置业务数据目录或磁盘缓存。关闭时停止认领并完成有界 TOS/事件刷写。
 
 ## T14 接口清单与错误语义
 
@@ -541,7 +711,7 @@ export function appendEvent(state: RunView, event: RunEvent): RunView {
 | /runs/{id}/events、/runs/{id}/trace | SSE、分页 GET | 空间鉴权、游标续传、完整性标识 |
 | /runs/{id}/contexts、/payloads/{id} | GET | Manifest 和受控完整载荷 |
 | /artifacts/{id}/download | GET | 权限校验、受控文件名、保留状态 |
-| /models、/credentials、/members | 管理操作 | 分离管理权限；秘密不回显 |
+| /models、/credentials、/members | 基础 owner 管理操作；成员可先用同二进制命令配置 | 不引入权限矩阵；秘密不回显 |
 
 错误码至少包括 unauthenticated、forbidden、not_found、draft_conflict、version_conflict、run_active、idempotency_conflict、context_overflow、unsupported_capability、budget_exceeded、trace_unavailable、cursor_expired、interrupted。错误码与展示文案分离，内部堆栈不返回给客户端。
 
@@ -551,19 +721,28 @@ OpenAPI 是接口的可执行契约来源；事件 schema_version 单独管理�
 
 ```text
 mass/
-├── cmd/mass/                  # 服务入口
+├── cmd/mass/                       # 唯一程序：serve/migrate/user/member
 ├── internal/
-│   ├── domain/                # 实体与规则
-│   ├── app/                   # 身份、空间、定义、会话和运行用例
-│   ├── runtime/               # 调度、执行、上下文、模型、工具、Trace
-│   ├── adapter/               # PostgreSQL、文件、模型协议、内置工具、凭证
-│   ├── transport/http/        # API、SSE、静态文件
-│   └── bootstrap/             # 配置与组装
+│   ├── domain/
+│   ├── app/
+│   ├── runtime/                    # 同进程调度、执行、上下文、工具和 Trace
+│   ├── adapter/
+│   │   ├── mariadb/                # database/sql Repository
+│   │   ├── tos/                    # 对象与虚拟工作区
+│   │   └── eino/                   # 模型组件、callbacks 和传输 Trace
+│   ├── transport/http/ui/          # assets.go + 生成的 dist 嵌入目录
+│   └── bootstrap/                  # 单配置树及依赖组装
+├── frontend/
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── vite.config.ts
+│   ├── src/{app,features,components,lib}/
+│   └── dist/                       # 构建生成，不是运行期资源目录
 ├── db/{migrations,queries}/
 ├── api/{openapi.yaml,events/}
-├── web/src/{app,features,components,lib}/
+├── configs/mass.example.yaml       # 单服务配置模板，不含秘密
 ├── tests/{integration,e2e}/
-├── scripts/                   # 可重复的构建和验证入口
+├── scripts/                        # 构建、嵌入和验证
 └── docs/
     ├── design-guide.md
     ├── architecture.md
@@ -571,6 +750,8 @@ mass/
     └── engineering.md
 ```
 
-真实模型供应商与模型、精确工具链版本、Token 计数器、默认限额、保留时长和目标主机容量在相关阶段开始前补齐本文。它们不能以未定为由阻塞身份、版本、FakeProvider 和持久化运行闭环的建设。
+不建立持久化的 `data/blobs`、宿主工作区或前端独立服务配置。源码和构建缓存可以使用开发磁盘，应用资源持久化只使用 MariaDB/TOS。
 
-所有新增技术决策归入相应 T 节；核心代码落地后用真实工程路径关联本文，并注明设计片段是否被替换。实际代码与本文不一致时先判断是实现缺陷还是设计调整，不静默保留两套规则。
+待收敛项仅包括 MariaDB/Go/Node 与 Eino/TOS SDK 的精确版本、实际 TOS 配置与权限、Eino 模型供应商和模型、计数器、默认限额及保留时长；已指定的单服务、MariaDB、TOS、Eino、frontend 和简单登录不再作为待选方案。
+
+真实云资源缺失时用内存 TOS fake 和 Eino FakeChatModel 完成可验证编码，但不能以 fake 测试替代真实 TOS/模型接入验收。框架与 SDK 的实际方法、字段和重试行为以锁定版本核验，并将证据记录到工程开发文档。
