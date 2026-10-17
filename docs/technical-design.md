@@ -11,7 +11,7 @@
 
 ### T00.1 单服务运行形态
 
-本节选型按用户要求固定：后端 Go，前端独立工程位于 `./frontend`，前后端由同一个 Go 进程提供服务；数据库 MariaDB；工程资源持久化采用字节跳动火山引擎 TOS；LLM 接入统一使用 CloudWeGo Eino；首版采用最简账号密码登录。Agent 仍使用 AGENTS.md 与指定版本 Skills，MVP 不接入沙箱。
+本节选型按用户要求固定：后端 Go，前端独立工程位于 `./frontend`，前后端由同一个 Go 进程提供服务；数据库 MariaDB；工程资源持久化采用字节跳动火山引擎 TOS；LLM 接入统一使用 CloudWeGo Eino；首版采用最简账号密码登录；运行事件采用 AG-UI 协议，通过 SSE 传输。Agent 仍使用 AGENTS.md 与指定版本 Skills，MVP 不接入沙箱。
 
 交付为一个 `mass` 可执行文件、一个服务配置入口和一个监听地址。同一进程提供页面、API、SSE、文件下载、调度器及 Agent 执行器，不拆 Node.js 服务、BFF、Worker 或模型代理服务。MariaDB、TOS 和实际模型端点是外部基础依赖，“单服务”指只部署一个 MASS 应用服务，并不将这些外部依赖嵌入 Go 进程。
 
@@ -38,7 +38,8 @@ MVP 不增加 Redis、独立消息队列、向量数据库或独立认证服务�
 | M07 上下文 | SessionJournal、ContextPlanner/Projector + Eino schema/model | 固定日志边界、确定性投影、摘要与前缀稳定 |
 | M08 模型 | github.com/cloudwego/eino；对应 eino-ext 模型组件 | 统一模型接口、工具定义和流式结果 |
 | M08 Trace 捕获 | Eino callbacks + 自定义 http.RoundTripper | 语义事件和实际 HTTP 载荷分别记录 |
-| M10 日志与 Trace | MariaDB JSON、TOS、net/http | 会话原始事件、内容引用、Trace 视图与 SSE 续传 |
+| M10 日志与 Trace | MariaDB JSON、TOS、net/http | 会话原始事件、内容引用、AG-UI 事件投影与 SSE 续传 |
+| M10/M12 交互协议 | AG-UI；Go SDK github.com/ag-ui-protocol/ag-ui/sdks/community/go；前端 @ag-ui/core | 标准事件类型/校验、服务端序列化、前端协议消费 |
 | M11 对象存储 | github.com/volcengine/ve-tos-golang-sdk/v2/tos | TOS 上传、读取、元信息、分片与清理 |
 | M12 前端 | React、TypeScript、Vite、React Router、TanStack Query | frontend 工程中的页面、路由与查询 |
 | M12 编辑/预览 | monaco-editor、react-markdown、remark-gfm | 定义编辑、差异和受限预览 |
@@ -63,6 +64,7 @@ MVP 不增加 Redis、独立消息队列、向量数据库或独立认证服务�
 | model_configs / credentials | Eino 组件类型、实际模型配置、加密供应商凭证 |
 | sessions | 空间归属、会话标识、last_sequence；固定定义来自 session.created |
 | runtime_events / event_objects | Session 内追加日志、事件格式版本、因果关系、有序内容对象关联 |
+| agui_streams / agui_events | 每个 Run 固定协议/映射版本、日志处理检查点、独立 ui_sequence、有序 AG-UI JSON；可重建的传输视图 |
 | messages / runs / run_snapshots | 从日志同步维护的消息、运行状态及快照视图，保存来源事件位置 |
 | context_summaries / context_projections | 摘要来源、投影输入边界、策略/渲染版本、epoch、Manifest 与投影对象引用 |
 | session_active_runs | 每个 Session 唯一的活跃 Run 占用记录 |
@@ -106,7 +108,7 @@ DDL 与业务事务分开执行，不能假设所有迁移语句都可事务回�
 
 OpenAPI、事件 Schema 和数据库迁移分别存放在 `api/openapi.yaml`、`api/events/` 和 `db/migrations/`，它们是工程文件，不新增建设文档。
 
-错误返回 code、message、request_id 和非敏感 details；列表使用游标，大载荷由 Go 服务鉴权后从 TOS 代理读取。事件 sequence 在数据库用 bigint，传到前端用十进制字符串。
+错误返回 code、message、request_id 和非敏感 details；列表使用游标，大载荷由 Go 服务鉴权后从 TOS 代理读取。日志 sequence 与 AG-UI 传输 ui_sequence 分别在数据库用 bigint，游标经 HTTP/SSE 传为十进制字符串，禁止混用。SSE data 直接是 AG-UI 事件对象，协议规则见 T10.3—T10.6。
 
 ### T00.5 一个配置入口
 
@@ -659,46 +661,115 @@ COMMIT;
 
 usage 按 attempt 记录并汇总，摘要和失败尝试均计入；缺失用量为 unknown，价格估算保存价格版本。缓存统计口径见 T07.6。运维日志不复制原始用户内容，空间授权同样用于日志和载荷读取。
 
-### T10.3 SSE 与游标
+### T10.3 AG-UI 协议边界与依赖
 
-`GET /spaces/{space_id}/runs/{run_id}/events` 返回 `text/event-stream`，支持 Last-Event-ID；首次连接可用 after 查询参数。服务端每次按 Session 的 sequence 查询已提交 runtime_events，并过滤指定 run_id；不在历史读取后切换为不可靠内存事件流。
+确定使用 AG-UI 作为运行交互事件协议，SSE 作为 HTTP 传输方式。MASS 内部 runtime_events 保持 T10.1 的事实语义，由 AguiProjector 投影成标准 AG-UI 事件；ContextProjector 仍读取原始日志，不读取前端事件。
 
-SSE 的 id 为 Session 序号、event 统一为 run_event，具体事件类型放在 JSON 的 event_type 中。Run 过滤后的序号允许跳跃，不能要求相邻事件 +1；后端负责按序返回全部匹配事件，前端只从已确认应用的位置续传。浏览器回放只显示数据，不再次调用工具。过期游标、非法游标和跨空间 Run 都明确拒绝。分页返回经过完整扫描的 next_cursor 和 has_more，不能用 Session 最新序号跳过尚未读取的匹配事件；游标过期返回明确错误并重新加载快照。
+Go 使用协议官方仓库中的 community Go SDK 的 core/events 类型及 JSON 编码能力，前端使用 @ag-ui/core 类型与事件 Schema。D00 锁定兼容的 SDK/Schema 版本，校验本方案使用的事件子集；SSE framing 由 MASS 包装以支持持久化游标。[AG-UI Go SDK](https://docs.ag-ui.com/sdk/go/overview)、[TypeScript 事件契约](https://docs.ag-ui.com/sdk/js/core/events)。
 
-下面为可独立编译的帧发送核心。鉴权、数据库游标、心跳与循环位于调用方；deadline 需要按每次写入更新，代理不得缓冲 SSE：
+继续使用 MASS 的 POST /sessions/{id}/runs 接受请求并返回 Run ID，再通过 GET /runs/{id}/events 订阅同一 Run。前端提供这一提交/订阅方式的适配器。官方 HttpAgent 默认使用 POST RunAgentInput 并直接读取事件流，不能直接把它指向这里的 GET 地址；本版本提供 AG-UI 事件兼容性，MASS 的提交、鉴权及续传方式是应用约定。[AG-UI 传输与客户端架构](https://docs.ag-ui.com/concepts/architecture)
+
+不接受前端提供的历史、tools 或 state 覆盖后端原始日志与授权配置；工具仍全部由后端执行。断线重订阅不会创建新 Run；取消使用原有明确的取消接口。
+
+### T10.4 内部事实到 AG-UI 的映射
+
+threadId 映射 Session ID，runId 映射 Run ID。messageId 由 Run/attempt/响应消息位置确定；toolCallId 由平台模型调用标识和供应商调用 ID 确定，防止不同尝试复用供应商 ID 造成冲突。run.created 保存 protocol_profile、mapper/parser_version，同事务初始化 agui_streams；这些是 UI 映射配置，不进入 LLM 指令。重连不能重新生成标识或改变映射版本。
+
+| 原始事实或条件 | AG-UI 输出 | MASS 语义 |
+| --- | --- | --- |
+| run.created | RUN_STARTED，然后 CUSTOM mass.run.status.v1 | 接受请求后开始交互生命周期，status=queued；不宣称执行器已开始 |
+| run.started | CUSTOM mass.run.status.v1 | status=running，不重复 RUN_STARTED |
+| task 模型回复的可展示文本增量 | TEXT_MESSAGE_START / CONTENT / END | 同一 messageId，非空 delta；按协议边界闭合 |
+| task 模型的完整工具调用描述 | TOOL_CALL_START / ARGS / END | 同一 toolCallId，参数是 JSON 字符串；MVP 在响应完成校验后输出完整参数，后续可流式优化 |
+| tool.execution.started | CUSTOM mass.tool.status.v1 | 工具执行中；与参数结束分开 |
+| tool.execution.completed | TOOL_CALL_RESULT | messageId、toolCallId、role=tool、content 为字符串 |
+| 可恢复工具业务错误 | TOOL_CALL_RESULT + CUSTOM mass.tool.status.v1 | content 中明确错误结构，不伪装成功；最终是否终止由 Run 状态决定 |
+| 未知副作用、未执行或协议不完整 | CUSTOM mass.tool.status.v1 / mass.message.status.v1 | 明确 unknown/incomplete/not_executed，不能补造成功结果 |
+| 投影、摘要、模型 attempt 状态 | CUSTOM mass.context.v1 / mass.trace.v1 | 提供来源 ID、状态及载荷引用，不把摘要任务输出当作用户回复 |
+| 用量与缓存统计 | CUSTOM mass.usage.v1 | 保存未知标识和统计口径；锁定版本支持时可同时填终态标准 usage |
+| run.cancel.requested | CUSTOM mass.run.status.v1 | cancelRequested=true；继续等待真正终态 |
+| run.finished succeeded | RUN_FINISHED | 唯一成功终态，携带 threadId/runId |
+| run.finished failed | RUN_ERROR | message 和业务 code；可恢复模型尝试失败不能提前发 Run 终态 |
+| run.finished cancelled | CUSTOM mass.run.status.v1，然后 RUN_ERROR | MASS 约定 status=cancelled、code=RUN_CANCELLED，不伪装成功 |
+
+取消通过错误终态表达是 MASS 对当前选定事件子集的映射约定，客户端按 RUN_CANCELLED 展示“已取消”。每个完整 Run 流以一个 RUN_STARTED 开始，以 RUN_FINISHED 或 RUN_ERROR 之一结束；排队即取消也满足这一边界。后续版本若引入其他终态表达，必须显式升级协议配置，不能混用。
+
+TOOL_CALL_END 仅结束工具调用参数，不表示工具执行成功；结果由 TOOL_CALL_RESULT 或自定义状态给出。[AG-UI 工具事件语义](https://docs.ag-ui.com/concepts/events)
+
+标准事件字段采用 AG-UI camelCase 和 type 判别字段；仅凭改名将原始 event_type/payload 包进 data 不算完成协议接入。自定义信息统一采用 CUSTOM 的 name/value，命名为 mass.<topic>.v1，value 包含 schemaVersion、threadId、runId、sourceEventIds 及经授权的业务摘要。原始模型请求、敏感协议块和大结果通过受控 payload API 按需读取，不直接塞入 rawEvent。
+
+文本增量只能来自已持久化原始响应的解码结果。投影器按固定 parser_version 维护跨区块解码状态，不能把网络区块当作文本 delta；完成响应不再重复发送已发文本。非流式回复可产生一次完整文本 CONTENT。消息 END 只关闭展示边界，流中断时先标记 incomplete，再闭合已打开的文本消息；重试使用新 attempt/messageId，不拼接成同一回答。
+
+TOOL_CALL_RESULT 的大内容只传明确标注的节选及受控引用，并由 CUSTOM 标记 truncated/payloadRef；完整结果仍在原始日志。工具参数超过 UI 传输上限时只发送 CUSTOM 说明及载荷引用，不伪造 ARGS。没有发出标准 TOOL_CALL_START 的工具，也不单独发无对应关系的 TOOL_CALL_RESULT。
+
+MVP 使用显式 START/CONTENT/END 事件；不使用自动展开的 CHUNK 简写、STATE_DELTA、前端工具执行或中断恢复能力。状态补充通过 CUSTOM，完整调试内容通过查询 API 获取，后续扩展必须补契约测试。
+
+### T10.5 AG-UI 传输视图与断线续传
+
+一条 runtime_event 可以生成零个、一个或多个 AG-UI 事件，因此 SSE id 使用独立 ui_sequence，不能直接使用 Session sequence。原始日志用于审计，agui_events 是可重建的传输视图：
+
+| 结构 | 必要字段与约束 |
+| --- | --- |
+| agui_streams | space_id、session_id、run_id、protocol_profile、mapper/parser_version、source_sequence、投影器状态、last_ui_sequence、终态标识 |
+| agui_events | space_id、run_id、ui_sequence、source_event_id、source_ordinal、event_json 或不可变对象引用 |
+| 唯一约束 | (space_id, run_id, ui_sequence)；(space_id, run_id, source_event_id, source_ordinal) |
+
+投影器在同一 Go 进程运行，读取已提交原始日志及对象；解析可在事务外准备，再锁定 agui_streams、复核检查点，在同一事务追加该批输出并推进检查点/解析状态。投影器不能反向改变原始日志或执行工具；崩溃重试不会重复分配输出。输出事件先落库，再发送 SSE，不能针对不同连接重新切分文本。受限大小的投影状态保存到数据库或不可变内容对象，不能只放进程内存。
+
+protocol_profile、分块与标识规则在 Run 创建时锁定；同一流后续重建必须保留相同游标和输出，不原地换映射器。原始 source_sequence 允许因其他 Run/会话事件跳跃；本 Run 的 ui_sequence 连续递增，分页与 SSE 使用同一顺序。
+
+GET /spaces/{space_id}/runs/{run_id}/events 使用 Cookie 空间鉴权，返回 text/event-stream；Last-Event-ID 或 after 是该 Run 的 ui_sequence，两者同时出现且不同返回错误。按已提交 ui_sequence > cursor 升序补齐，不以连接打开时间作为起点。首连从 0 读取完整生命周期；续传是旧流的后缀，不能再添加一次 RUN_STARTED。
+
+游标、已应用界面状态和协议版本必须配套。页面刷新时若只有游标而没有对应状态，应从 0 回放；大历史可调用 GET /runs/{id}/ui-snapshot 获取同一水位的 reducerState、cursor、protocolProfile，再从该 cursor 续传。快照需要包含尚未结束的消息/工具状态。SSE 历史过期返回 cursor_expired；仅当存在覆盖该位置的完整快照时允许快照恢复，否则明确无法完整回看。不得跳过缺失数据并返回成功。
+
+断线、代理超时、鉴权失败和 UI 投影服务错误是传输问题，不能凭空追加 RUN_ERROR 将仍在运行的任务改成失败；客户端查询 Run 状态并按已应用游标重连。慢客户端有界超时断开，不阻塞执行器；投影延迟显示为同步中。终态提交并投影后，发送终态事件关闭流，客户端停止订阅；已应用终态后无需再连接。终态后的用量补充或核实仍可追加原始日志并通过查询展示，但不能继续向已终结 AG-UI 流追加事件或改写旧帧。定期复核成员与登录状态。
+
+### T10.6 SSE 帧与编码示例
+
+每个 data 直接包含一个 AG-UI JSON 对象；SSE id 是 MASS 的续传扩展。不再使用 event: run_event；默认 message 事件可供 EventSource.onmessage 消费。心跳使用 SSE 注释，不分配业务游标。
+
+```text
+id: 1
+data: {"type":"RUN_STARTED","threadId":"session_1","runId":"run_1"}
+
+id: 2
+data: {"type":"CUSTOM","name":"mass.run.status.v1","value":{"schemaVersion":1,"threadId":"session_1","runId":"run_1","status":"queued","sourceEventIds":["evt_run_created"]}}
+
+```
+
+下面是独立可编译的传输核心；body 来自已按锁定 AG-UI Schema 验证并持久化的输出，不能直接接受任意用户 JSON。Compact 保证 data 为单行，协议类型/必填字段校验在上游完成：
 
 ```go
 package stream
 
 import (
+    "bytes"
     "encoding/json"
     "fmt"
     "net/http"
+    "strconv"
     "time"
 )
 
-type WireEvent struct {
-    RunID     string          `json:"run_id"`
-    Sequence  string          `json:"sequence"`
-    EventType string          `json:"event_type"`
-    Payload   json.RawMessage `json:"payload"`
-}
-
-func WriteEvent(w http.ResponseWriter, event WireEvent) error {
-    data, err := json.Marshal(event)
-    if err != nil { return err }
+func WriteAGUIEvent(w http.ResponseWriter, cursor string, body json.RawMessage) error {
+    n, err := strconv.ParseUint(cursor, 10, 64)
+    if err != nil || n == 0 || strconv.FormatUint(n, 10) != cursor {
+        return fmt.Errorf("invalid AG-UI cursor")
+    }
+    var data bytes.Buffer
+    if err := json.Compact(&data, body); err != nil { return err }
     rc := http.NewResponseController(w)
     if err := rc.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
         return err
     }
-    if _, err := fmt.Fprintf(w, "id: %s\nevent: run_event\ndata: %s\n\n", event.Sequence, data); err != nil {
+    if _, err := fmt.Fprintf(w, "id: %s\ndata: %s\n\n", cursor, data.Bytes()); err != nil {
         return err
     }
     return rc.Flush()
 }
 ```
 
-sequence 必须来自已验证的十进制序号，不能使用任意用户文本。服务端先写 Content-Type/Cache-Control，再循环发送。慢客户端超时断开后从游标重连，不阻塞执行器。结束事件之后关闭连接，客户端收到终态后也停止重连；定期重新检查登录和成员权限。
+调用方在写入前完成鉴权，设置 Content-Type: text/event-stream、Cache-Control: no-cache，并配置代理不缓冲。AG-UI 事件 JSON、SSE id 和 HTTP 状态分别承担协议内容、续传与连接错误职责。[AG-UI SSE 编码示例](https://github.com/ag-ui-protocol/ag-ui/blob/main/docs/sdk/python/encoder/overview.mdx)
 
 管理审计另外记录成员、发布、默认版本及凭证变更；不包含凭证原值。
 
@@ -772,7 +843,7 @@ TOS 不可用或对象无法确认保存时，拒绝新的相关写操作，停�
 
 ## T12 M12 前端管理与调试
 
-依赖：React、TypeScript、Vite、React Router、TanStack Query、Monaco Editor、react-markdown、openapi-typescript。选用库的用途见官方说明：[Vite](https://vite.dev/guide/)、[React Router](https://reactrouter.com/start/declarative/installation)、[TanStack Query](https://tanstack.com/query/latest/docs/framework/react/overview)、[Monaco](https://github.com/microsoft/monaco-editor)。
+依赖：React、TypeScript、Vite、React Router、TanStack Query、Monaco Editor、react-markdown、openapi-typescript、@ag-ui/core。选用库的用途见官方说明：[Vite](https://vite.dev/guide/)、[React Router](https://reactrouter.com/start/declarative/installation)、[TanStack Query](https://tanstack.com/query/latest/docs/framework/react/overview)、[Monaco](https://github.com/microsoft/monaco-editor)。
 
 ### T12.1 页面与数据流
 
@@ -784,29 +855,29 @@ Monaco 延迟加载；react-markdown 禁用任意原始 HTML，不加载允许�
 
 API 类型由 OpenAPI 生成，禁止手改生成文件；静态类型不能代替后端校验。[openapi-typescript](https://openapi-ts.dev/introduction)
 
-### T12.2 调试与事件消费
+### T12.2 AG-UI 调试与事件消费
 
-调试开始先创建快照和绑定会话，再提交 Run。页面展示快照的准确依赖版本；编辑器修改后提示需要新调试会话，不把旧 Trace 展示为新草稿结果。
+调试先创建固定快照和会话，再提交 Run。前端 AguiRunClient 使用 MASS 提交 API 和 EventSource GET 订阅，协议事件交给 @ag-ui/core 的对应事件 Schema 校验后进入 reducer；不同 SDK 版本的导出方法以锁定版本确认，不用 TypeScript 断言代替运行时校验。
 
-订阅使用同源 EventSource；自动重连沿用 Last-Event-ID，页面重建时显式传递已保存游标。事件处理按 Session+sequence（页面同时固定 Run）去重，sequence 用 BigInt 比较，持久化仍用字符串。
+EventSource.onmessage 的 data 是 AG-UI 对象，lastEventId 是 ui_sequence；runId 由订阅上下文固定，不能假定每一种 AG-UI 事件都有 runId 字段。生命周期事件的 threadId/runId 必须与订阅一致，消息/工具事件按稳定 ID 关联。CUSTOM 校验 name/value 版本，未知可选 CUSTOM 可忽略并推进游标，未知必需标准事件或非法数据须停止消费并报协议错误。
 
-核心 reducer 逻辑示例（省略 WireEvent 的其余字段和页面状态定义）：
+传输包装只存在于前端适配器内部，不能替代线上 AG-UI JSON。以下为消费顺序伪代码，reduceAgui 由实际协议 reducer 提供：
 
-```ts
-type RunEvent = { run_id: string; sequence: string; event_type: string };
-type RunView = { runId: string; cursor: string; events: RunEvent[] };
-
-export function appendEvent(state: RunView, event: RunEvent): RunView {
-  if (event.run_id !== state.runId) return state;
-  if (!/^[1-9][0-9]*$/.test(event.sequence)) throw new Error("invalid sequence");
-  if (BigInt(event.sequence) <= BigInt(state.cursor)) return state;
-  return { ...state, cursor: event.sequence, events: [...state.events, event] };
-}
+```text
+onFrame(message):
+  event = validateAgui(message.data)
+  cursor = validateDecimal(message.lastEventId)
+  if cursor <= state.cursor: return
+  if cursor != state.cursor + 1: stopAndRecover(state.cursor)
+  next = reduceAgui(state, event)
+  commit(next, cursor)  // 状态应用成功后才前移游标
 ```
 
-Run 视图过滤了其他事件，因此 sequence 跳跃合法，不能据此判断漏事件。断线从最后成功应用的游标读取后续匹配事件；分页按服务端已扫描的 next_cursor 推进，全部读取完成后才续订，不并发混合历史页和实时流。初始化 cursor 为 0，或来自明确覆盖的历史快照。大型历史采用分页与窗口，不无限增长示例中的 events 数组。
+这里检查的是连续的 Run 传输序号，不是允许跳号的 Session 原始序号。客户端统一控制重连：onerror/解码或应用失败时关闭旧 EventSource，用最后成功应用的 after 重新建立连接；不让浏览器已接收但未成功应用的 Last-Event-ID 跳过事件。刷新时从 0 或成对保存的快照/游标恢复，不仅凭一个旧游标重连。
 
-事件协议符合 SSE 的 id/event/data 格式，参考 [MDN SSE](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events)。调试页增加日志来源、投影父链、epoch、前缀变化及实际缓存统计，unknown 和冷启动明确展示。大型输入输出按需获取，缩略显示必须可查看或下载完整内容；无法取得时显示明确状态。
+TEXT_MESSAGE_CONTENT 按 messageId 追加，工具参数按 toolCallId 聚合，TOOL_CALL_END 只关闭参数，结果到达后才展示执行结果。失败 attempt 的已显示文本标为 incomplete，重试新建消息；RUN_CANCELLED 显示已取消，其他 RUN_ERROR 显示失败，终态关闭订阅。事件回放只更新界面，不发起工具调用。
+
+调试页同时展示原始日志、投影 Manifest、实际模型请求、epoch/前缀变化、真实缓存统计和载荷引用；摘要调用放在 Trace 区而非聊天助手回复中。普通 AG-UI 消息流不能冒充完整模型原文。空间切换立即关闭订阅并清空私有视图，大历史通过水位一致的 ui-snapshot 恢复并采用窗口展示。
 
 ## T13 M13 单服务组装、前端嵌入与配置
 
@@ -856,9 +927,9 @@ func Assets() (fs.FS, error) {
 | /sessions | POST/GET | 固定定义；版本和快照二选一 |
 | /sessions/{id}/runs | POST | 幂等键；同会话最多一个活跃 Run |
 | /runs/{id}、/runs/{id}/cancel | GET、POST | 取消请求不等于已停止 |
-| /runs/{id}/events、/runs/{id}/trace | SSE、分页 GET | 空间鉴权、游标续传、完整性标识 |
+| /runs/{id}/events、/runs/{id}/ui-snapshot | AG-UI over SSE、快照 GET | 同源鉴权，独立 ui_sequence、协议版本与水位一致性 |
+| /runs/{id}/trace、/sessions/{id}/journal | 分页 GET | 内部原始日志及内容引用，Session sequence 与 UI 游标分离 |
 | /runs/{id}/contexts、/payloads/{id} | GET | 投影/Manifest、epoch、缓存统计和受控完整载荷 |
-| /sessions/{id}/journal | 分页 GET | 原始事件、固定读取边界、来源关联；客户端不能直接追加可信事件 |
 | /artifacts/{id}/download | GET | 权限校验、受控文件名、保留状态 |
 | /models、/credentials、/members | 基础 owner 管理操作；成员可先用同二进制命令配置 | 不引入权限矩阵；秘密不回显 |
 
@@ -879,6 +950,7 @@ mass/
 │   │   ├── mariadb/                # database/sql Repository
 │   │   ├── tos/                    # 对象与虚拟工作区
 │   │   └── eino/                   # 模型组件、callbacks 和传输 Trace
+│   ├── transport/agui/             # 协议事件映射与持久化传输视图
 │   ├── transport/http/ui/          # assets.go + 生成的 dist 嵌入目录
 │   └── bootstrap/                  # 单配置树及依赖组装
 ├── frontend/
@@ -901,7 +973,7 @@ mass/
 
 不建立持久化的 `data/blobs`、宿主工作区或前端独立服务配置。源码和构建缓存可以使用开发磁盘，应用资源持久化只使用 MariaDB/TOS。
 
-待收敛项仅包括 MariaDB/Go/Node 与 Eino/TOS SDK 的精确版本、实际 TOS 配置与权限、Eino 模型供应商和模型、计数器、默认限额及保留时长；已指定的单服务、MariaDB、TOS、Eino、frontend 和简单登录不再作为待选方案。
+待收敛项仅包括 MariaDB/Go/Node 与 Eino/TOS SDK 的精确版本、实际 TOS 配置与权限、Eino 模型供应商和模型、计数器、默认限额及保留时长；已指定的单服务、MariaDB、TOS、Eino、frontend、简单登录及 AG-UI over SSE 不再作为待选方案。AG-UI Go/TS SDK 精确版本与兼容事件子集在 D00 固定并验证。
 
 模型缓存能力、默认压缩阈值/目标余量和投影策略版本在对应实现阶段收敛；未知缓存命中不能用假数据补齐。
 
