@@ -19,4 +19,4 @@ Multi-use Agent Systems
 - [x] 按照当前方案，发送给LLM的上下文是从哪里来的，最原始的上下文记录是怎么管理的？
 - [x] SSE采用AG‑UI协议
 - [x] 技术方案的runtime模块粒度还是有点大，再细分下
-- [ ] MVP版本都支持哪些tool？
+- [x] MVP版本都支持哪些tool？
