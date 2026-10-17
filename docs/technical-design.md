@@ -35,10 +35,10 @@ MVP 不增加 Redis、独立消息队列、向量数据库或独立认证服务�
 | M02/M09 校验 | github.com/santhosh-tekuri/jsonschema/v6 | 配置和工具参数运行时校验 |
 | M03 凭证 | crypto/aes、crypto/cipher | 供应商凭证加密，主密钥从统一配置的秘密来源注入 |
 | M04—M06 运行 | database/sql、context、sync、time | 幂等、事务认领、并发与取消 |
-| M07 上下文 | 平台上下文策略 + Eino schema/model | 消息转换、摘要调用和模型对应预算 |
+| M07 上下文 | SessionJournal、ContextPlanner/Projector + Eino schema/model | 固定日志边界、确定性投影、摘要与前缀稳定 |
 | M08 模型 | github.com/cloudwego/eino；对应 eino-ext 模型组件 | 统一模型接口、工具定义和流式结果 |
 | M08 Trace 捕获 | Eino callbacks + 自定义 http.RoundTripper | 语义事件和实际 HTTP 载荷分别记录 |
-| M10 Trace | MariaDB JSON、TOS、net/http | 事件索引、原文对象与 SSE 续传 |
+| M10 日志与 Trace | MariaDB JSON、TOS、net/http | 会话原始事件、内容引用、Trace 视图与 SSE 续传 |
 | M11 对象存储 | github.com/volcengine/ve-tos-golang-sdk/v2/tos | TOS 上传、读取、元信息、分片与清理 |
 | M12 前端 | React、TypeScript、Vite、React Router、TanStack Query | frontend 工程中的页面、路由与查询 |
 | M12 编辑/预览 | monaco-editor、react-markdown、remark-gfm | 定义编辑、差异和受限预览 |
@@ -61,13 +61,14 @@ MVP 不增加 Redis、独立消息队列、向量数据库或独立认证服务�
 | skills / skill_drafts / skill_versions | 方法内容、草稿、版本及 TOS 资源清单 |
 | agent_version_skills | AgentVersion 到准确 SkillVersion、显示版本号和顺序 |
 | model_configs / credentials | Eino 组件类型、实际模型配置、加密供应商凭证 |
-| sessions / messages | 固定定义、历史顺序、消息及协议块引用 |
-| context_summaries | 来源消息范围、内容引用、生成调用和策略版本 |
-| runs / run_snapshots | 状态、预算、归属、取消、有效定义/模型/工具快照 |
+| sessions | 空间归属、会话标识、last_sequence；固定定义来自 session.created |
+| runtime_events / event_objects | Session 内追加日志、事件格式版本、因果关系、有序内容对象关联 |
+| messages / runs / run_snapshots | 从日志同步维护的消息、运行状态及快照视图，保存来源事件位置 |
+| context_summaries / context_projections | 摘要来源、投影输入边界、策略/渲染版本、epoch、Manifest 与投影对象引用 |
 | session_active_runs | 每个 Session 唯一的活跃 Run 占用记录 |
 | idempotency_keys | 空间、主体、操作、幂等键、请求摘要和结果引用 |
-| trace_events | Run 内序号、span、事件类型、时间、JSON 载荷或 TOS 引用 |
-| blobs / workspace_files / artifacts | TOS key、可选 version_id、SHA-256、大小；逻辑路径及当前对象版本 |
+| content_objects / workspace_files / artifacts | TOS key、可选 version_id、SHA-256、大小；逻辑路径及当前对象版本 |
+| model_cache_bindings（启用显式缓存时） | 空间、供应商作用域、前缀/配置指纹、缓存引用和到期时间；不作为历史来源 |
 | audit_logs | 发布、成员、凭证等管理操作及结果 |
 
 MariaDB 不使用带 WHERE 的部分唯一索引。通过独立占用表保证同会话只有一个活跃 Run；提交时与 Run 创建同事务插入，确认运行结束后与终态事件同事务删除。下例是迁移片段，父表须具备相同类型和联合唯一约束：
@@ -85,8 +86,12 @@ CREATE TABLE session_active_runs (
       REFERENCES runs(space_id, id)
 ) ENGINE=InnoDB;
 
-CREATE UNIQUE INDEX trace_events_run_sequence
-  ON trace_events(space_id, run_id, sequence);
+CREATE UNIQUE INDEX runtime_events_session_sequence
+  ON runtime_events(space_id, session_id, sequence);
+CREATE UNIQUE INDEX runtime_events_event_id
+  ON runtime_events(space_id, event_id);
+CREATE INDEX runtime_events_run_sequence
+  ON runtime_events(space_id, run_id, sequence);
 CREATE UNIQUE INDEX request_idempotency
   ON idempotency_keys(space_id, actor_id, operation, idempotency_key);
 ```
@@ -164,7 +169,7 @@ Cookie 使用 SameSite=Lax，HTTPS 下 Secure；本地回环地址开发可显�
 
 ## T02 M02 定义、Skill 依赖与发布
 
-依赖：YAML v4、JSON Schema、database/sql、TOS BlobStore。内容结构如下：
+依赖：YAML v4、JSON Schema、database/sql、TOS ContentStore。内容结构如下：
 
 ```text
 agent: AGENTS.md + agent.yaml + assets/
@@ -241,42 +246,44 @@ Run 固定非秘密有效配置和凭证引用；每次实际调用重新验证�
 
 ## T04 M04 会话、消息与 Run
 
-依赖：database/sql、crypto/sha256、context。Session 固定发布版本或调试快照；Run 快照记录准确 Skill 版本、有效模型/上下文配置、工具 Schema/实现版本、平台指令版本和服务构建标识。
+依赖：database/sql、SessionJournal、ContentStore、crypto/sha256、context。会话与执行链路以 T10 的 runtime_events 为权威事实来源；messages、runs、run_snapshots 是与事件同事务更新的查询/调度视图，记录 applied_sequence 和 reducer_version，不允许脱离日志单独改变业务事实。Session 的游标、执行锁和心跳属于协调数据，不要求逐次转成模型输入或审计事件。
 
-提交事务锁定 Session，保存用户消息、快照、queued Run、session_active_runs 占用、幂等记录及初始 Trace 事件；占用主键冲突时整个事务回滚。相同主体/操作/幂等键且请求摘要相同返回原结果；内容不同返回 409。默认版本只在创建新 Session 时解析。
+创建 Session 时追加 session.created，固定 Agent/Skill 准确版本、指令原文对象、有序 Skill 清单、平台指令内容及版本；不能只保存可变配置 ID。Agent/Skill 发布库负责编辑与版本管理，日志用不可变引用复用内容，投影通过日志和它引用的对象读取定义。
 
-幂等处理必须在返回“已有活跃 Run”之前识别同一次请求的重试；两个并发相同请求通过唯一约束裁决，并读取赢家结果，不另建 Run。
+用户提交先把原始文本和附件保存为 content_objects；同一数据库事务检查权限、锁定 Session、追加 user.message.accepted 和 run.created、更新消息/queued Run 视图、插入 session_active_runs 占用及幂等记录。run.created 固定模型非秘密配置、工具 Schema/实现版本、预算、构建标识和 user_event_id。未提交成功的输入不进入后续投影。默认 Agent 版本只在创建新 Session 时解析。
 
-终态固定为 succeeded/failed/cancelled；queued/running 属于活跃状态。`cancel_requested_at` 表达请求取消，不直接证明工具已停止。queued 可原子转 cancelled；running 由执行器确认结束后转终态。
+相同主体/操作/幂等键且请求摘要相同返回原结果；内容不同返回 409。幂等核实先于活跃 Run 冲突判断；并发提交由唯一约束裁决，不重复追加用户事件。占用主键冲突时整个事务回滚。
 
-最终回复、Run 终态、usage 汇总、删除 session_active_runs 占用和 run.finished 同事务提交。部分助手输出保留在 Trace 中，失败时不作为完整回复提交。下一轮历史保留完成的协议块；失败的副作用以已完成/失败/未知说明进入后续上下文，不拼入缺少配对的不完整工具链。
+终态为 succeeded/failed/cancelled；queued/running 属于活跃状态。run.cancel.requested 表示收到取消，不代表停止；queued 可在同事务追加 run.finished 并释放占用，running 等实际停止后终结。
 
-接口组：`POST /sessions`、`GET /sessions/{id}/messages`、`POST /sessions/{id}/runs`、`GET /runs/{id}`、`POST /runs/{id}/cancel`。提交返回 202 和 Run ID；重复提交可返回原 Run 及其当前状态。
+run.finished、最终回复的来源响应引用、usage 汇总、状态视图更新及占用删除同事务提交。最终回复引用 model.response.completed，不另造一份同内容原始消息。部分输出保留在日志，但不作为成功回复。失败运行的历史参与规则见 T07；取消或失败不能抹去已确认副作用。
+
+MVP 不原地修改已接受的消息。补充或纠错追加新用户消息；历史分支和消息编辑重算不属于首版范围。视图重建只读取事件和内容，不调用模型或工具；离线重建验证通过后才切换视图，不直接驱动生产调度。
+
+接口组：POST /sessions、GET /sessions/{id}/messages、POST /sessions/{id}/runs、GET /runs/{id}、POST /runs/{id}/cancel。提交返回 202 和 Run ID；消息接口查询视图，同时提供来源事件标识。投影不以页面消息视图替代原始日志。
 
 ## T05 M05 单进程调度、认领与停止
 
 依赖：MariaDB/InnoDB、database/sql、context、sync、time。调度器与 API、前端资源服务在同一个 Go 进程中。runs 表是任务来源，内存通知用于唤醒，轮询补漏；平台与空间并发由进程内准入器限制。
 
-MVP 由一个 dispatcher 串行认领，再交给受限 goroutine 执行。不要求队列 SKIP LOCKED 能力；一个认领事务只完成下列数据库操作，不能跨模型或 TOS 请求持有行锁：
+MVP 由一个 dispatcher 串行认领，再交给受限 goroutine 执行。不要求队列 SKIP LOCKED 能力。先在事务外读取候选 Run/Session ID，再按“Session → Run → 其他视图/引用”的固定锁顺序，在短事务中复核并认领；没有候选或复核失败则释放并发名额。事件追加、提交和取消也遵循相同锁顺序。
 
 ```sql
 START TRANSACTION;
-SELECT id FROM runs
-WHERE space_id = ? AND status = 'queued'
-  AND cancel_requested_at IS NULL
-ORDER BY created_at, id
-LIMIT 1 FOR UPDATE;
-
--- 应用取出 ID 后，用同一 sql.Tx 更新并检查 RowsAffected == 1。
+SELECT last_sequence FROM sessions
+WHERE space_id = ? AND id = ? FOR UPDATE;
+SELECT status, cancel_requested_at FROM runs
+WHERE space_id = ? AND id = ? AND session_id = ? FOR UPDATE;
+-- 复核仍为 queued 且未取消，否则回滚。
 UPDATE runs
 SET status = 'running', owner_id = ?, started_at = UTC_TIMESTAMP(6),
     heartbeat_at = UTC_TIMESTAMP(6)
 WHERE space_id = ? AND id = ? AND status = 'queued';
--- 同事务分配事件序号并插入 run.started。
+-- 检查 RowsAffected == 1，通过 Journal 在同事务追加 run.started。
 COMMIT;
 ```
 
-增加 `(space_id, status, created_at, id)` 索引，先获得并发名额再认领。`FOR UPDATE` 必须运行在有效事务内。[MariaDB 行锁文档](https://mariadb.com/docs/server/reference/sql-statements/data-manipulation/selecting-data/for-update)
+增加 `(space_id, status, created_at, id)` 索引，先获得并发名额再认领。事务不跨模型或 TOS 请求持有行锁。`FOR UPDATE` 必须运行在有效事务内。[MariaDB 行锁文档](https://mariadb.com/docs/server/reference/sql-statements/data-manipulation/selecting-data/for-update)
 
 服务启动用独立 `*sql.Conn` 持有 `GET_LOCK('mass:<database>:runtime', 0)`，返回 1 才成为执行实例，退出在同连接 RELEASE_LOCK 并关闭。该连接不能借出到连接池；锁随连接而非事务生命周期存在。持锁连接异常时停止接单和后续动作，不能宣称它提供自动故障切换或副作用恰好一次。[MariaDB GET_LOCK](https://mariadb.com/docs/server/reference/sql-functions/secondary-functions/miscellaneous-functions/get_lock)
 
@@ -288,15 +295,15 @@ Run context 派生自服务执行生命周期，不使用提交请求的 context
 
 ## T06 M06 执行循环
 
-依赖：ContextBuilder、基于 Eino 的 ModelGateway、ToolDispatcher、TraceRecorder、RunStore。执行器负责 MASS 的版本、预算与生命周期；模型调用统一走 Eino 组件，不直接实现供应商 SDK。MVP 保留这一个显式执行循环，不再套一层 Eino Agent 的完整循环，避免重复调度工具和预算。后续如切换 Eino ADK，需要迁移相同的权限、上下文与 Trace 约束。
+依赖：ContextPlanner/ContextProjector、基于 Eino 的 ModelGateway、ToolDispatcher、SessionJournal、RunStore。执行器负责 MASS 的版本、预算与生命周期；模型调用统一走 Eino 组件，不直接实现供应商 SDK。MVP 保留这一个显式执行循环，不再套一层 Eino Agent 的完整循环，避免重复调度工具和预算。后续如切换 Eino ADK，需要迁移相同的权限、上下文与 Trace 约束。
 
-核心循环骨架如下；Gateway、Tools 和终结器负责各自动作前后的持久化，所有错误必须传播。`Build` 内的摘要也走同一 Gateway 并计入预算：
+核心循环骨架如下；Gateway、Tools 和终结器负责各自动作前后的持久化，所有错误必须传播。ContextPlanner.Prepare 负责必要的摘要生成、日志追加和投影准备，摘要也走同一 Gateway 并计入预算；ContextProjector.Project 本身不调用 LLM：
 
 ```go
 func (e *Executor) Execute(ctx context.Context, run RunSnapshot) error {
     for step := 0; step < run.MaxSteps; step++ {
         if err := e.Control.Check(ctx, run); err != nil { return err }
-        input, err := e.Context.Build(ctx, run)
+        input, err := e.Context.Prepare(ctx, run)
         if err != nil { return err }
         reply, err := e.Model.Call(ctx, run, input)
         if err != nil { return err }
@@ -319,32 +326,113 @@ func (e *Executor) Execute(ctx context.Context, run RunSnapshot) error {
 
 模型调用、摘要、工具调用分别有上限，并受 Run 总时长和预算约束。计费 usage 不可用时保留未知状态，不捏造精确值。工具的写入结果未知时不自动重试。
 
-## T07 M07 上下文组装、预算与摘要
+## T07 M07 确定性上下文投影、预算与缓存
 
-依赖：固定内容解析器、MariaDB 消息仓储、TOS BlobStore、Eino schema/model 与模型计数适配器。业务上下文策略由 MASS 管理，模型输入转换为 Eino 消息；摘要也通过同一 Eino 网关调用。
+### T07.1 唯一来源与职责
 
-MVP 按指定顺序加载所有绑定 Skill 的 SKILL.md，assets 按需读取。上下文顺序为平台规则、Agent 指令、Skill 指令、历史摘要、最近完整对话单元、当前输入及本轮交互。平台指令版本在快照中固定，权限校验独立于这些文本。
+输入来源为 SessionJournal 截至确定序号的已提交事件及其不可变 content_objects。ContextProjector 不再分别向草稿、消息视图、运行内存和工具模块索要当前内容。当前用户输入也必须先成为日志事件。模型对应计数器和已固定的策略/配置属于显式输入；实时授权在调用前单独检查，不能被历史日志替代。
 
-ContextManifest 保存来源 ID/版本/摘要值、消息范围、顺序、工具定义、计数方法、预算以及压缩/截断记录，指向实际模型请求。供应商特有的上下文封装也需计入预算。
+ContextPlanner 负责预算规划、触发摘要和选择 context_epoch；ContextProjector 负责从固定事实确定性地产生模型消息、工具定义与 ContextManifest。投影是只读转换，不能隐式调用模型、读取当前时间、执行工具或产生新摘要。日志索引和有界缓存可加速读取，但都需要匹配来源边界和版本。
 
-容量约束：
+### T07.2 输入契约与投影规则
+
+```text
+ProjectContext(
+  space_id, session_id, run_id, through_sequence,
+  purpose, context_epoch, base_projection_ref,
+  projection_policy_version, renderer_version, parser_version,
+  effective_config_ref, summary_refs
+) -> messages_ref, tools_ref, manifest_ref, content_digest
+```
+
+所有引用必须属于已提交的同空间记录；summary_refs 的创建事件不晚于 through_sequence。模型能力、工具集合、计数器版本及输出预留来自 effective_config_ref。相同输入、相同对象字节和相同版本应得到相同的模型可见消息/工具内容；投影 ID、生成时间等审计字段不参与该等价关系。
+
+固定顺序为平台指令、Agent 指令、按定义顺序排列的 Skill 指令、本阶段固定摘要及保留历史、按时间追加的对话。供应商协议需要的工具字段、角色和内容块顺序由版本化适配器处理，不强行统一成一段文本。MVP 加载所有绑定 Skill 的 SKILL.md，资源通过工具读取后作为结果事件进入日志。
+
+| 来源事件 | 投影规则 |
+| --- | --- |
+| session.created / run.created | 读取固定定义及有效配置，禁止重新解析 latest 或当前草稿 |
+| user.message.accepted | 按序进入对话，文本/附件均引用已保存内容 |
+| model.response.completed，purpose=task | 采用完整结构化响应及必要供应商协议字段，工具调用按原顺序保留 |
+| tool.execution.completed / failed | 依据 tool_call_id 配对；可恢复业务错误形成工具结果 |
+| context.summary.created | 仅在被本次投影选中时替代指定完整历史单元，原文不删除 |
+| model.response.chunk.recorded / attempt.failed | 原文用于审计；流式片段和失败尝试不拼成成功助手消息 |
+| purpose=summary 的模型响应 | 仅通过摘要记录使用，不作为用户任务回复 |
+| context.projected / 请求原文 / run.finished | 用于追溯、状态和最终回复选择，不重复加入已有内容 |
+
+同一用户消息、助手响应和工具结果各出现一次。构建完整对话单元再预算：一个助手响应中的所有工具调用及对应结果作为一组，不拆对、不重排 call_id。助手最终回复视图不再作为另一条消息加载。
+
+失败 Run 中已完整完成的交互单元可保留；未闭合工具组不能原样发送给要求配对的模型。投影按版本化规则生成带来源事件引用的“中断/副作用已确认或未知”说明，不伪造工具成功。非法参数、未知工具、取消导致未执行的调用必须有明确拒绝/未执行结果或被完整转为中断说明；缺失结果不能默认为无副作用。该转换记录在 Manifest 中。
+
+### T07.3 投影记录与可重建性
+
+context_projections 的核心字段如下；大清单/消息体进入 TOS，记录由 context.projected 事件引用：
+
+| 字段 | 用途 |
+| --- | --- |
+| projection_id、space_id、session_id、run_id、purpose | 身份、隔离与任务/摘要用途 |
+| through_sequence、parent_projection_id | 固定原始日志边界及上一投影 |
+| projection_policy_version、renderer_version、parser_version | 历史选择、协议转换和解析规则版本 |
+| context_epoch、base_projection_ref、summary_refs | 本阶段固定基础与明确使用的摘要 |
+| effective_config_ref、model_config_fingerprint、tools_fingerprint | 模型/端点/能力/工具及影响缓存兼容性的配置 |
+| ordered_block_refs、selected_event_ids | 模型可见块顺序、对象摘要和原始事件来源 |
+| manifest_ref | 来源范围、采用/省略/摘要/节选原因、失败历史转换 |
+| projected_messages_ref、tools_schema_ref、content_digest | 已保存的逻辑输入和确定性比较依据 |
+| token_estimate、counter_version、prefix_change_reason | 容量估计、计数方法和前缀变化解释 |
+
+context.projected 自身序号晚于 through_sequence；实际 model.request.prepared 引用 projection_id 和确切请求体。为了审计，保留最终逻辑输入与实际请求，不能只依赖未来重新执行旧版本代码。内容删除、过期或缺失时明确标记不能完整重建。
+
+来源事件序号和 Run ID 存在 Manifest 中，默认不写进模型可见内容。摘要引用、模型配置、内容摘要等字段用于平台校验，不等于供应商缓存键，也不证明缓存命中。context_projections 是已执行投影的历史记录；页面查询索引可重建，但历史摘要和实际请求原文必须保留。
+
+### T07.4 容量与摘要阶段
 
 ```text
 有效输入预算 = min(Agent 输入上限, 平台输入上限,
                   模型上下文窗口 - 输出预留 - 安全余量)
 ```
 
-1. 先检查关键指令、工具定义和当前请求，单独已超预算则明确失败。
-2. 保留最近完整对话单元，不能拆开模型工具调用与结果。
-3. 对过早历史进行有界分块摘要；摘要不能递归调用压缩器。
-4. 对大工具结果保留完整原文，向模型提供节选/摘要及可读取原文的资源引用。
-5. 重新估算并准备实际请求；仍超限或供应商拒绝时执行有界补偿，不无限循环。
+关键指令、工具定义和当前请求先计入预算，必要输入已超限则拒绝。大工具结果先保存完整原文，确定节选/摘要对象后固定引用；不在每次投影中重新生成不同节选。未支持的附件明确拒绝。计数无法精确时标为 estimated，供应商 usage 用于校准，不捏造精确计数。
 
-计数器精确时记录算法版本；无法精确计算时使用保守估计并标记 estimated，结合供应商 usage 校准。多模态输入按供应商能力处理；未支持的附件类型在提交时拒绝，不装作已读取。
+context_epoch 表示一段基础内容保持稳定的历史压缩阶段。正常多轮只追加新的完整交互；容量临近阈值时，Planner 对足够多的旧完整单元生成摘要，保留近期完整单元，并为后续多轮预留空间，避免逐轮滑动删除和重复摘要。阈值、目标余量及选取规则属于版本化策略，不承诺固定命中率。
 
-摘要请求禁用工具，标记 purpose=summary，使用同一 Run 内独立 span、相同用量与次数预算。保存消息范围和源内容摘要；摘要失败且原上下文无法容纳时结束 Run。失效、被编辑或不属于本会话的摘要不可复用。
+```text
+epoch 1：固定指令/工具 + 原始历史持续追加
+epoch 2：固定指令/工具 + 固定摘要 S1 + 保留历史及后续追加
+epoch 3：固定指令/工具 + 固定摘要 S2 + 保留历史及后续追加
+```
 
-检查接口返回 Manifest、处理原因与实际 input 对照；输入缩略图或节选不能冒充完整 input。原始消息与 Trace 不因上下文压缩而被改写。
+摘要调用 purpose=summary，禁用工具、禁止递归压缩，并计入当前 Run 用量和预算。流程为：选定来源事件 → 保存摘要请求投影 → 统一网关调用 → 追加完整响应和 context.summary.created → 固定新的日志边界 → 生成任务投影。摘要新增 source_event_ids、有序源内容摘要、coverage 范围、生成调用及策略版本；范围内审计事件不算摘要内容，不能只凭起止序号判断覆盖。若使用上一摘要，保留递归来源引用。
+
+摘要在生成时具有不确定性，但后续投影复用已保存摘要，不重新生成。摘要失败且原上下文无法容纳时终止 Run，旧 epoch 保持有效。只有摘要保存并且新投影验证通过才切换阶段。任务摘要与任务对话使用不同投影父链，避免相互污染缓存比较。
+
+### T07.5 前缀稳定性与缓存边界
+
+平台保证确定性内容、可解释的变化和同阶段尽量只追加；不保证每次供应商 Prompt/KV 缓存命中。本服务的投影结果缓存仅减少读取/组装成本，不代表模型缓存。投影缓存键至少包含空间、会话、日志边界、策略/渲染/解析版本、配置和摘要引用；命中也必须重新验证当前授权。
+
+固定指令、Skill/工具顺序、Schema、空白格式、历史协议字段和已有内容块必须稳定；不要使用无序 map 迭代产生工具顺序。当前时间、Run ID、剩余预算等默认留在审计数据中；必要动态信息按语义放在后部，不能降低指令优先级。后端适配器最终请求也要检查，不能只比较投影前的内部 JSON。
+
+语义布局为“固定指令/工具 → epoch 固定基础 → 追加交互”，具体线序由供应商决定。模型生成的回答能否作为下一次可缓存前缀由其协议决定；保持内容稳定不代表整个旧 HTTP 请求体都是新请求的字节前缀。
+
+压缩、必要配置变化、模型切换或协议版本变化会开启新 epoch，并记录 prefix_change_reason；Agent/Skill 版本升级仍须新建会话。权限或凭证撤销优先于缓存，首版直接停止受影响调用，不为了复用继续使用已撤销能力。
+
+隐式缓存受模型门槛、有效期、淘汰和路由影响；方舟明确不保证命中概率及最长前缀命中。显式缓存具有模型/API 和配置限制，必须针对最终 Eino 组件验证后才能启用。[方舟上下文缓存](https://docs.volcengine.com/docs/ark/context-cache?lang=zh)
+
+MVP 先实现固定前缀、阶段压缩与真实命中观测；不把显式缓存支持作为所有模型的默认能力。启用时由 M08 管理 model_cache_bindings，记录空间、供应商账号作用域、端点/模型、协议/配置/前缀指纹、缓存 ID 和有效期。缓存不存在或失效时根据原始日志和固定投影重建请求，记录新的调用尝试，不重复用户输入或工具副作用。
+
+供应商托管历史或 previous_response_id 必须能在本地日志中解析为完整逻辑输入；同时保存实际发送的增量请求及远端引用，不能只保存缓存 ID。敏感缓存引用按凭证类似方式受控，不跨空间复用私有历史。
+
+### T07.6 观测与检查
+
+每次模型 attempt 保存 input_tokens、cache_read_tokens、可用时的 cache_write_tokens、首 token 延迟、模型/组件版本、epoch、投影指纹及前缀变化原因。供应商字段由适配器归一化并保留原始 usage；缺失值为 unknown，不当作零。摘要调用单独统计并计入总成本。
+
+```text
+请求命中率 = cache_read_tokens > 0 的请求数 / 有有效缓存统计的请求数
+缓存输入占比 = Σcache_read_tokens / Σinput_tokens
+```
+
+第二项仅对两项统计齐全且口径一致的请求求和；额外报告统计覆盖率，按供应商/模型/用途分组，不混合不同字段口径。冷启动、正常追加、压缩切换和过期分组对比，零分母显示无数据。平台侧公共前缀长度只作为诊断估计，不能替代供应商 usage。
+
+检查界面提供原始事件 → 投影 Manifest → 实际请求的导航；展示选取/省略原因、epoch、前缀变化以及真实缓存数据。稳定性测试可以有确定通过标准，真实云缓存收益只能基于测量报告，不能伪造“每次必命中”的验收要求。
 
 ## T08 M08 基于 Eino 的 LLM 接入与完整 Trace
 
@@ -358,7 +446,7 @@ Eino ADK/Graph 可以后续承接更复杂编排，首版不同时启用两个�
 
 ### T08.2 核心调用代码
 
-以下片段演示 Eino 流的单一消费路径。业务 DTO 转换、授权、预算、完整性判定及 SQL/TOS 事务在网关外层，`record` 回调必须落库成功后才返回。引用的框架 API 以初始化时锁定版本为准：
+以下片段演示 Eino 流的单一消费路径。业务 DTO 转换、授权、预算、完整性判定及 SQL/TOS 事务在网关外层。`record` 确认对应原文区块已持久化，并维护可重建的语义增量视图，保存失败必须返回错误；它不把每个增量另写成一条完整助手消息。聚合与校验完成后由网关统一追加 model.response.completed。引用的框架 API 以初始化时锁定版本为准：
 
 ```go
 package modelgateway
@@ -395,11 +483,11 @@ func StreamWithTools(ctx context.Context, base model.ToolCallingChatModel,
 
 ### T08.3 两层 Trace
 
-Eino callbacks 用于模型输入输出、错误、耗时等语义层记录，但不能当作供应商实际 HTTP 原文。实际 input/output 捕获通过注入组件 HTTPClient 的自定义 `http.RoundTripper` 完成，两者通过 Run/span/attempt 关联。[Eino callbacks 概述](https://www.cloudwego.io/docs/eino/overview/)
+Eino callbacks 用于模型输入输出、错误、耗时等语义层记录，但不能当作供应商实际 HTTP 原文。实际 input/output 捕获通过注入组件 HTTPClient 的自定义 `http.RoundTripper` 完成，两者通过 Run/span/attempt 关联，写入同一 SessionJournal；回调不是第二套权威历史。[Eino callbacks 概述](https://www.cloudwego.io/docs/eino/overview/)
 
-请求在 Eino/供应商 SDK 完成序列化后由 Transport 捕获：限制容量、保存最终请求体至 TOS、提交引用及 model.started，之后才发送相同字节；认证头和签名查询参数不记录。拒绝不受支持的请求流，不默默跳过捕获。
+请求在 Eino/供应商 SDK 完成序列化后由 Transport 捕获：限制容量、保存最终请求体至 TOS、提交引用及 model.request.prepared，之后才发送相同字节；认证头和签名查询参数不记录。拒绝不受支持的请求流，不默默跳过捕获。
 
-响应以包装的 Body 接收并按有界块写入 TOS，再把已保存的字节交给 Eino 解码；保留原始顺序、错误状态码和解码失败的原文。慢存储可产生有界背压，持久化失败立即取消模型请求。Eino 语义事件和原文区块分别保存，通过清单关联；流被提前 Close 或中断时标记 incomplete。
+响应以包装的 Body 接收并按有界块写入 TOS，再把已保存的字节交给 Eino 解码；保留原始顺序、错误状态码和解码失败的原文。慢存储可产生有界背压，持久化失败立即取消模型请求。原文区块形成 model.response.chunk.recorded；解析后的语义增量可作为同一记录的派生展示，完整结构化响应在 model.response.completed 关联相应区块清单和 parser_version；流被提前 Close 或中断时标记 incomplete。
 
 最终请求体在 SDK 传输层捕获，不能由平台重新序列化并当作实际请求。元信息里去掉 API Key，载荷如果必须脱敏则明确标记，不能冒充逐字原文。
 
@@ -459,61 +547,123 @@ func ValidateLogicalPath(name string) (string, error) {
 
 参数通过 JSON 传入且只解码一次，校验后的路径不能再做 URL 解码。数据库路径字段使用一致的大小写敏感比较；逻辑路径不直接拼成可访问对象 key。MVP 不实现符号链接、硬链接或归档自动解包。
 
-`write_file` 先把新内容写入唯一且不可变的 TOS 对象，再用 revision 条件事务更新 workspace_files 指针并写 tool.completed；原内容不会被原地覆盖。返回成功前对象内容和元数据均已确认。`read_file` 按该版本读取，`list_files` 查询逻辑目录索引，`read_skill_resource` 只能读取快照引用的资源。
+`write_file` 先把新内容写入唯一且不可变的 TOS 对象，再用 revision 条件事务更新 workspace_files 指针并写 tool.execution.completed；原内容不会被原地覆盖。返回成功前对象内容和元数据均已确认。`read_file` 按该版本读取，`list_files` 查询逻辑目录索引，`read_skill_resource` 只能读取快照引用的资源。
 
 超时后对象可能已上传但数据库未引用，应记为待核实或孤儿并延迟回收，不盲目重做工具。一次工具调用的映射更新与 call_id/幂等记录关联，重试不能重复产生新逻辑效果。
 
-Dispatcher 执行前校验登录主体的空间归属、Agent 工具列表、预算和取消状态，持久化 tool.started；执行后保存完整接收结果和结构化错误。内置工具不开放 Shell、用户脚本、自定义 HTTP 或 MCP，执行仍发生在当前 Go 进程。
+Dispatcher 执行前校验登录主体的空间归属、Agent 工具列表、预算和取消状态，持久化 tool.execution.started；执行后保存完整接收结果和结构化错误。内置工具不开放 Shell、用户脚本、自定义 HTTP 或 MCP，执行仍发生在当前 Go 进程。
 
-## T10 M10 完整 Trace、用量、审计与 SSE
+## T10 M10 统一会话日志、Trace、用量与审计
 
-依赖：database/sql、MariaDB JSON、TOS BlobStore、net/http。Trace 是不采样的业务记录，服务日志与未来运维链路采样不得替代它。
+依赖：database/sql、MariaDB JSON、TOS ContentStore、net/http。SessionJournal 是会话和执行链路的唯一事实入口，Trace 是它的查询视图，不再另写一套 trace_events。Agent/Skill 草稿、身份及空间管理仍使用普通业务表与 audit_logs，MVP 不把整个系统改成事件溯源架构。
 
-### T10.1 数据契约
+### T10.1 统一存储与事件契约
 
-事件包括 schema_version、space_id、session_id、run_id、trace_id、span_id、parent_span_id、sequence、event_type、occurred_at、payload/payload_ref。数据库 sequence 使用 bigint，HTTP/SSE JSON 使用字符串。
-
-| 事件 | 关键载荷 |
+| 结构 | 职责与约束 |
 | --- | --- |
-| run.queued / run.started | 输入及快照引用、执行归属 |
-| context.built / context.compacted | Manifest、来源范围、处理原因、摘要调用 |
-| model.started | 确切请求体、模型/参数、attempt、purpose |
-| model.delta | 原始帧、帧序号、归一化输出增量 |
-| model.completed / model.failed | 原始响应、聚合结果、结束原因、usage、错误及完成性 |
-| tool.started | call_id、工具与实现版本、参数、授权结果 |
-| tool.completed / tool.failed | 完整接收结果、错误、副作用状态 |
-| run.cancel_requested / run.finished | 取消来源、最终状态、结果引用及汇总用量 |
+| sessions | 同空间会话标识、last_sequence 和协调状态；序号贯穿全部 Run |
+| runtime_events | event_id、space/session/run、sequence、event_type、schema_version、operation_id、causation_event_id、correlation_id、actor、occurred_at、recorded_at、data、event_digest；追加后不改写 |
+| content_objects | 不可变原文/结构化内容；object_id、空间、media_type、size、SHA-256、TOS key/version_id、存储状态 |
+| event_objects | event_id、object_id、role、ordinal；区分指令、请求体、响应块、工具结果、附件等用途及顺序 |
+| context_projections / context_summaries | 由对应事件提交的不可变派生产物及来源清单；字段见 T07 |
+| runs / messages / run_snapshots | 事务内同步维护的状态和展示视图，保留源事件与 applied_sequence；不能成为另一套独立历史 |
 
-原始载荷以 TOS 字节对象保存，MariaDB JSON 只保存查询结构，不能以重序列化后的内容冒充供应商原文。响应中未返回的内部推理不属于 Trace。非流式响应也必须记录实际体和解析失败。
+事件 data 只存结构化语义与非秘密索引；用户正文、工具结果、实际模型载荷统一通过事件对象引用访问。TOS 原始字节与解析后结构化对象分开保存并关联，不能用重序列化结果冒充原文。事件格式按 event_type + schema_version 演进，未知版本拒绝投影并明确诊断，不静默跳过。
 
-大载荷按有界内存区块写入 TOS 不可变对象，每段成功后提交引用；Run 结束时形成完整清单。尚未完成的 multipart 不算已持久化可读区块，不可提前向前端确认。最终完整性标识只有在全部已接收帧保存后才置为 complete。可按有界时间/字节批量写入，但崩溃造成的未持久化尾部需标为 incomplete，不能承诺无故障窗口。
+事件示例（HTTP 中 sequence 为十进制字符串）：
 
-### T10.2 顺序与事务
+```json
+{
+  "event_id": "evt_tool_done",
+  "schema_version": 1,
+  "space_id": "space_1",
+  "session_id": "session_1",
+  "sequence": "42",
+  "run_id": "run_1",
+  "event_type": "tool.execution.completed",
+  "operation_id": "execution_1",
+  "causation_event_id": "evt_tool_started",
+  "correlation_id": "model_call_1",
+  "actor": {"kind": "tool", "id": "read_file"},
+  "occurred_at": "2026-10-17T08:00:00Z",
+  "recorded_at": "2026-10-17T08:00:00Z",
+  "data": {"tool_call_id": "call_1", "side_effect": "none"},
+  "content_refs": [
+    {"role": "tool_result", "ordinal": 0, "object_id": "obj_1", "sha256": "<digest>"}
+  ]
+}
+```
 
-所有写入方包括取消请求都通过统一事务分配序号。下面语句在同一事务中执行；分配或插入失败整体回滚：
+数据库 event_objects 是 content_refs 的关系存储，API 组装时返回数组。所有引用使用同空间联合外键；causation 指向本会话更早的事件，correlation 仅负责关联，不替代顺序或权限校验。模型原生 tool_call_id 只在相应模型调用范围内唯一，平台 operation_id 单独生成。
+
+| 事件类型 | 确认的事实及投影语义 |
+| --- | --- |
+| session.created | 定义及不可变内容清单固定，提供基础指令 |
+| user.message.accepted | 用户内容已接受并持久化，提供对话输入 |
+| run.created / run.started | 运行配置固定并排队 / 已被认领；不重复用户消息 |
+| context.projected | 固定边界的逻辑输入和 Manifest 已保存，提供审计关联 |
+| model.request.prepared | 最终请求原文已保存、准备发送；不能证明到达供应商 |
+| model.response.chunk.recorded | 已保存原始响应字节区块，带 attempt 和块序号；不当作完整消息 |
+| model.response.completed | 协议完整、可解释的响应及结构化结果已保存；task 用于上下文，summary 用于摘要 |
+| model.attempt.failed | 非成功响应、截断、流/解析/保存失败等；保留已存区块和完整性状态 |
+| model.usage.reported | 供应商后续补充的用量及缓存统计，关联原 attempt 和统计版本；汇总按最新已确认统计替换，不能重复累加 |
+| tool.execution.started | 调用意图和参数已保存，即将执行；不能证明已产生副作用 |
+| tool.execution.completed | 工具结果已确认保存，提供配对结果 |
+| tool.execution.failed | 错误、拒绝、取消或未执行等已确认，保留 side_effect 和错误结果 |
+| context.summary.created | 摘要、准确来源事件及生成调用已保存，供明确选择后投影 |
+| run.cancel.requested / run.finished | 请求取消 / 实际终结；最终回复引用已有响应 |
+| operation.reconciled | 中断恢复时对遗留调用追加核实结论；未知保持 unknown，不追写假成功 |
+| content.unavailable | 内容按保留策略被删除、过期或发现缺失，记录受影响引用；不修改历史事件 |
+
+事件类型、actor 和作用域由服务端可信执行路径赋值，外部文本不能直接成为可信事件。事件是否参与上下文由版本化投影器决定，不接受客户端提供 include_in_prompt 开关。purpose=task/summary、attempt_id、projection_id 等由模型事件 data 携带；Run/span 父子关系可用于 Trace 展示。
+
+每个模型 attempt 只允许一个终结事实 completed 或 failed；同一 operation 的重复完成按幂等规则处理，不能选择两份响应同时进入上下文。协议完整性同时检查结束原因、工具参数、配对所需标识及必要状态。终结后追加的核实或用量补充是独立事实，不原地改写原事件。
+
+工具 side_effect 明确为 none、committed 或 unknown；failed 不等于没有副作用。写文件的对象映射更新与 tool.execution.completed 在同事务提交。执行完成但记录前崩溃时，恢复追加 operation.reconciled；缺证据保持 unknown，不能依据只有 started 推断未执行，也不自动重放。
+
+原始 HTTP 字节区块可以跨协议帧，解析器负责帧组装。大内容按有界区块写 TOS，成功后提交事件引用；尚未完成的 multipart 不能作为已可读区块。完成标识需全部已收到内容保存且协议完整；崩溃前未持久化尾部明确 incomplete。认证秘密不保存，必要脱敏记录规则和位置，不能声称脱敏后的内容为逐字原文。
+
+### T10.2 追加、事务与恢复
+
+唯一写入口为 Journal.Append，调用者提供同一逻辑写入重试时稳定的 event_id 或 append_key；服务端校验事件 schema、权限、操作状态、同空间引用和 ready 对象。使用 event_digest 比较类型、因果字段、data 和有序内容摘要，排除提交序号/记录时间；同 ID 同内容返回已提交结果，不同内容返回冲突。
+
+```text
+Append(session_id, expected_sequence?, append_key, proposed_events)
+  -> assigned_event_ids_and_sequences
+```
+
+1. 授权并保存内容至 TOS，事务外完成上传；记录上传意图和 ready 状态。
+2. 事务内锁定 Session，先核实幂等结果，再按需校验 expected_sequence。
+3. 由服务端 reducer 校验状态转换，为批量事件分配连续序号；业务视图不能由外部任意指定更新值。
+4. 插入 runtime_events/event_objects，同事务更新必要视图、context_projections/summary 索引、对象引用和幂等结果。
+5. 提交后才能发布通知、确认 SSE 可读或开始后续动作。通知丢失由数据库轮询补齐。
 
 ```sql
 START TRANSACTION;
-SELECT last_sequence FROM runs
+SELECT last_sequence FROM sessions
 WHERE space_id = ? AND id = ? FOR UPDATE;
--- 应用计算 next_sequence = last_sequence + 1。
-UPDATE runs SET last_sequence = ? WHERE space_id = ? AND id = ?;
--- 同一 sql.Tx INSERT trace_events，sequence 使用 next_sequence。
--- 若改变运行状态，状态更新与事件写入也在这个事务中。
+-- 先核实 append_key/event_id；必要时检查 expected_sequence。
+-- 服务端 reducer 为本次 N 条事件分配 last_sequence+1 ... +N。
+-- INSERT runtime_events / event_objects，并更新业务视图及引用。
+UPDATE sessions SET last_sequence = ? WHERE space_id = ? AND id = ?;
 COMMIT;
 ```
 
-不使用无锁 `max(sequence)+1`。大 Blob 必须先持久化，再提交引用；关键 Trace 写入失败时停止后续模型/工具操作，现有动作结果未知则保留未知。业务操作与其状态/事件事务写入，网络请求不包在数据库事务内。
+同一事务失败整体回滚，不使用无锁 max(sequence)+1。所有业务更新遵循 Session → Run → 其他视图/引用的锁顺序。期望序号用于依赖特定状态的命令；外部动作返回的结果必须按稳定 operation/event ID 追加，不能因期间插入取消事件就丢弃结果或重做动作。冲突仅重试无外部副作用的追加事务。
 
-认证秘密不存入 Trace；可识别意外秘密需要脱敏时记录位置与规则，界面显示 redacted。载荷访问单独鉴权，普通运维日志不复制完整用户内容。保留清理记录过期状态，不返回看似完整的空记录。
+投影读取 through_sequence 后追加自己的 context.projected；其间出现的审计事件不改变该历史输入，当前权限/取消仍在真正调用前重新检查。已启动操作的结果须保存，终态等待它们收尾；进程异常后的核实采用明确的新事件。
 
-usage 逐调用保存后汇总，摘要和失败尝试也计入；供应商没有返回的消耗标记未知。可配置价格版本推算费用，但不可把本地估算作为实际账单。
+关键事件或引用保存失败时停止后续动作；数据库不可用时不能保证失败事件立即落库，重启后依据遗留操作追加中断核实。事件只追加与内容摘要校验不等于防管理员篡改，也不保证模型/工具结果恰好一次。
+
+视图重建固定 reducer_version，读取已有事实，不触发模型/工具。重建结果与线上视图对比，覆盖失败、取消、重复追加和未知副作用；完整重建依赖未过期的内容对象。历史原文按保留规则删除后追加 content.unavailable，保留审计元数据并明确不可重建范围。
+
+usage 按 attempt 记录并汇总，摘要和失败尝试均计入；缺失用量为 unknown，价格估算保存价格版本。缓存统计口径见 T07.6。运维日志不复制原始用户内容，空间授权同样用于日志和载荷读取。
 
 ### T10.3 SSE 与游标
 
-`GET /spaces/{space_id}/runs/{run_id}/events` 返回 `text/event-stream`，支持 Last-Event-ID；首次连接可用 after 查询参数。服务端每次查询已提交的 sequence > cursor，不在历史读取后直接切换为不可靠内存事件流。
+`GET /spaces/{space_id}/runs/{run_id}/events` 返回 `text/event-stream`，支持 Last-Event-ID；首次连接可用 after 查询参数。服务端每次按 Session 的 sequence 查询已提交 runtime_events，并过滤指定 run_id；不在历史读取后切换为不可靠内存事件流。
 
-SSE 的 id 为序号、event 统一为 run_event，具体事件类型放在 JSON 的 event_type 中。浏览器回放只显示数据，不再次调用工具。过期游标、非法游标和跨空间 Run 都明确拒绝。
+SSE 的 id 为 Session 序号、event 统一为 run_event，具体事件类型放在 JSON 的 event_type 中。Run 过滤后的序号允许跳跃，不能要求相邻事件 +1；后端负责按序返回全部匹配事件，前端只从已确认应用的位置续传。浏览器回放只显示数据，不再次调用工具。过期游标、非法游标和跨空间 Run 都明确拒绝。分页返回经过完整扫描的 next_cursor 和 has_more，不能用 Session 最新序号跳过尚未读取的匹配事件；游标过期返回明确错误并重新加载快照。
 
 下面为可独立编译的帧发送核心。鉴权、数据库游标、心跳与循环位于调用方；deadline 需要按每次写入更新，代理不得缓冲 SSE：
 
@@ -566,9 +716,10 @@ sequence 必须来自已验证的十进制序号，不能使用任意用户文�
 | 用户附件、工具产物 | TOS 对象 + 授权元数据 |
 | 运行工作区文件 | TOS 内容版本 + workspace_files 逻辑路径及 revision |
 | 模型实际请求/响应、工具完整大结果 | 有序 TOS 区块 + Trace 清单/完整性状态 |
-| 运行、会话、事件索引、空间和权限 | MariaDB；不依赖本地文件 |
+| 运行、会话、runtime_events、event_objects、空间和权限 | MariaDB；不依赖本地文件 |
+| 用户原文、摘要、投影消息/Manifest、结构化模型响应 | TOS 不可变对象 + 事件/投影引用 |
 
-普通上传使用流/有界缓冲直接发送 TOS，大文件使用受限并发 multipart；不使用 SDK 的本地文件上传/下载帮助方法。配置和编译产物属于部署输入，可以存在本地，但不能存用户运行内容。
+所有事件及其投影引用都参与对象保留判断；同一不可变对象可被多个事件引用，避免重复复制定义或结果。普通上传使用流/有界缓冲直接发送 TOS，大文件使用受限并发 multipart；不使用 SDK 的本地文件上传/下载帮助方法。配置和编译产物属于部署输入，可以存在本地，但不能存用户运行内容。
 
 ### T11.2 对象写入示例
 
@@ -613,7 +764,7 @@ TOS 与 MariaDB 没有共同事务；不能使用“本地 rename 后提交数�
 
 ### T11.4 保留、恢复与故障
 
-运行结束时将应保留的逻辑文件关联为 Artifact；清理工作区只移除不再需要的逻辑引用，不删除仍被版本、Trace 或产物引用的对象。TOS 生命周期策略必须与应用引用策略协调，不能按前缀盲删活跃内容。
+运行结束时将应保留的逻辑文件关联为 Artifact；清理工作区只移除不再需要的逻辑引用，不删除仍被版本、日志、投影或产物引用的对象。TOS 生命周期策略必须与应用引用策略协调，不能按前缀盲删活跃内容。
 
 TOS 不可用或对象无法确认保存时，拒绝新的相关写操作，停止后续 Agent 动作；不得回退到本地持久化。可以保留有限内存中的未完成块，但重启后不声称其已保存。
 
@@ -637,7 +788,7 @@ API 类型由 OpenAPI 生成，禁止手改生成文件；静态类型不能代�
 
 调试开始先创建快照和绑定会话，再提交 Run。页面展示快照的准确依赖版本；编辑器修改后提示需要新调试会话，不把旧 Trace 展示为新草稿结果。
 
-订阅使用同源 EventSource；自动重连沿用 Last-Event-ID，页面重建时显式传递已保存游标。事件处理按 Run+sequence 去重，sequence 用 BigInt 比较，持久化仍用字符串。
+订阅使用同源 EventSource；自动重连沿用 Last-Event-ID，页面重建时显式传递已保存游标。事件处理按 Session+sequence（页面同时固定 Run）去重，sequence 用 BigInt 比较，持久化仍用字符串。
 
 核心 reducer 逻辑示例（省略 WireEvent 的其余字段和页面状态定义）：
 
@@ -649,16 +800,13 @@ export function appendEvent(state: RunView, event: RunEvent): RunView {
   if (event.run_id !== state.runId) return state;
   if (!/^[1-9][0-9]*$/.test(event.sequence)) throw new Error("invalid sequence");
   if (BigInt(event.sequence) <= BigInt(state.cursor)) return state;
-  if (BigInt(event.sequence) !== BigInt(state.cursor) + 1n) {
-    throw new Error("event gap: reload from committed cursor");
-  }
   return { ...state, cursor: event.sequence, events: [...state.events, event] };
 }
 ```
 
-调用方捕获 gap 后关闭当前连接，从最后成功应用游标读取完整事件再续订；若服务分页，只能以已获取的连续区间更新游标。初始化 cursor 为 0，或来自明确覆盖的历史快照。大型历史采用分页与窗口，不无限增长示例中的 events 数组。
+Run 视图过滤了其他事件，因此 sequence 跳跃合法，不能据此判断漏事件。断线从最后成功应用的游标读取后续匹配事件；分页按服务端已扫描的 next_cursor 推进，全部读取完成后才续订，不并发混合历史页和实时流。初始化 cursor 为 0，或来自明确覆盖的历史快照。大型历史采用分页与窗口，不无限增长示例中的 events 数组。
 
-事件协议符合 SSE 的 id/event/data 格式，参考 [MDN SSE](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events)。大型输入输出按需获取，缩略显示必须可查看或下载完整内容；无法取得时显示明确状态。
+事件协议符合 SSE 的 id/event/data 格式，参考 [MDN SSE](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events)。调试页增加日志来源、投影父链、epoch、前缀变化及实际缓存统计，unknown 和冷启动明确展示。大型输入输出按需获取，缩略显示必须可查看或下载完整内容；无法取得时显示明确状态。
 
 ## T13 M13 单服务组装、前端嵌入与配置
 
@@ -709,11 +857,12 @@ func Assets() (fs.FS, error) {
 | /sessions/{id}/runs | POST | 幂等键；同会话最多一个活跃 Run |
 | /runs/{id}、/runs/{id}/cancel | GET、POST | 取消请求不等于已停止 |
 | /runs/{id}/events、/runs/{id}/trace | SSE、分页 GET | 空间鉴权、游标续传、完整性标识 |
-| /runs/{id}/contexts、/payloads/{id} | GET | Manifest 和受控完整载荷 |
+| /runs/{id}/contexts、/payloads/{id} | GET | 投影/Manifest、epoch、缓存统计和受控完整载荷 |
+| /sessions/{id}/journal | 分页 GET | 原始事件、固定读取边界、来源关联；客户端不能直接追加可信事件 |
 | /artifacts/{id}/download | GET | 权限校验、受控文件名、保留状态 |
 | /models、/credentials、/members | 基础 owner 管理操作；成员可先用同二进制命令配置 | 不引入权限矩阵；秘密不回显 |
 
-错误码至少包括 unauthenticated、forbidden、not_found、draft_conflict、version_conflict、run_active、idempotency_conflict、context_overflow、unsupported_capability、budget_exceeded、trace_unavailable、cursor_expired、interrupted。错误码与展示文案分离，内部堆栈不返回给客户端。
+错误码至少包括 unauthenticated、forbidden、not_found、draft_conflict、version_conflict、run_active、idempotency_conflict、context_overflow、unsupported_capability、unsupported_event_schema、projection_unavailable、event_conflict、budget_exceeded、trace_unavailable、cursor_expired、interrupted。错误码与展示文案分离，内部堆栈不返回给客户端。
 
 OpenAPI 是接口的可执行契约来源；事件 schema_version 单独管理，不把供应商原始响应强制转成自有固定字段。接口变更同步生成类型与契约测试，不靠修改页面绕过不一致。
 
@@ -753,5 +902,7 @@ mass/
 不建立持久化的 `data/blobs`、宿主工作区或前端独立服务配置。源码和构建缓存可以使用开发磁盘，应用资源持久化只使用 MariaDB/TOS。
 
 待收敛项仅包括 MariaDB/Go/Node 与 Eino/TOS SDK 的精确版本、实际 TOS 配置与权限、Eino 模型供应商和模型、计数器、默认限额及保留时长；已指定的单服务、MariaDB、TOS、Eino、frontend 和简单登录不再作为待选方案。
+
+模型缓存能力、默认压缩阈值/目标余量和投影策略版本在对应实现阶段收敛；未知缓存命中不能用假数据补齐。
 
 真实云资源缺失时用内存 TOS fake 和 Eino FakeChatModel 完成可验证编码，但不能以 fake 测试替代真实 TOS/模型接入验收。框架与 SDK 的实际方法、字段和重试行为以锁定版本核验，并将证据记录到工程开发文档。
