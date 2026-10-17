@@ -1,0 +1,12 @@
+{
+  "engine": "MariaDB",
+  "serverVersion": "11.8.9",
+  "driver": "mysql",
+  "tool": "github.com/pressly/goose/v3",
+  "dialect": "mysql",
+  "directory": "db/migrations",
+  "versionTable": "goose_db_version",
+  "filenamePattern": "NNNNN_description.sql",
+  "ddlTransaction": false,
+  "firstBusinessMigrationStage": "D01"
+}

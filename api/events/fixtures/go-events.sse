@@ -1,0 +1,54 @@
+id: 1
+data: {"type":"RUN_STARTED","timestamp":0,"threadId":"session-1","runId":"run-1"}
+
+id: 2
+data: {"type":"TEXT_MESSAGE_START","timestamp":0,"messageId":"message-1","role":"assistant"}
+
+id: 3
+data: {"type":"TEXT_MESSAGE_CONTENT","timestamp":0,"messageId":"message-1","delta":"你好\nMASS"}
+
+id: 4
+data: {"type":"TEXT_MESSAGE_END","timestamp":0,"messageId":"message-1"}
+
+id: 5
+data: {"type":"TOOL_CALL_START","timestamp":0,"toolCallId":"call-1","toolCallName":"read_file","parentMessageId":"message-1"}
+
+id: 6
+data: {"type":"TOOL_CALL_ARGS","timestamp":0,"toolCallId":"call-1","delta":"{\"path\":\"notes.txt\"}"}
+
+id: 7
+data: {"type":"TOOL_CALL_END","timestamp":0,"toolCallId":"call-1"}
+
+id: 8
+data: {"type":"TOOL_CALL_RESULT","timestamp":0,"messageId":"tool-message-1","toolCallId":"call-1","content":"{\"status\":\"completed\"}","role":"tool"}
+
+id: 9
+data: {"type":"RUN_FINISHED","timestamp":0,"threadId":"session-1","runId":"run-1"}
+
+id: 10
+data: {"type":"RUN_ERROR","timestamp":0,"code":"RUN_CANCELLED","message":"Run cancelled"}
+
+id: 11
+data: {"type":"CUSTOM","timestamp":0,"name":"mass.run.status.v1","value":{"runId":"run-1","schemaVersion":1,"sourceEventIds":["event-1"],"threadId":"session-1"}}
+
+id: 12
+data: {"type":"CUSTOM","timestamp":0,"name":"mass.tool.status.v1","value":{"runId":"run-1","schemaVersion":1,"sourceEventIds":["event-1"],"threadId":"session-1"}}
+
+id: 13
+data: {"type":"CUSTOM","timestamp":0,"name":"mass.message.status.v1","value":{"runId":"run-1","schemaVersion":1,"sourceEventIds":["event-1"],"threadId":"session-1"}}
+
+id: 14
+data: {"type":"CUSTOM","timestamp":0,"name":"mass.context.v1","value":{"runId":"run-1","schemaVersion":1,"sourceEventIds":["event-1"],"threadId":"session-1"}}
+
+id: 15
+data: {"type":"CUSTOM","timestamp":0,"name":"mass.trace.v1","value":{"runId":"run-1","schemaVersion":1,"sourceEventIds":["event-1"],"threadId":"session-1"}}
+
+id: 16
+data: {"type":"CUSTOM","timestamp":0,"name":"mass.plan.v1","value":{"runId":"run-1","schemaVersion":1,"sourceEventIds":["event-1"],"threadId":"session-1"}}
+
+id: 17
+data: {"type":"CUSTOM","timestamp":0,"name":"mass.artifact.v1","value":{"runId":"run-1","schemaVersion":1,"sourceEventIds":["event-1"],"threadId":"session-1"}}
+
+id: 18
+data: {"type":"CUSTOM","timestamp":0,"name":"mass.usage.v1","value":{"runId":"run-1","schemaVersion":1,"sourceEventIds":["event-1"],"threadId":"session-1"}}
+

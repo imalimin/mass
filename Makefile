@@ -1,0 +1,64 @@
+SHELL := /bin/sh
+.NOTPARALLEL:
+GO := sh scripts/go.sh
+GO_PACKAGES := ./cmd/... ./internal/... ./tests/... ./scripts/...
+CONFIG ?= mass.yaml
+VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
+export NPM_CONFIG_CACHE := $(CURDIR)/.cache/npm
+export PLAYWRIGHT_BROWSERS_PATH := $(CURDIR)/.cache/playwright
+
+.PHONY: setup setup-browser generate generate-check fmt lint typecheck test-unit test-race test-e2e build-frontend dev build verify-d00 verify
+setup:
+	node scripts/check-toolchain.mjs
+	$(GO) mod download
+	npm --prefix frontend ci
+	$(MAKE) setup-browser
+
+setup-browser:
+	npm --prefix frontend exec -- playwright install $(PLAYWRIGHT_INSTALL_FLAGS) chromium
+
+generate: build-frontend
+	node scripts/generate.mjs
+
+generate-check: build-frontend
+	node scripts/generate.mjs --check
+
+build-frontend:
+	npm --prefix frontend run build
+	node scripts/embed.mjs
+
+fmt:
+	$(GO) fmt $(GO_PACKAGES)
+
+typecheck:
+	npm --prefix frontend run typecheck
+
+lint: build-frontend
+	$(GO) vet $(GO_PACKAGES)
+	npm --prefix frontend run lint
+	node scripts/check-boundaries.mjs
+
+test-unit: build-frontend
+	$(GO) test $(GO_PACKAGES)
+	npm --prefix frontend test
+
+test-race: build-frontend
+	$(GO) test -race $(GO_PACKAGES)
+
+build: build-frontend
+	$(GO) build -trimpath -ldflags '-X main.version=$(VERSION)' -o bin/mass ./cmd/mass
+
+test-e2e: build
+	node scripts/smoke.mjs
+	node scripts/browser-smoke.mjs
+
+dev:
+	node scripts/dev.mjs $(CONFIG)
+
+verify-d00: generate-check typecheck lint test-unit test-e2e
+	git diff --check
+
+# Full MVP verification must not claim success while later stages are absent.
+verify:
+	@echo 'Full MVP verify is unavailable before D10; use make verify-d00 for the implemented stage.' >&2
+	@exit 1

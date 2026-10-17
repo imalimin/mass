@@ -1,0 +1,15 @@
+{
+  "profile": "mass-agui-v1",
+  "mapperVersion": 1,
+  "parserVersion": 1,
+  "typescriptPackage": "@ag-ui/core@1.0.3",
+  "schemaImport": "@ag-ui/core/schemas",
+  "goModule": "github.com/ag-ui-protocol/ag-ui/sdks/community/go@v0.0.0-20261016232758-89cedd3fd549",
+  "standardEvents": ["RUN_STARTED", "RUN_FINISHED", "RUN_ERROR", "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_END", "TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_END", "TOOL_CALL_RESULT", "CUSTOM"],
+  "customNames": ["mass.run.status.v1", "mass.tool.status.v1", "mass.message.status.v1", "mass.context.v1", "mass.trace.v1", "mass.plan.v1", "mass.artifact.v1", "mass.usage.v1"],
+  "transport": {"contentType": "text/event-stream", "eventName": "message", "id": "ui_sequence", "data": "AG-UI object", "sequenceScope": "run", "sequenceMaximum": "9223372036854775807", "continuous": true, "firstSequence": "1", "initialCursor": "0", "heartbeat": "SSE comment", "journalSequenceIsUICursor": false},
+  "cancelled": {"terminalEvent": "RUN_ERROR", "code": "RUN_CANCELLED"},
+  "toolCallEndMeans": "parameters_complete",
+  "unrecognizedRequiredEvent": "reject",
+  "unrecognizedOptionalCustom": "ignore_after_validation"
+}

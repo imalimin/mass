@@ -5,7 +5,7 @@
 > - 包含：技术选型、模块算法、存储与接口设计、核心代码、运行配置、兼容性和实现限制。
 > - 不包含：重新定义产品目标，或维护开发进度、测试执行报告和交付步骤。
 > - 依据：[系统设计指引](design-guide.md)和[系统架构设计](architecture.md)；编码、测试与交付按[工程开发文档](engineering.md)执行。以后各模块细节继续补充在本文，不拆专题文档。
-> - 状态：技术设计建议，尚未实现；更新：2026-10-17。代码为设计片段，不代表仓库已有可运行实现；片段中未定义的工程类型需在对应阶段补齐。
+> - 状态：技术方案基线，D00 已收敛契约见 T00.6；更新：2026-10-18。实际实现与验证范围见工程开发文档；片段中未定义的工程类型需在对应阶段补齐。
 
 ## T00 技术基线与依赖
 
@@ -161,6 +161,16 @@ tools:
 前端 API 使用相对路径，不单独保存另一套后端地址。TOS endpoint/region/bucket 与实际模型仍需用户环境提供，不猜测真实值。配置、二进制与会话临时目录可以存在本地，持久历史和已确认快照不依赖原主机目录。
 
 此配置管理服务部署和模型接入默认值；空间内的模型选择与凭证是 MariaDB 中的业务配置。初始化时可显式导入默认模型，之后以空间配置为准，重启不得覆盖用户修改；Run 保存最终解析结果及来源，避免文件与数据库互相覆盖。
+
+### T00.6 D00 已收敛的工程契约（2026-10-18）
+
+工具链固定 Go 1.26.9、Node.js 24.22.0（npm 11.19.1），MariaDB 目标版本为 11.8.9 LTS；实际数据库接入与迁移执行在 D01 验证。精确 Go/前端依赖分别以 go.mod/go.sum、frontend/package-lock.json 为准；TypeScript 使用 5.9.3 以满足 openapi-typescript 的 5.x peer 约束。服务编译前必须构建并同步前端资源。
+
+D00 只开放 `serve`、`check-config`、`version` 命令及 `/api/v1/system`、`/health/live`、`/health/ready`。配置拒绝未知字段、多文档、别名、过深/过大输入及缺失秘密来源；master_key_env 使用 base64 编码的 32 字节密钥。`http.shutdown_timeout` 控制有界关闭。此时 live=200，ready=503/dependencies_not_initialized；D01 安装真实存储/schema 检查后再具备业务就绪条件，不以静态成功响应冒充接入。
+
+业务 ID 采用服务生成的 UUID；请求标识为 16 随机字节的小写十六进制。幂等键为 1—128 字符的 ASCII 字母、数字、点、下划线、冒号或短横线。序号采用非负 signed bigint，线上为规范十进制字符串，最大 9223372036854775807；事件从 1 开始，初始游标为 0。分页上限 100，默认 20，游标是不透明且绑定查询范围的字符串。契约写入 api/openapi.yaml 与 api/events，不代表尚未开放的业务 API 已实现。
+
+首个模型组件锁定 Eino Ark，关闭 SDK 重试并验证自定义 HTTPClient；依赖试验使用本地 httptest 端点，不要求真实模型凭证。goja 试验验证显式 fs/net、连续文件读取、取消及 source map 禁用；试验宿主只用于测试，不是 D05 的完整工具实现。AG-UI profile 固定 mass-agui-v1；锁定的 @ag-ui/core 1.0.3 将运行时 Schema 导出放在 `@ag-ui/core/schemas`，需显式安装 zod。Monaco 的 DOMPurify 传递依赖通过 package.json override 固定到 3.4.17。采用既定事件子集与 RUN_ERROR/RUN_CANCELLED 映射，不自动启用新版协议扩展。
 
 ## T01 M01 最简密码登录与空间归属
 
@@ -648,7 +658,7 @@ Eino callbacks 用于模型输入输出、错误、耗时等语义层记录，�
 
 ### T08.4 首个供应商与重试
 
-Eino 的选择不自动确定模型供应商。建议先验证 `github.com/cloudwego/eino-ext/components/model/ark`，实际 provider/model/endpoint 由部署配置确认；若使用其他 Eino 组件，必须同样支持自定义 HTTP 捕获和完整协议数据。
+Eino 的选择不自动确定模型供应商。首个组件固定为 `github.com/cloudwego/eino-ext/components/model/ark` v0.1.71，实际 model/endpoint 由部署配置确认；若使用其他 Eino 组件，必须同样支持自定义 HTTP 捕获和完整协议数据。
 
 Ark 组件配置可注入 HTTPClient 并设置 RetryTimes；初版将 RetryTimes 显式设为 0，网关负责有界重试和每次尝试记录。以下是已批准端点和凭证解析后的构造片段：
 
@@ -1236,10 +1246,10 @@ mass/
 
 不建立持久化的 `data/blobs` 或前端独立服务配置；允许通过 workspace_temp_root 创建会话临时工作目录。持久资源仍只使用 MariaDB/TOS，本地目录可由快照重建。
 
-待收敛项仅包括 MariaDB/Go/Node 与 Eino/TOS SDK 的精确版本、实际 TOS 配置与权限、Eino 模型供应商和模型、计数器、默认限额与快照容量上限；已指定的单服务、MariaDB、TOS、Eino、frontend、简单登录及 AG-UI over SSE 不再作为待选方案。AG-UI Go/TS SDK 精确版本与兼容事件子集在 D00 固定并验证。
+D00 已固定工具链、MariaDB 目标版本、Go/前端依赖和首个 Ark 组件。待收敛项包括实际 TOS 配置与权限、实际模型与端点、计数器、默认限额与快照容量上限；已指定的单服务、MariaDB、TOS、Eino、frontend、简单登录及 AG-UI over SSE 不再作为待选方案。AG-UI Go/TS SDK 精确版本与兼容子集见 api/events/agui-profile.json；验证证据见工程开发文档。
 
 模型缓存能力、默认压缩阈值/目标余量和投影策略版本在对应实现阶段收敛；未知缓存命中不能用假数据补齐。
 
-工具依赖 goja/doublestar 精确版本、支持的 JS 子集和默认扫描/代码限额在 D00/D05 锁定；引擎限制不能被配置成“已提供沙箱”。
+goja/doublestar 精确版本已由 go.mod 锁定；支持的生产 JS 子集和默认扫描/代码限额在 D05 收敛；引擎限制不能被配置成“已提供沙箱”。
 
 真实云资源缺失时用内存 TOS fake 和 Eino FakeChatModel 完成可验证编码，但不能以 fake 测试替代真实 TOS/模型接入验收。框架与 SDK 的实际方法、字段和重试行为以锁定版本核验，并将证据记录到工程开发文档。

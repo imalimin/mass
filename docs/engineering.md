@@ -5,7 +5,7 @@
 > - 包含：建设阶段、前置条件、具体任务、交付物、测试门槛、验收清单、运行交付步骤和进度证据。
 > - 不包含：替代用户目标或维护另一套技术方案；发现缺失细节应先补入技术方案再实施。
 > - 输入依次为[系统设计指引](design-guide.md)、[系统架构设计](architecture.md)、[技术方案](technical-design.md)。所有开发计划、验收和操作说明集中在本文，不再拆计划、测试或操作主文档。
-> - 状态：开发计划，尚未开始编码；更新：2026-10-17。本文列出的命令、脚本和工程路径是待建立的交付约定，不代表现在已经存在或测试通过。
+> - 状态：D00 已完成，D01—D10 未开始；更新：2026-10-18。当前实现与验证证据见 E15.1，后续阶段的命令和路径仍为待建立约定。
 
 ## E00 四份文档与 AI 执行规则
 
@@ -44,7 +44,7 @@
 
 | 阶段 | 对应模块 | 前置条件 | 阶段产出 | 当前状态 |
 | --- | --- | --- | --- | --- |
-| D00 工程与契约基础 | M08/M09/M13 | 四文档基线 | 可构建服务/页面、依赖锁定、Eino 传输与 goja 宿主接口验证 | 未开始 |
+| D00 工程与契约基础 | M08/M09/M13 | 四文档基线 | 可构建服务/页面、依赖锁定、Eino 传输与 goja 宿主接口验证 | 已完成，2026-10-18，见 E15.1 |
 | D01 数据、文件与事件基础 | M10/M11/M13 | D00 | MariaDB/TOS、会话目录与快照、会话日志、基础迁移 | 未开始 |
 | D02 身份、空间与模型配置 | M01/M03/M12 | D01 | 登录、空间/成员页面与 API、最小模型/凭证配置及隔离 | 未开始 |
 | D03 定义与版本闭环 | M02/M12 | D02 | Agent/Skill 编辑、发布、引用与版本查看 | 未开始 |
@@ -251,24 +251,26 @@
 
 ## E13 统一开发与验证入口
 
-D00 应建立以下入口；在入口实际实现前，不能在报告中写“已执行通过”。允许按最终工具链调整命令，但需同步本节及 CI。
+D00 已建立下表中标明 D00 的入口；后续阶段入口随实现增加，不提供固定成功占位。实际通过范围见 E15.1。
 
 | 入口 | 行为 | 建立阶段 |
 | --- | --- | --- |
-| make setup | 按锁定版本安装前端及开发工具 | D00 |
-| make generate | OpenAPI 类型生成，检查生成文件漂移 | D00/D01 |
+| make setup | 检查 Node/npm 精确版本，下载 Go 依赖、npm ci、安装固定 Playwright Chromium | D00 |
+| make setup-browser | 安装 Chromium；Linux 可传 PLAYWRIGHT_INSTALL_FLAGS=--with-deps | D00 |
+| make generate / make generate-check | 生成 OpenAPI 类型与 Go AG-UI JSON/SSE 夹具；后者检查漂移 | D00/D01 |
 | make fmt / make lint | Go 格式、静态检查、前端 lint | D00 |
 | make typecheck | 单独执行 TypeScript 类型检查 | D00 |
 | make test-unit | Go 单元/协议测试与 Vitest | D00 起逐步增加 |
 | make test-integration | 专用 MariaDB 和授权 TOS 测试前缀的集成测试 | D01 起 |
-| make test-e2e | Playwright 用户闭环，默认 FakeChatModel | D02 起 |
-| make test-race | 支持平台上执行 Go race 检查 | D04 起 |
+| make test-e2e | 当前为进程冒烟与 Playwright 应用壳检查；D02 起扩展业务闭环 | D00 起 |
+| make test-race | 支持平台上执行 Go race 检查 | D00 起 |
 | make build-frontend | 构建 frontend 并同步 Go embed 目录，Go 编译/测试的前置步骤 | D00 |
 | make dev | 前端构建监听与 Go 重建，浏览器只访问 Go 服务地址 | D00 |
 | make build | 前端嵌入与单一 Go 二进制交付构建 | D00/D10 |
 | make smoke-tos | 显式授权测试前缀中的真实 TOS 上传、读取、不可变与清理验证 | D01 |
 | make smoke-real | 显式配置凭证后的最小真实模型验证，D07 扩展工具/摘要 | D04/D07 |
-| make verify | 汇总类型、生成物、静态、单元、集成、端到端和构建 | D10 前完成 |
+| make verify-d00 | 汇总当前阶段生成物、类型、静态、单元/协议、进程/浏览器与构建检查 | D00 |
+| make verify | 完整 MVP 门槛；当前明确失败并提示使用 verify-d00，不能伪报集成通过 | D10 前完成 |
 
 Vite 构建不能代替 TypeScript 类型检查。Vitest 用于前端状态与工具函数；Playwright 用于实际浏览器流程，不通过页面内部状态注入绕过核心后端行为。工具参考：[Vitest](https://vitest.dev/guide/)、[Playwright](https://playwright.dev/docs/intro)。
 
@@ -278,7 +280,7 @@ Vite 构建不能代替 TypeScript 类型检查。Vitest 用于前端状态与�
 
 ## E14 MVP 验收矩阵
 
-以下全部是待执行要求；不是已通过的报告。各用例使用两个用户、两个空间、至少两个 Skill 和一个可控模型夹具，涉及真实模型的用例单独注明。
+以下是完整 MVP 验收要求；D00 已覆盖的协议/工程部分证据见 E15.1，其余仍待验证。各用例使用两个用户、两个空间、至少两个 Skill 和一个可控模型夹具，涉及真实模型的用例单独注明。
 
 | 编号 | 目标/模块 | 操作与故障注入 | 预期结果 | 验证阶段 |
 | --- | --- | --- | --- | --- |
@@ -356,8 +358,46 @@ P1 审查整改文档更新完成：按用户确认将 run_code 文件范围限�
 
 | 阶段/日期 | 代码版本及实现位置 | 验证环境与命令 | 结果与证据位置 | 剩余事项 |
 | --- | --- | --- | --- | --- |
-| 暂无编码阶段记录 | — | — | — | 从 D00 开始 |
+| D00 / 2026-10-18 | 基于 c61cd19 的当前工作区；cmd/mass、internal、frontend、api、db、scripts、tests/dependencies | macOS arm64；Go 1.26.9、Node 24.22.0、npm 11.19.1 | 总门槛、race、隔离源码重建与浏览器通过，见 E15.1 | D01 存储/日志实现与真实 MariaDB/TOS 验证 |
 
 每次交接应说明当前阶段、已完成小步、实际文件、通过的检查、未通过/未运行的检查及下一步。不得把设计片段写入仓库后即标记功能完成，也不得跳过真实模型验证而宣称完整交付。
 
 需要新增重要技术决定时写入技术方案相应章节；需要改变范围时先更新设计指引与相关下游文档。文档数量维持四份，验收结果、运行说明和交付记录继续追加在本文。
+
+
+### E15.1 D00 实现与验证记录（2026-10-18）
+
+已完成单一 mass CLI（serve/check-config/version）、严格有界配置解析、环境秘密来源检查与信号关闭；内嵌 React 工作台/空间占位与真实同源系统信息 API。live=200，ready=503/dependencies_not_initialized。只有声明的页面路由回退 index.html，API/健康/静态文件未命中返回错误。登录、Agent、Run、存储迁移与真实 SSE 订阅尚未开放。
+
+OpenAPI 定义当前接口及共享错误/ID/分页/幂等/序号契约；api/events 保存 Journal envelope、CUSTOM schema、AG-UI profile 和 Go SDK 生成的 JSON/SSE 夹具。db/migrations/config.json 固定 MariaDB 11.8.9 与 goose/mysql 约定，db/queries/health.sql 为 D01 查询准备；没有执行业务 DDL。CI 配置已建立，远端 CI 尚未触发。
+
+依赖精确版本以 go.mod/go.sum、frontend/package-lock.json 为准。主要版本：Eino v0.9.21、Ark v0.1.71、TOS v2.9.10、goja v0.0.0-20261017142635-e6862644b38f、doublestar v4.10.3、AG-UI Go v0.0.0-20261016232758-89cedd3fd549；React 19.3.1、Vite 8.3.4、TypeScript 5.9.3、@ag-ui/core 1.0.3、zod 3.25.76、Playwright 1.64.1。Node 官方发行包已核对 SHA-256；Go 1.26 为受支持系列，MariaDB 11.8.9 依据[官方维护发布](https://mariadb.org/mariadb-server-12-3-11-8-11-4-and-10-11-q3-2026-maintenance-releases-and-goodbye-10-6/)锁定。本机未安装 MariaDB/Docker，未连接真实存储或模型。
+
+| 检查 | 命令/实现证据 | 实际结果与边界 |
+| --- | --- | --- |
+| D00 总门槛 | make verify-d00；Makefile | 生成物漂移、tsc、ESLint、go vet、格式/依赖方向、Go/Vitest、构建及进程/浏览器冒烟通过 |
+| Eino 实际组件协议 | tests/dependencies/eino_test.go | Ark WithTools 序列化后的请求等于本地 httptest 收到的字节；流式/非流式、429、非法 JSON、记录失败通过；每次最多一次 HTTP 发送，无隐藏重试，认证秘密未进入记录器 |
+| goja 宿主试验 | tests/dependencies/goja_test.go | 连续文件读取/写入、本地 HTTP、写入后异常保留效果、越界拒绝、跨 VM 状态隔离、循环/网络取消通过；顶层/eval/Function source map 加载次数为零；仅测试宿主，非 D05 完整 CodeRunner |
+| AG-UI 跨语言 | scripts/agui-fixtures、frontend/src/lib/agui.test.ts | Go 编码的 11 种标准类型（含 CUSTOM）和 8 个 CUSTOM 名称通过 TS Schema；4 项 Vitest 通过，覆盖 SSE、取消、工具 END/RESULT、版本与大整数游标 |
+| 并发 | make test-race | 当前 Go 包 race 检查通过，包括 VM 中断 goroutine 和本地 HTTP |
+| 单二进制运行 | scripts/smoke.mjs | 从独立临时 cwd、空 PATH 启动，页面/静态资源/API 正常；缺关键配置失败，SIGTERM 正常退出；运行无需 Node 或原 frontend/dist |
+| 开发监听 | scripts/dev.mjs；临时配置进程试验 | 首次构建/启动、配置变化后重建/重启及 SIGTERM 清理通过，全程仅 Go 服务提供 HTTP |
+| 实际浏览器 | scripts/browser-smoke.mjs | 完整 Chromium headless 模式通过：页面渲染、同源 API、导航/刷新、390px 布局，无 pageerror；截图在 .cache/d00-desktop.png、.cache/d00-mobile.png，可再生不入库 |
+| 隔离源码重建 | Git 可见源码复制到临时目录，make setup、make build typecheck generate-check | 无 .git、node_modules、dist、bin 及旧 Go 编译缓存的副本可安装构建；复用已校验的 Go 模块下载缓存与浏览器缓存，不依赖全局 npm 包 |
+| 依赖/补丁检查 | npm install 的 registry audit；git diff --check | 最终 0 项 npm 漏洞；补丁格式检查通过 |
+
+发现与修复：TypeScript 7 与生成器/ESLint peer 范围冲突，固定 TypeScript 5.9.3 与受维护的 ESLint 10。AG-UI Schema 使用新入口 @ag-ui/core/schemas，MASS 额外拒绝 SDK 允许的空 delta。goose 拒绝空迁移集合，依赖试验使用测试内 SQL fixture，不计为数据库执行证据。Go 检查限定 cmd/internal/tests/scripts，避免纳入 node_modules 内第三方 Go 文件。Monaco 0.57.0 的 DOMPurify 传递依赖用 override 固定到修复版本 3.4.17。Chromium headless shell 曾在稳定性等待上超时，同版完整 Chromium headless 导航及截图通过。最初沙箱禁止本地监听，获准执行回环协议测试后通过。
+
+安装 .go-version、.node-version 指定工具链及 npm 11.19.1 后，可重复执行：
+
+```sh
+make setup
+make verify-d00
+make test-race
+```
+
+Linux 缺 Chromium 系统库时执行 `make setup-browser PLAYWRIGHT_INSTALL_FLAGS=--with-deps`；CI 已配置。Go wrapper 默认把模块/编译缓存放在项目 .cache；编译/测试入口先构建并嵌入前端。测试使用本地假供应商、临时目录与明确的测试环境值，无需真实云凭证。完整 make verify 当前故意失败；真实 MariaDB/TOS/模型及产品业务闭环尚未验证。
+
+日常运行：复制 configs/mass.example.yaml 为不入库的 mass.yaml，设置其中各 *_env 指定的值（主密钥为 base64 编码的 32 字节），执行 `bin/mass check-config --config mass.yaml`，再 `bin/mass serve --config mass.yaml`。`make dev CONFIG=mass.yaml` 监听源码/配置变化并构建重启，浏览器始终只访问 Go 地址。D00 的 ready=503 是阶段边界，不是云服务验证结果。`make test-e2e` 可执行无需私人配置的进程和浏览器预览检查。
+
+下一阶段为 D01：MariaDB 事务/迁移、TOS 对象与 ready 引用、会话目录/快照、SessionJournal 与视图原子提交。专用数据库及 TOS 测试配置用于真实集成验收，D00 的 SDK 编译和本地协议试验不能替代它。

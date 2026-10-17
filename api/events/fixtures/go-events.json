@@ -1,0 +1,167 @@
+[
+  {
+    "type": "RUN_STARTED",
+    "timestamp": 0,
+    "threadId": "session-1",
+    "runId": "run-1"
+  },
+  {
+    "type": "TEXT_MESSAGE_START",
+    "timestamp": 0,
+    "messageId": "message-1",
+    "role": "assistant"
+  },
+  {
+    "type": "TEXT_MESSAGE_CONTENT",
+    "timestamp": 0,
+    "messageId": "message-1",
+    "delta": "你好\nMASS"
+  },
+  {
+    "type": "TEXT_MESSAGE_END",
+    "timestamp": 0,
+    "messageId": "message-1"
+  },
+  {
+    "type": "TOOL_CALL_START",
+    "timestamp": 0,
+    "toolCallId": "call-1",
+    "toolCallName": "read_file",
+    "parentMessageId": "message-1"
+  },
+  {
+    "type": "TOOL_CALL_ARGS",
+    "timestamp": 0,
+    "toolCallId": "call-1",
+    "delta": "{\"path\":\"notes.txt\"}"
+  },
+  {
+    "type": "TOOL_CALL_END",
+    "timestamp": 0,
+    "toolCallId": "call-1"
+  },
+  {
+    "type": "TOOL_CALL_RESULT",
+    "timestamp": 0,
+    "messageId": "tool-message-1",
+    "toolCallId": "call-1",
+    "content": "{\"status\":\"completed\"}",
+    "role": "tool"
+  },
+  {
+    "type": "RUN_FINISHED",
+    "timestamp": 0,
+    "threadId": "session-1",
+    "runId": "run-1"
+  },
+  {
+    "type": "RUN_ERROR",
+    "timestamp": 0,
+    "code": "RUN_CANCELLED",
+    "message": "Run cancelled"
+  },
+  {
+    "type": "CUSTOM",
+    "timestamp": 0,
+    "name": "mass.run.status.v1",
+    "value": {
+      "runId": "run-1",
+      "schemaVersion": 1,
+      "sourceEventIds": [
+        "event-1"
+      ],
+      "threadId": "session-1"
+    }
+  },
+  {
+    "type": "CUSTOM",
+    "timestamp": 0,
+    "name": "mass.tool.status.v1",
+    "value": {
+      "runId": "run-1",
+      "schemaVersion": 1,
+      "sourceEventIds": [
+        "event-1"
+      ],
+      "threadId": "session-1"
+    }
+  },
+  {
+    "type": "CUSTOM",
+    "timestamp": 0,
+    "name": "mass.message.status.v1",
+    "value": {
+      "runId": "run-1",
+      "schemaVersion": 1,
+      "sourceEventIds": [
+        "event-1"
+      ],
+      "threadId": "session-1"
+    }
+  },
+  {
+    "type": "CUSTOM",
+    "timestamp": 0,
+    "name": "mass.context.v1",
+    "value": {
+      "runId": "run-1",
+      "schemaVersion": 1,
+      "sourceEventIds": [
+        "event-1"
+      ],
+      "threadId": "session-1"
+    }
+  },
+  {
+    "type": "CUSTOM",
+    "timestamp": 0,
+    "name": "mass.trace.v1",
+    "value": {
+      "runId": "run-1",
+      "schemaVersion": 1,
+      "sourceEventIds": [
+        "event-1"
+      ],
+      "threadId": "session-1"
+    }
+  },
+  {
+    "type": "CUSTOM",
+    "timestamp": 0,
+    "name": "mass.plan.v1",
+    "value": {
+      "runId": "run-1",
+      "schemaVersion": 1,
+      "sourceEventIds": [
+        "event-1"
+      ],
+      "threadId": "session-1"
+    }
+  },
+  {
+    "type": "CUSTOM",
+    "timestamp": 0,
+    "name": "mass.artifact.v1",
+    "value": {
+      "runId": "run-1",
+      "schemaVersion": 1,
+      "sourceEventIds": [
+        "event-1"
+      ],
+      "threadId": "session-1"
+    }
+  },
+  {
+    "type": "CUSTOM",
+    "timestamp": 0,
+    "name": "mass.usage.v1",
+    "value": {
+      "runId": "run-1",
+      "schemaVersion": 1,
+      "sourceEventIds": [
+        "event-1"
+      ],
+      "threadId": "session-1"
+    }
+  }
+]

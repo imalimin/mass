@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mass.local/schemas/journal-envelope-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "space_id", "session_id", "sequence", "event_type", "schema_version", "actor", "occurred_at", "recorded_at", "data", "content_refs"],
+  "properties": {
+    "event_id": {"type": "string", "format": "uuid"},
+    "space_id": {"type": "string", "format": "uuid"},
+    "session_id": {"type": "string", "format": "uuid"},
+    "run_id": {"type": ["string", "null"], "format": "uuid"},
+    "sequence": {"type": "string", "pattern": "^[1-9][0-9]{0,18}$"},
+    "event_type": {"type": "string", "pattern": "^[a-z]+(\\.[a-z_]+)+$"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "operation_id": {"type": ["string", "null"]},
+    "causation_event_id": {"type": ["string", "null"], "format": "uuid"},
+    "correlation_id": {"type": ["string", "null"]},
+    "actor": {"type": "object", "required": ["kind", "id"], "properties": {"kind": {"type": "string"}, "id": {"type": "string"}}, "additionalProperties": false},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "recorded_at": {"type": "string", "format": "date-time"},
+    "data": {"type": "object"},
+    "content_refs": {"type": "array", "items": {"type": "object", "required": ["role", "ordinal", "object_id", "sha256"], "properties": {"role": {"type": "string"}, "ordinal": {"type": "integer", "minimum": 0}, "object_id": {"type": "string", "format": "uuid"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}, "additionalProperties": false}}
+  }
+}

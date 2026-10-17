@@ -1,0 +1,40 @@
+# Copy to mass.yaml; provide the named environment values. No cloud calls occur
+# in D00. /health/ready remains 503 until D01 installs storage checks.
+http:
+  listen: "127.0.0.1:8080"
+  public_url: "http://127.0.0.1:8080"
+  shutdown_timeout: "10s"
+database:
+  dsn_env: "MASS_MARIADB_DSN"
+tos:
+  endpoint_env: "MASS_TOS_ENDPOINT"
+  region_env: "MASS_TOS_REGION"
+  bucket_env: "MASS_TOS_BUCKET"
+  prefix: "mass/"
+  access_key_env: "MASS_TOS_ACCESS_KEY"
+  secret_key_env: "MASS_TOS_SECRET_KEY"
+auth:
+  session_ttl: "24h"
+  cookie_secure: false # Loopback development only; HTTPS deployments use true.
+llm:
+  framework: "eino"
+  provider: "ark"
+  model_env: "MASS_LLM_MODEL"
+  api_key_env: "MASS_LLM_API_KEY"
+secrets:
+  master_key_env: "MASS_MASTER_KEY"
+runtime:
+  max_concurrent_runs: 4
+  workspace_temp_root: "/tmp/mass-workspaces"
+  snapshot_timeout: "60s"
+tools:
+  code:
+    timeout: "5s"
+    max_concurrent: 1
+    max_source_bytes: 65536
+    max_input_bytes: 2097152
+    max_output_bytes: 2097152
+    max_log_bytes: 65536
+    max_file_operations: 100
+    max_network_requests: 10
+    max_network_body_bytes: 2097152

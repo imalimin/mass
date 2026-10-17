@@ -1,0 +1,22 @@
+name: D00 foundation
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .go-version
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - run: npm install --global npm@11.19.1
+      - run: make setup
+      - run: make setup-browser PLAYWRIGHT_INSTALL_FLAGS=--with-deps
+      - run: make verify-d00
+      - run: make test-race

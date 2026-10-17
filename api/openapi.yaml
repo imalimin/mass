@@ -1,0 +1,101 @@
+openapi: 3.1.0
+info:
+  title: MASS API
+  version: 0.0.0-d00
+  description: D00 foundation endpoints. Business endpoints are added with their implementation stages.
+servers:
+  - url: /
+paths:
+  /health/live:
+    get:
+      operationId: getLiveness
+      responses:
+        '200':
+          description: Process is serving HTTP.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, const: alive}
+  /health/ready:
+    get:
+      operationId: getReadiness
+      responses:
+        '503':
+          description: D00 has no storage/schema checks; the application is not ready for business operations.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /api/v1/system:
+    get:
+      operationId: getSystem
+      responses:
+        '200':
+          description: Non-secret application build metadata.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SystemInfo'}
+components:
+  schemas:
+    SystemInfo:
+      type: object
+      additionalProperties: false
+      required: [name, version, stage, protocol_profile]
+      properties:
+        name: {type: string, const: MASS}
+        version: {type: string}
+        stage: {type: string, const: D00}
+        protocol_profile: {type: string, const: mass-agui-v1}
+    Error:
+      type: object
+      required: [code, message, request_id]
+      additionalProperties: false
+      properties:
+        code: {type: string, pattern: '^[a-z][a-z0-9_]*$'}
+        message: {type: string}
+        request_id: {type: string, pattern: '^[0-9a-f]{32}$'}
+        details: {type: object, additionalProperties: true}
+    ResourceID:
+      type: string
+      format: uuid
+      description: Server-generated UUID; opaque to callers, case-sensitive in storage.
+    Sequence:
+      type: string
+      pattern: '^(0|[1-9][0-9]{0,18})$'
+      description: Canonical decimal string in 0..9223372036854775807. Journal and UI sequences are distinct domains.
+    PageCursor:
+      type: string
+      maxLength: 1024
+      description: Opaque cursor bound to scope, query and immutable result boundary; never an offset into mutable data.
+    PageInfo:
+      type: object
+      required: [next_cursor]
+      properties:
+        next_cursor: {type: [string, 'null'], maxLength: 1024}
+    IdempotencyKey:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: '^[A-Za-z0-9._:-]+$'
+      description: Scoped to space, actor and operation. Same key/content returns the previous result; changed content is 409.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {$ref: '#/components/schemas/IdempotencyKey'}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+    Cursor:
+      name: cursor
+      in: query
+      schema: {$ref: '#/components/schemas/PageCursor'}
+    After:
+      name: after
+      in: query
+      schema: {$ref: '#/components/schemas/Sequence'}
+      description: Run UI sequence; if Last-Event-ID is also supplied they must be equal.

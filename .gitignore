@@ -31,3 +31,12 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+.cache/
+frontend/node_modules/
+frontend/dist/
+internal/transport/http/ui/dist/
+bin/
+mass.yaml
+frontend/test-results/
+frontend/playwright-report/
