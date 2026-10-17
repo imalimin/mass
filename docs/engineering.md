@@ -60,12 +60,12 @@
 
 ## E02 D00 工程与契约基础
 
-**输入**：技术方案 T00、T13—T15；仓库现有内容。
+**输入**：技术方案 T00、T06.1—T06.2、T13—T15；仓库现有内容。
 
 **编码步骤**：
 
 1. 检查已有工具链，选择仍受支持且满足依赖要求的 Go、Node.js 与 MariaDB 版本，写入版本配置和技术方案，锁定 Eino、模型扩展组件、TOS SDK、AG-UI Go SDK 与 @ag-ui/core 等第三方依赖，并验证 AG-UI 必需事件子集的跨语言兼容性。
-2. 初始化 Go module、cmd/mass 与统一 mass.yaml 配置加载；建立单进程启动/停止入口和 live/ready 检查骨架。
+2. 初始化 Go module、cmd/mass 与统一 mass.yaml 配置加载；建立单进程启动/停止入口和 live/ready 检查骨架。按 T06/T15 确定包依赖规则，叶子包随能力实现创建，不用空目录或通用 RuntimeService 代替实现。
 3. 在 ./frontend 初始化 React/TypeScript/Vite 及独立 package.json/锁文件，建立路由、应用壳与空间占位；实现构建产物复制和 Go embed，页面、API、SSE 使用同一 Go 地址，默认开发不另起前端 HTTP 服务。
 4. 建立 OpenAPI/事件契约目录、SQL 查询和迁移工具配置；先定义错误格式、ID、分页、幂等键和序号传输约定；AG-UI 的 type/camelCase、CUSTOM 约定、协议版本和独立 UI 游标纳入机器可读契约。
 5. 建立统一 Makefile/scripts 入口及 CI 骨架；CI 使用固定版本，不依赖开发者私有环境。
@@ -128,16 +128,18 @@
 
 **编码步骤**：
 
-1. 实现 session.created、user.message.accepted、run.created 的追加，以及消息/Run/快照视图 reducer、幂等与活跃 Run 约束；固定定义原文引用，最终回复引用已有响应。
-2. 实现单实例调度、空间并发准入、短事务认领、轮询补漏、取消与状态终结。
-3. 按 Eino ToolCallingChatModel 契约实现可编程 FakeChatModel，支持文本、工具请求、流式帧、失败和中断。
-4. 接通 Executor、ContextPlanner/ContextProjector、固定 through_sequence、Eino 交互事件及模型聚合结果；假模型记录注明来源，实际 HTTP 字节捕获在 D07 经真实扩展组件验证。
-5. 实现 AguiProjector、agui_streams/agui_events、固定映射版本、独立 ui_sequence 和事务检查点；提供 Run/原始 Trace 查询、AG-UI SSE 及基础页面。
-6. 实现异常退出识别、未完成状态与 operation.reconciled；建立离线视图重建入口，只重建记录，不重放已开始动作。
+1. 在 domain/journal/app 实现 session.created、user.message.accepted、run.created、Run/消息 reducer、幂等与会话占用；先完成 Claim/Finish 的统一状态规则、固定锁顺序和响应来源校验。
+2. 实现 runtime/control 的停止检查、调用额度预留与结算；用已记录用量初始化 Run 状态，区分未知和零，固定重复结算的幂等语义。
+3. 按 Eino 契约在 adapter/eino 实现可编程 FakeChatModel；接通 runtime/modelgateway 的 attempt、聚合、完整性、失败记录和 control 接口。摘要与任务共用调用契约，假模型记录注明来源；实际 HTTP 原文捕获在 D07 验证。
+4. 先实现 context/projector 的固定边界最小只读投影，再实现 context/planner 的容量拒绝、投影内容保存与事件登记。此阶段不做隐式摘要或静默截断；Projector 不依赖 Gateway。
+5. 实现 runtime/executor 的窄接口及唯一 ReAct 循环，文本回复只返回 Outcome，不写 Run 终态。D05 前工具调用明确拒绝/未执行，不能假造成功结果。
+6. 实现 runtime/supervisor：Run context、取消/心跳、成功与失败统一收尾、panic 恢复、取消与成功竞态、有界收尾及名额释放；随后接入 runtime/scheduler 的单实例锁、并发准入、事务认领、交接和轮询补漏。
+7. 在 bootstrap 完成具体实现注入与启停；实现 AguiProjector、agui_streams/agui_events、映射版本、UI 序号和事务检查点，提供 Trace/Run 查询、SSE 及基础页面。AG-UI 不反向驱动执行。
+8. 由 Supervisor 实现异常退出识别、operation.reconciled 与中断终结；建立离线视图重建入口，只重建记录，不重放已开始动作。
 
 **验证**：重复请求只产生一个 Run；同会话并发拒绝；断开客户端不取消运行；queued/running 取消按实际状态处理；模型和日志写入失败可观察；原始 Session 序号可跳跃，一对多 AG-UI 输出使用连续 UI 序号恢复；清空派生视图后可从日志重建同样业务结果且不触发外部调用。
 
-**完成条件**：完整文本请求通过真实服务、数据库和 FakeChatModel 跑通，模型输入输出可读；没有真实模型调用也必须真实保存所有应用记录。
+**完成条件**：完整文本请求通过真实服务、数据库和 FakeChatModel 跑通，模型输入输出可读；没有真实模型调用也必须真实保存所有应用记录。T06 的消费接口可分别使用小型 fake 验证；依赖检查无反向 import，认领交接/取消/成功竞态不重复终结或释放名额；收尾失败不提前删除会话占用。
 
 ## E07 D05 内置工具闭环
 
@@ -145,9 +147,9 @@
 
 **编码步骤**：
 
-1. 实现 Registry、Schema 编译、Dispatcher、Agent 与空间权限交集。
+1. 按 registry → builtin → dispatcher 的实现顺序建立版本/Schema、受限资源接口与 Handler、授权与执行编排；三者分别位于 T06 指定包，由 bootstrap 注入。
 2. 实现 read_file、write_file、list_files、read_skill_resource，通过 MariaDB 逻辑路径映射读写 TOS；工作区写入采用新对象与 revision 更新，发布资源只读。
-3. 接入 tool.execution.started/completed/failed，将参数与完整结果引用写入日志；保持模型调用范围内的 call_id 配对，明确 side_effect=none/committed/unknown；映射标准 TOOL_CALL_START/ARGS/END/RESULT，END 不能触发“执行成功”状态。
+3. 接入 tool.execution.started/completed/failed，Handler 返回 PreparedToolResult，Dispatcher 统一提交结果，写文件的 revision CAS 与完成事件经 Journal 同事务提交；将参数与完整结果引用写入日志；保持模型调用范围内的 call_id 配对，明确 side_effect=none/committed/unknown；映射标准 TOOL_CALL_START/ARGS/END/RESULT，END 不能触发“执行成功”状态。
 4. 用 FakeChatModel 驱动“请求工具→执行→接收结果→最终回答”的真实循环。
 5. 实现参数错误、工具业务错误、超时、输出超限和结果未知的处理。
 
@@ -161,9 +163,9 @@
 
 **编码步骤**：
 
-1. 实现纯 ContextProjector：固定 through_sequence、版本化策略/渲染/解析器和有效配置，只读取日志及不可变对象；保存 context_projections 和 context.projected。
+1. 扩展 context/projector：固定 through_sequence、版本化策略/渲染/解析器和有效配置，只读取日志及不可变对象；由 context/planner 保存投影内容、context_projections 和 context.projected，Projector 不写入。
 2. 实现完整交互单元、失败/未知副作用投影规则及准确事件来源；摘要调用与用户任务分开，不重复用户、最终回复或流式片段。
-3. 实现 ContextPlanner 的容量规划和 context_epoch；统一 Eino 网关生成摘要，保存准确来源、内容摘要和生成调用，完成验证后切换阶段，后续投影复用结果。
+3. 实现 ContextPlanner 的容量规划和 context_epoch；通过同一 ModelGateway 生成 purpose=summary 的摘要，显式固定摘要输入并禁用工具，禁止 Gateway 回调 Planner；保存准确来源、内容摘要和生成调用，完成验证后切换阶段，后续投影复用结果。
 4. 实现固定的大结果节选、模型协议字段保留、ordered_block_refs、配置/工具指纹及 parent_projection_id；同阶段正常追加不改写已有前缀。
 5. 实现投影索引/检查点与有界读取缓存；缓存键包含空间、历史边界及全部语义版本，读取仍校验授权。
 6. 实现原始事件→投影 Manifest→实际请求的检查 API 和展示，保存 epoch 和 prefix_change_reason。
@@ -307,6 +309,10 @@ Vite 构建不能代替 TypeScript 类型检查。Vitest 用于前端状态与�
 | A34 | P06/P08/P09/M10/M12 | Go 编码的 AG-UI 事件由锁定 TS Schema 校验并消费 | type/camelCase/必填字段正确，CUSTOM 有版本，工具参数 END 与结果分开 | D00/D05/D08 |
 | A35 | P06/M10/M12 | 排队取消、执行失败、可恢复模型重试、连接中断 | 单个完整流有一个开始及一个终态，RUN_CANCELLED 正确展示，断网不伪造 Run 失败 | D04/D08 |
 | A36 | P09/M10/M12 | UI 投影事务崩溃、同 Run 重连、协议升级及半消息恢复 | 检查点与输出原子提交、ID/游标稳定、无重复副作用，非法协议停止消费 | D04/D08/D09 |
+| A37 | M05—M11/T06 | 编译与 go list 依赖检查；独立替换 Executor 消费接口；只读投影重放 | 无循环/反向依赖，核心不导入具体 adapter/transport，Projector 无模型调用/事件写入 | D04/D06 |
+| A38 | P06/P10/M05/M06 | 认领后交接失败、成功与取消竞态、panic、Finish 存储失败 | Supervisor 统一终结，停止后名额仅释放一次，占用只随终态事务释放，故障不重放 | D04/D09 |
+| A39 | P08/P09/M09/M11 | write_file 准备后失败、CAS 冲突、提交结果未知 | 结果事件与文件指针共同提交/回滚，Handler 不重复完成，未知先核实且不重做 | D05/D09 |
+| A40 | P07/P09/P10/M06/M08 | 同一 Run 包含任务、摘要、模型重试及 usage 补报 | 实际 attempt 各预留一次、统一受限，结算不重复，未知不冒充零用量 | D06/D07/D09 |
 
 仅检查最终回复不算完整验收；必须验证版本、上下文来源、协议块、工具结果和持久化事件之间的对应关系。
 
@@ -319,6 +325,8 @@ Vite 构建不能代替 TypeScript 类型检查。Vitest 用于前端状态与�
 本轮统一日志与缓存方案更新的检查通过：四文档边界与内部链接、章节唯一性、代码围栏、事件 JSON、8 个 Go 片段语法，以及旧事件名称和旧 Run 连续序号假设的残留检查；git diff --check 通过。本轮未执行运行时功能或真实缓存测试，A26—A33 是后续待验证要求，不能视为已通过。
 
 AG-UI 方案更新已核对官方事件、SSE 和 SDK 文档；文档链接/围栏/章节、事件 JSON、8 个 Go 片段语法检查通过，2 个 SSE 示例 data 可解析，独立帧发送示例编译通过。尚未安装锁定 SDK 或执行跨语言与端到端测试，A34—A36 保持待验证。
+
+Runtime 拆分方案更新完成：技术方案定义 10 个叶子包、窄接口、调用方向与事务/终态所有权，同步架构职责及 D00/D04—D06 实现顺序。四份建设文档的相对链接、章节唯一性、代码围栏、JSON 和 8 个 Go 片段语法检查通过，git diff --check 通过。未创建业务包或运行功能测试；A37—A40 是后续验收要求，依赖图与并发行为仍需在实现后验证。
 
 后续每个阶段完成时在下面新增记录，保留失败与修复的关键证据，不凭口头结论覆盖历史：
 

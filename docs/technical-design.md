@@ -295,38 +295,154 @@ Run context 派生自服务执行生命周期，不使用提交请求的 context
 
 停机先停止接单和认领，有界等待或取消已有执行，刷写 Trace；无法停止的工具由进程退出终止，重启时标记中断，而不是提前报告成功取消。
 
-## T06 M06 执行循环
+## T06 Runtime 子模块与 M06 执行循环
 
-依赖：ContextPlanner/ContextProjector、基于 Eino 的 ModelGateway、ToolDispatcher、SessionJournal、RunStore。执行器负责 MASS 的版本、预算与生命周期；模型调用统一走 Eino 组件，不直接实现供应商 SDK。MVP 保留这一个显式执行循环，不再套一层 Eino Agent 的完整循环，避免重复调度工具和预算。后续如切换 Eino ADK，需要迁移相同的权限、上下文与 Trace 约束。
+### T06.1 包边界与职责
 
-核心循环骨架如下；Gateway、Tools 和终结器负责各自动作前后的持久化，所有错误必须传播。ContextPlanner.Prepare 负责必要的摘要生成、日志追加和投影准备，摘要也走同一 Gateway 并计入预算；ContextProjector.Project 本身不调用 LLM：
+`internal/runtime` 是 M05—M09 执行能力的组织目录，不是一个包含所有实现的 Go package。按下表建立叶子包；M04 的提交/查询在应用层，M10 的统一日志和 M11 的资源服务是管理与运行共用的能力，放在 runtime 之外。模块编号继续沿用架构文档，不因代码拆包新增产品模块。
+
+| 子包（相对于 internal/） | 归属 | 输入 → 输出与独占职责 | 不承担的职责 |
+| --- | --- | --- | --- |
+| runtime/scheduler | M05 | queued 候选、并发配额 → 已认领 Run 与准入名额；串行 dispatcher、唤醒/轮询、单实例锁监测、认领后交接 | 不创建用户消息、不执行 ReAct、不写运行终态 |
+| runtime/supervisor | M05 | 已认领 Run 与名额 → 有界执行、终态和资源释放；Run context、取消信号、心跳、panic 收尾、启动恢复 | 不组装消息、不解析模型响应、不实现工具 |
+| runtime/executor | M06 | RunSnapshot → Outcome 或 error；唯一 ReAct 循环、步骤推进、串行派发一组工具、选择最终响应 | 不更新 Run 状态、不持有 SQL/TOS/SDK、不做摘要算法 |
+| runtime/control | M06 | Run 限额、操作类型、已记录用量 → 允许执行或停止原因；统一次数、时限与预算检查/预留/结算 | 不管理队列并发、不组装上下文、不独立保存计费事实 |
+| runtime/context/planner | M07 | Run 与日志最新已提交边界 → 已保存的 PreparedContext；容量规划、摘要编排、epoch 选择、投影登记 | 不实现模型传输、不递归调用自己生成摘要 |
+| runtime/context/projector | M07 | 固定 ProjectionSpec、事件和不可变内容 → 消息、工具定义、Manifest 与内容指纹；完整单元、稳定排序、版本化渲染 | 不调用 LLM/工具、不选择当前草稿、不写日志或生成摘要 |
+| runtime/modelgateway | M08 | PreparedContext 与 purpose → 已记录的完整 ModelReply 或失败；attempt、重试、授权/预算、流聚合、完整性与 usage | 不回调 Planner、不执行工具、不决定 Run 终态 |
+| runtime/tool/registry | M09 | 平台内置定义与快照版本 → 不可变工具描述和 Handler；名称/版本索引、Schema 编译与精确版本解析 | 不按模型文本动态注册、不做运行调度 |
+| runtime/tool/dispatcher | M09 | 已完成响应中的 ToolCall → 已记录的工具结果；授权、参数校验、限额、超时、调用及结果提交 | 不把 TOOL_CALL_END 当作执行结果、不直接写 SQL |
+| runtime/tool/builtin | M09 | 已校验参数与受限资源接口 → PreparedToolResult；read_file/write_file/list_files/read_skill_resource 具体实现 | 不接触宿主文件、不自行提交 tool 终结事件、不控制执行循环 |
+
+包内再按实现职责拆文件：supervisor 分为 supervise/cancel/recover，planner 分为 prepare/epoch/summary，projector 分为 history/units/render/manifest，modelgateway 分为 attempt/stream/retry/usage，dispatcher 分为 authorize/validate/execute/commit；文件共享该包的内部类型，不再为每个函数增加子包。供应商帧解码与实际 HTTP 捕获仍属于 adapter/eino。
+
+拆分仍是同一个 Go 进程内的方法调用，不引入 RPC、消息队列或插件系统。`scheduler` 的并发名额与 `control` 的 Run 调用/用量预算是两类资源，不能用同一个计数器代替。
+
+共用能力的代码归属如下：
+
+| 包 | 责任与接口边界 |
+| --- | --- |
+| domain | RunSnapshot、事件/内容引用、ProjectionSpec、ModelReply、ToolCall、Outcome 等跨模块值类型和纯状态规则；不依赖 runtime、数据库、HTTP 或供应商 SDK |
+| app | 接受会话/Run/取消请求、权限校验与查询编排；M04 通过 Journal 提交事件，不直接调用 Executor |
+| journal | SessionJournal 的可信追加与读取服务、事件校验及纯 reducer；状态、消息、用量和工作区变更进入统一事务，供 app/runtime 共用 |
+| resource | 内容完整性、版本资源读取、逻辑工作区读取与写入准备；返回不可变对象引用和预期 revision，不单独提交运行文件指针更新 |
+| adapter/mariadb、adapter/tos、adapter/eino | 分别实现事务/查询、对象访问、Eino 模型/原文捕获的基础设施接口；供应商配置与框架类型限定在模型适配边界 |
+| transport/agui、transport/http | Journal 到 AG-UI 的持久化派生视图，以及 API/SSE 传输；不成为执行器、模型网关或投影器的依赖 |
+| bootstrap | 构造具体组件并注入依赖、注册内置 Handler、启动/关闭后台任务；不包含业务状态转换 |
+
+`domain` 按 run/event/context/model/tool/content 的概念拆文件或小包，禁止变成存放所有业务逻辑的公共工具包。Trace 查询和 usage 汇总复用 journal 的事实/视图；不再额外建立可写的 runtime/trace 历史库。
+
+### T06.2 依赖方向与接口所有权
+
+以下箭头表示调用方向；调用方定义窄接口，bootstrap 注入实现，并不意味着必须直接 import 被调用实现包：
+
+```text
+app ────────────────────────────────────→ journal / resource
+scheduler → supervisor → executor → context/planner → context/projector
+                                  │                └→ modelgateway (purpose=summary)
+                                  ├→ modelgateway (purpose=task)
+                                  └→ tool/dispatcher ─→ tool/registry (解析 Handler)
+                                                     └→ builtin Handler → resource
+executor / modelgateway / tool/dispatcher → control
+planner / modelgateway / dispatcher / supervisor / scheduler → journal 的各自窄接口
+transport/agui → journal 的只读接口 → 已提交事实
+bootstrap → 上述具体实现及 adapter/*，完成组装
+```
+
+`ModelCaller` 等消费接口声明在使用它的包中，共享数据契约放 domain；不建立包含所有能力的 RuntimeService、全局 ServiceLocator 或可任意发事件的通用 EventBus。适配器依赖消费接口/领域值，不允许核心反向 import adapter、transport 或 bootstrap。跨边界不传 `*sql.Tx`、HTTP request、TOS client 或具体供应商配置。
+
+| 消费方 | 最小接口与实现方 | 关键返回约束 |
+| --- | --- | --- |
+| scheduler | CandidateReader、ClaimWriter（MariaDB/Journal）；RunLauncher（Supervisor） | 认领提交后交接；启动结果明确是否接收了名额所有权 |
+| supervisor | Runner（Executor）、FinishWriter（Journal）、取消/心跳存储接口 | 运行实际退出后才提交终态；重复 Finish 返回相同结果或状态冲突 |
+| executor | ContextPreparer（Planner）、ModelCaller（Gateway）、ToolDispatcher、RunControl | 返回成功即对应动作已持久化；Executor 只保留引用，不缓存另一份历史 |
+| planner | JournalReader、ContentReader、Projector、SummaryCaller（同一 Gateway）、ProjectionWriter（Journal） | 摘要先保存再选用；PreparedContext 仅引用已提交的 context.projected |
+| projector | 固定边界 JournalReader、不可变 ContentReader、版本化计数器/渲染器 | 只读；返回投影值/有界内容流，不保存对象与事件 |
+| modelgateway | ModelTransport（Eino adapter）、AttemptRecorder（Journal/ContentStore）、RunControl、授权/凭证接口 | 原文先保存再消费；完整 ModelReply 携带已提交响应 event_id |
+| dispatcher | ToolResolver（Registry）、RunControl、授权接口、ToolOutcomeWriter（Journal） | 终结事件与工作区指针变更原子提交；结果引用与副作用状态入日志，下一轮从日志读取 |
+| builtin | ContentReader、WorkspaceReader/WritePreparer、SkillResourceReader（resource） | 只获得当前空间/Run/版本范围能力，返回准备结果，不自行宣告提交成功 |
+
+Eino 的 `schema.Message`/`ToolInfo` 转换由 `adapter/eino` 负责；domain 的有序内容块和供应商扩展字段必须能无损保留后续对话所需信息，不能以“通用 DTO”为由删除协议字段。网关面向领域 ModelTransport；T08 的 Eino 流示例属于该适配边界，SDK 的真实传输仍统一捕获。
+
+Planner 可调用 Gateway，Gateway 永远不依赖 Planner。摘要使用显式 `purpose=summary` 的固定来源输入和独立投影，关闭工具；摘要的输入预算不足则按版本化策略分段或失败，不递归触发另一轮 Planner.Prepare。上下文容量计算属于 M07；Run 的累计额度检查属于 control，摘要和重试均计入同一 Run。
+
+### T06.3 ReAct 循环与终态所有权
+
+MVP 只保留这一层显式 ReAct 循环，不再套 Eino Agent 的完整循环。后续引入 DeepAgent 或 Eino ADK 时，作为执行策略替换/扩展 Executor，继续复用 Planner、Gateway、Dispatcher 和 Supervisor；不能新增一套旁路日志、预算或工具权限。
+
+以下为消费接口与循环骨架。RunSnapshot、PreparedContext、ModelReply、ToolCall、Outcome 为 domain 值类型在该包内的类型别名；Outcome.FinalResponseEventID 引用已经完成的模型响应。构造器必须注入全部依赖，不由 Executor 创建模型客户端或 Repository。
 
 ```go
-func (e *Executor) Execute(ctx context.Context, run RunSnapshot) error {
+// package executor；领域类型别名及错误声明在对应实现阶段补齐。
+type ContextPreparer interface {
+    Prepare(context.Context, RunSnapshot) (PreparedContext, error)
+}
+type ModelCaller interface {
+    Call(context.Context, RunSnapshot, PreparedContext) (ModelReply, error)
+}
+type ToolDispatcher interface {
+    DispatchAndRecord(context.Context, RunSnapshot, ToolCall) error
+}
+type RunControl interface {
+    Check(context.Context, RunSnapshot) error
+}
+type Executor struct {
+    Context ContextPreparer
+    Model   ModelCaller
+    Tools   ToolDispatcher
+    Control RunControl
+}
+
+func (e *Executor) Execute(ctx context.Context, run RunSnapshot) (Outcome, error) {
     for step := 0; step < run.MaxSteps; step++ {
-        if err := e.Control.Check(ctx, run); err != nil { return err }
+        if err := e.Control.Check(ctx, run); err != nil { return Outcome{}, err }
         input, err := e.Context.Prepare(ctx, run)
-        if err != nil { return err }
+        if err != nil { return Outcome{}, err }
         reply, err := e.Model.Call(ctx, run, input)
-        if err != nil { return err }
-        if !reply.Complete { return ErrIncompleteModelOutput }
+        if err != nil { return Outcome{}, err }
+        if !reply.Complete { return Outcome{}, ErrIncompleteModelOutput }
         if len(reply.ToolCalls) == 0 {
-            return e.Runs.CompleteWithReply(ctx, run, reply)
+            return Outcome{FinalResponseEventID: reply.EventID}, nil
         }
         for _, call := range reply.ToolCalls {
-            if err := e.Control.Check(ctx, run); err != nil { return err }
-            if err := e.Tools.DispatchAndRecord(ctx, run, call); err != nil { return err }
+            if err := e.Control.Check(ctx, run); err != nil { return Outcome{}, err }
+            if err := e.Tools.DispatchAndRecord(ctx, run, call); err != nil {
+                return Outcome{}, err
+            }
         }
     }
-    return ErrStepLimit
+    return Outcome{}, ErrStepLimit
 }
 ```
 
-外层 Supervisor 将错误区分为 cancelled、deadline、模型失败、持久化失败等，使用独立且有超时的收尾 context 保存失败与终态；不能继续使用已经取消的调用 context 写关键收尾记录，也不能无限等待数据库恢复。
+只有 Supervisor 为已认领的 Run 提交成功/失败/取消终态。Executor 返回 Outcome 不代表数据库状态已经完成；Supervisor 校验最终响应引用，并在 T04/T10 的事务中追加 run.finished、更新视图和释放会话占用。queued 取消仍由 M04 在事务内终结；启动中断恢复由 Supervisor 发起，均使用同一 Journal 状态规则。
 
-工具业务错误可以形成结构化工具结果继续交互；访问越权、预算耗尽或记录失败按策略终止。每轮所有工具 call_id 都需得到相应结果，模型输出非法参数先保存原文再校验。文本结束原因若为长度截断，不标记为正常完整回复。
+Supervisor 区分 cancelled、deadline、模型失败、持久化失败及 panic，使用独立且有超时的收尾 context 保存终态；不能复用已取消的执行 context，也不能无限等待数据库恢复。成功返回与取消请求竞态在 Finish 事务中裁决：锁内已存在取消请求则记 cancelled 并保留已完成响应；成功终态先提交则后来的取消不能改写成功。
 
-模型调用、摘要、工具调用分别有上限，并受 Run 总时长和预算约束。计费 usage 不可用时保留未知状态，不捏造精确值。工具的写入结果未知时不自动重试。
+scheduler 取得并发名额，认领失败自行释放；认领成功后 Supervisor 接收 Run 与名额并承担一次性释放责任。交接失败由 scheduler 调用 Supervisor 的启动失败收尾入口；认领成功后不重新入队重放。取消后必须等待执行栈和子调用退出才能释放执行名额；会话占用仅随终态事务释放。收尾持久化失败时可以释放已停止执行的内存名额，但 Run/会话仍保持待恢复状态，停止继续认领并暴露运行子系统异常，不能假报结束。
+
+Run context 由 Supervisor 从服务生命周期派生；模型流、摘要和工具获得其子 context。scheduler/AG-UI 投影是服务级后台任务，Run 内 goroutine 由启动它的组件负责等待退出；不得在取消后遗留未跟踪的工具工作。无法停止的动作等待进程退出并在恢复时标记中断。
+
+工具业务错误可以形成结构化工具结果继续交互；访问越权、预算耗尽或记录失败按策略终止。所有 call_id 必须有结果或按 T07 明确转换为中断说明。模型参数先保存再校验；长度截断不能成为正常完整回复；副作用未知的工具不自动重试。
+
+### T06.4 动作记录、事务与预算边界
+
+模块拆分不拆开事实的原子提交。内容上传在事务外，运行事实和必要视图在 Journal 的一次短事务内提交；调用者不能通过回调向 Journal 注入任意 SQL。
+
+| 动作 | 编排者 | 持久化边界 |
+| --- | --- | --- |
+| 投影/摘要 | Planner | Projector 返回值 → ContentStore 保存不可变内容 → Journal 追加 context.projected/context.summary.created；返回前提交引用与索引 |
+| 一次模型 attempt | Gateway + Eino 传输适配 | 请求/响应原文由 AttemptRecorder 保存到 TOS/Journal；完整聚合后 Gateway 提交 completed，失败提交 failed；回调不重复提交终结 |
+| 一次工具调用 | Dispatcher | started 先提交；Handler 准备结果/内容对象；Dispatcher 通过可信 ToolOutcomeWriter 一次提交结果事件及允许的工作区变更 |
+| 一次 Run | Supervisor | 执行停止 → FinishWriter 提交 run.finished、最终回复来源、usage 视图与会话占用释放 |
+
+`write_file` 的 PreparedToolResult 包含结果引用、目标逻辑路径、expected_revision 和新内容引用。builtin/resource 仅准备，不提前改 workspace_files；ToolOutcomeWriter 是 Journal.Append 的类型化门面，校验工具版本与能力后构造事件，可信 reducer 在同一 MariaDB 事务校验 revision、更新文件指针并提交 tool.execution.completed。CAS 冲突全部回滚，再记录无副作用的工具失败；提交结果未知先用 operation_id 查询核实，不能追加矛盾失败或重做写入。其他工具也由 Dispatcher 统一终结，避免两层重复记录。
+
+control 的可变状态按 space_id/run_id 隔离，同一 Run 的 Executor、Planner 间接触发的模型调用及 Dispatcher 共用同一控制实例；进程重启不恢复执行中的 Run。
+
+control 对每次实际模型 attempt（包含摘要和重试）及工具执行做一次准入/预算预留，由 Gateway/Dispatcher 在动作前调用，Executor.Check 只检查取消、时限等停止条件，不再次扣费。保留输入估算、输出上限预留和已知 usage 的区别；缺失用量按既定保守策略限制后续调用，计费视图仍显示 unknown。用量结算从已提交事件按 attempt/operation 去重，后续 model.usage.reported 替换统计而非累加第二遍。T07 的 token 容量估算不直接改变计费记录。
+
+不为本次拆包增加第三方依赖：调度/监督/控制使用 context、sync、time；Planner/Projector 使用已有日志、内容、计数与渲染接口；Schema 校验留在工具侧；MariaDB、TOS、Eino 仍由现有适配器接入。详细算法和协议分别以 T05、T07—T11 为准。
 
 ## T07 M07 确定性上下文投影、预算与缓存
 
@@ -334,7 +450,7 @@ func (e *Executor) Execute(ctx context.Context, run RunSnapshot) error {
 
 输入来源为 SessionJournal 截至确定序号的已提交事件及其不可变 content_objects。ContextProjector 不再分别向草稿、消息视图、运行内存和工具模块索要当前内容。当前用户输入也必须先成为日志事件。模型对应计数器和已固定的策略/配置属于显式输入；实时授权在调用前单独检查，不能被历史日志替代。
 
-ContextPlanner 负责预算规划、触发摘要和选择 context_epoch；ContextProjector 负责从固定事实确定性地产生模型消息、工具定义与 ContextManifest。投影是只读转换，不能隐式调用模型、读取当前时间、执行工具或产生新摘要。日志索引和有界缓存可加速读取，但都需要匹配来源边界和版本。
+ContextPlanner 负责预算规划、触发摘要和选择 context_epoch，并将投影内容与事件保存后返回；ContextProjector 负责从固定事实确定性地产生模型消息、工具定义与 ContextManifest。投影是只读转换，不能隐式调用模型、读取当前时间、执行工具或产生新摘要。日志索引和有界缓存可加速读取，但都需要匹配来源边界和版本。
 
 ### T07.2 输入契约与投影规则
 
@@ -344,7 +460,10 @@ ProjectContext(
   purpose, context_epoch, base_projection_ref,
   projection_policy_version, renderer_version, parser_version,
   effective_config_ref, summary_refs
-) -> messages_ref, tools_ref, manifest_ref, content_digest
+) -> messages, tools, manifest, content_digest
+
+ContextPlanner 保存上述内容并追加 context.projected
+  -> projection_id, messages_ref, tools_ref, manifest_ref
 ```
 
 所有引用必须属于已提交的同空间记录；summary_refs 的创建事件不晚于 through_sequence。模型能力、工具集合、计数器版本及输出预留来自 effective_config_ref。相同输入、相同对象字节和相同版本应得到相同的模型可见消息/工具内容；投影 ID、生成时间等审计字段不参与该等价关系。
@@ -448,10 +567,10 @@ Eino ADK/Graph 可以后续承接更复杂编排，首版不同时启用两个�
 
 ### T08.2 核心调用代码
 
-以下片段演示 Eino 流的单一消费路径。业务 DTO 转换、授权、预算、完整性判定及 SQL/TOS 事务在网关外层。`record` 确认对应原文区块已持久化，并维护可重建的语义增量视图，保存失败必须返回错误；它不把每个增量另写成一条完整助手消息。聚合与校验完成后由网关统一追加 model.response.completed。引用的框架 API 以初始化时锁定版本为准：
+以下片段位于 internal/adapter/eino，演示 Eino 流的单一消费路径。业务 DTO 转换、授权、预算、完整性判定及 SQL/TOS 事务在网关外层。`record` 确认对应原文区块已持久化，并维护可重建的语义增量视图，保存失败必须返回错误；它不把每个增量另写成一条完整助手消息。聚合与校验完成后由网关统一追加 model.response.completed。引用的框架 API 以初始化时锁定版本为准：
 
 ```go
-package modelgateway
+package eino
 
 import (
     "context"
@@ -549,7 +668,7 @@ func ValidateLogicalPath(name string) (string, error) {
 
 参数通过 JSON 传入且只解码一次，校验后的路径不能再做 URL 解码。数据库路径字段使用一致的大小写敏感比较；逻辑路径不直接拼成可访问对象 key。MVP 不实现符号链接、硬链接或归档自动解包。
 
-`write_file` 先把新内容写入唯一且不可变的 TOS 对象，再用 revision 条件事务更新 workspace_files 指针并写 tool.execution.completed；原内容不会被原地覆盖。返回成功前对象内容和元数据均已确认。`read_file` 按该版本读取，`list_files` 查询逻辑目录索引，`read_skill_resource` 只能读取快照引用的资源。
+`write_file` 的 builtin Handler 通过 resource 先把新内容写入唯一且不可变的 TOS 对象，返回 PreparedToolResult；Dispatcher 再通过 Journal 的类型化门面，用 revision 条件事务更新 workspace_files 指针并写 tool.execution.completed（见 T06.4）；原内容不会被原地覆盖。返回成功前对象内容和元数据均已确认。`read_file` 按该版本读取，`list_files` 查询逻辑目录索引，`read_skill_resource` 只能读取快照引用的资源。
 
 超时后对象可能已上传但数据库未引用，应记为待核实或孤儿并延迟回收，不盲目重做工具。一次工具调用的映射更新与 call_id/幂等记录关联，重试不能重复产生新逻辑效果。
 
@@ -943,13 +1062,27 @@ OpenAPI 是接口的可执行契约来源；事件 schema_version 单独管理�
 mass/
 ├── cmd/mass/                       # 唯一程序：serve/migrate/user/member
 ├── internal/
-│   ├── domain/
-│   ├── app/
-│   ├── runtime/                    # 同进程调度、执行、上下文、工具和 Trace
+│   ├── domain/                     # 跨模块值类型、事件及纯领域规则
+│   ├── app/                        # 定义/发布、会话/Run 提交、查询与取消
+│   ├── journal/                    # 统一事件追加/读取、可信 reducer 与视图规则
+│   ├── resource/                   # 不可变内容、工作区读取与写入准备
+│   ├── runtime/                    # 组织目录；不设包级全局 RuntimeService
+│   │   ├── scheduler/              # 轮询、准入、认领、交接
+│   │   ├── supervisor/             # Run context、取消/心跳、终态与恢复
+│   │   ├── executor/               # 唯一 ReAct 循环及消费接口
+│   │   ├── control/                # Run 限额、预算预留与结算
+│   │   ├── context/
+│   │   │   ├── planner/            # 容量/epoch、摘要编排、投影保存
+│   │   │   └── projector/          # 固定事实只读投影、配对与稳定渲染
+│   │   ├── modelgateway/           # attempt、重试、聚合、完整性与 usage
+│   │   └── tool/
+│   │       ├── registry/           # 工具版本、Schema 与 Handler 解析
+│   │       ├── dispatcher/         # 授权、限额、执行和原子结果提交
+│   │       └── builtin/            # 四个内置工具，各工具独立文件
 │   ├── adapter/
-│   │   ├── mariadb/                # database/sql Repository
-│   │   ├── tos/                    # 对象与虚拟工作区
-│   │   └── eino/                   # 模型组件、callbacks 和传输 Trace
+│   │   ├── mariadb/                # 事务持久化与查询接口实现
+│   │   ├── tos/                    # TOS 对象访问，不拥有工作区业务规则
+│   │   └── eino/                   # Eino 组件、DTO 转换和原文捕获
 │   ├── transport/agui/             # 协议事件映射与持久化传输视图
 │   ├── transport/http/ui/          # assets.go + 生成的 dist 嵌入目录
 │   └── bootstrap/                  # 单配置树及依赖组装
