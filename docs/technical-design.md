@@ -17,7 +17,7 @@
 
 前端采用 React + TypeScript + Vite，源码和 package.json/package-lock.json 全部在 `frontend/`。构建生成 `frontend/dist`，构建脚本复制到后端嵌入目录，通过 Go embed 编入二进制。Node.js 仅用于构建、测试或文件构建监听；默认开发流程也由 Go 统一提供页面，不要求另开 Vite HTTP 服务。
 
-运行期间不持久化业务文件到本地：版本资源、附件、运行工作区文件、产物及完整 Trace 原始载荷均进入 TOS，元数据及状态进入 MariaDB。Go 仅使用有界内存缓冲，不提供本地磁盘回退。本地源码、配置和构建产物不属于运行中的业务资源持久化。
+版本资源、附件、产物及完整 Trace 原始载荷持久保存到 TOS，元数据及状态进入 MariaDB。每个 Session 在服务宿主机拥有真实临时工作目录，跨 Run 连续使用；每个已执行 Run 结束时打包上传 TOS，并将不可变快照 URI、摘要和来源入库。临时目录不是持久化权威来源，缺失或重启时从已提交快照恢复；无快照的新会话创建空目录。详见 T11。
 
 MVP 不增加 Redis、独立消息队列、向量数据库或独立认证服务。Eino 以 Go 库方式嵌入 MASS，并不等同于具体模型供应商或模型托管服务。
 
@@ -32,8 +32,9 @@ MVP 不增加 Redis、独立消息队列、向量数据库或独立认证服务�
 | 迁移 | github.com/pressly/goose/v3，mysql 方言 | 同一二进制 migrate 子命令执行迁移；MVP 不引入 SQL 代码生成器 |
 | M01 身份 | golang.org/x/crypto/bcrypt；crypto/rand、crypto/sha256 | 密码校验、随机会话令牌和令牌摘要 |
 | M02 定义 | go.yaml.in/yaml/v4；encoding/json、crypto/sha256 | 定义解析、标准表示、内容摘要 |
-| M09 路径匹配与搜索 | github.com/bmatcuk/doublestar/v4；regexp、strings | 仅匹配逻辑路径；受限文本搜索 |
-| M09 受限计算 | github.com/dop251/goja；encoding/json、encoding/csv | 进程内 JavaScript 计算及显式数据转换，不安装 Node 运行环境 |
+| M09 路径匹配与搜索 | github.com/bmatcuk/doublestar/v4；regexp、strings | 匹配会话目录内的规范路径；受限文本搜索 |
+| M09 受限计算 | github.com/dop251/goja；encoding/json、encoding/csv | 进程内 JavaScript、文件/网络宿主接口及数据转换，不安装 Node 运行环境 |
+| M09/M11 工作目录 | os、path/filepath、archive/tar、compress/gzip、io；net/http | 会话目录、快照打包/恢复；代码网络请求 |
 | M02/M09 校验 | github.com/santhosh-tekuri/jsonschema/v6 | 配置和工具参数运行时校验 |
 | M03 凭证 | crypto/aes、crypto/cipher | 供应商凭证加密，主密钥从统一配置的秘密来源注入 |
 | M04—M06 运行 | database/sql、context、sync、time | 幂等、事务认领、并发与取消 |
@@ -42,7 +43,7 @@ MVP 不增加 Redis、独立消息队列、向量数据库或独立认证服务�
 | M08 Trace 捕获 | Eino callbacks + 自定义 http.RoundTripper | 语义事件和实际 HTTP 载荷分别记录 |
 | M10 日志与 Trace | MariaDB JSON、TOS、net/http | 会话原始事件、内容引用、AG-UI 事件投影与 SSE 续传 |
 | M10/M12 交互协议 | AG-UI；Go SDK github.com/ag-ui-protocol/ag-ui/sdks/community/go；前端 @ag-ui/core | 标准事件类型/校验、服务端序列化、前端协议消费 |
-| M11 对象存储 | github.com/volcengine/ve-tos-golang-sdk/v2/tos | TOS 上传、读取、元信息、分片与清理 |
+| M11 对象存储 | github.com/volcengine/ve-tos-golang-sdk/v2/tos | TOS 上传、读取、元信息与分片 |
 | M12 前端 | React、TypeScript、Vite、React Router、TanStack Query | frontend 工程中的页面、路由与查询 |
 | M12 编辑/预览 | monaco-editor、react-markdown、remark-gfm | 定义编辑、差异和受限预览 |
 | API 类型 | OpenAPI 3.1、openapi-typescript | HTTP 契约和前端类型 |
@@ -64,14 +65,14 @@ MVP 不增加 Redis、独立消息队列、向量数据库或独立认证服务�
 | skills / skill_drafts / skill_versions | 方法内容、草稿、版本及 TOS 资源清单 |
 | agent_version_skills | AgentVersion 到准确 SkillVersion、显示版本号和顺序 |
 | model_configs / credentials | Eino 组件类型、实际模型配置、加密供应商凭证 |
-| sessions | 空间归属、会话标识、last_sequence；固定定义来自 session.created |
+| sessions | 空间归属、last_sequence、latest_workspace_snapshot_id、workspace_error；固定定义来自 session.created；本地目录位置由服务生成 |
 | runtime_events / event_objects | Session 内追加日志、事件格式版本、因果关系、有序内容对象关联 |
 | agui_streams / agui_events | 每个 Run 固定协议/映射版本、日志处理检查点、独立 ui_sequence、有序 AG-UI JSON；可重建的传输视图 |
 | messages / runs / run_snapshots | 从日志同步维护的消息、运行状态及快照视图，保存来源事件位置 |
 | context_summaries / context_projections | 摘要来源、投影输入边界、策略/渲染版本、epoch、Manifest 与投影对象引用 |
 | session_active_runs | 每个 Session 唯一的活跃 Run 占用记录 |
 | idempotency_keys | 空间、主体、操作、幂等键、请求摘要和结果引用 |
-| content_objects / workspace_files / artifacts | 不可变对象及摘要；工作区逻辑路径、单调 revision/删除墓碑；产物固定对象与来源版本 |
+| content_objects / workspace_snapshots / artifacts | 不可变对象及摘要；快照的 space/session/run、base_snapshot_id、object_id、tos_uri、archive_sha256、manifest_ref、format_version；产物固定对象和来源 path/sha256 |
 | attachments / run_plans | 附件上传状态及被接受输入的绑定；计划 revision、步骤与 source_event_id，均带空间范围；计划是日志派生视图 |
 | model_cache_bindings（启用显式缓存时） | 空间、供应商作用域、前缀/配置指纹、缓存引用和到期时间；不作为历史来源 |
 | audit_logs | 发布、成员、凭证等管理操作及结果 |
@@ -142,6 +143,8 @@ secrets:
   master_key_env: "MASS_MASTER_KEY"
 runtime:
   max_concurrent_runs: 4 # 示例值，部署时配置
+  workspace_temp_root: "/tmp/mass-workspaces" # 服务专用临时根；不是持久存储
+  snapshot_timeout: "60s" # 收尾上限；不是数据保留期限
 tools:
   code:
     timeout: "5s" # 以下均为待压测的初始示例，不是沙箱硬限制
@@ -150,16 +153,18 @@ tools:
     max_input_bytes: 2097152
     max_output_bytes: 2097152
     max_log_bytes: 65536
-    max_output_files: 8
+    max_file_operations: 100
+    max_network_requests: 10
+    max_network_body_bytes: 2097152
 ```
 
-前端 API 使用相对路径，不单独保存另一套后端地址。TOS endpoint/region/bucket 与实际模型仍需用户环境提供，不猜测真实值。配置与二进制可存在本地，工程资源与历史状态不依赖本地目录。
+前端 API 使用相对路径，不单独保存另一套后端地址。TOS endpoint/region/bucket 与实际模型仍需用户环境提供，不猜测真实值。配置、二进制与会话临时目录可以存在本地，持久历史和已确认快照不依赖原主机目录。
 
 此配置管理服务部署和模型接入默认值；空间内的模型选择与凭证是 MariaDB 中的业务配置。初始化时可显式导入默认模型，之后以空间配置为准，重启不得覆盖用户修改；Run 保存最终解析结果及来源，避免文件与数据库互相覆盖。
 
 ## T01 M01 最简密码登录与空间归属
 
-依赖：net/http、bcrypt、crypto/rand、crypto/sha256、database/sql。首版只实现“账号密码校验 → 建立会话 → 查询当前用户 → 退出”，不接入 OAuth/SSO、验证码、注册找回、JWT 刷新体系或通用 RBAC 框架。
+依赖：net/http、bcrypt、crypto/rand、crypto/sha256、database/sql。认证采用“账号密码校验 → 建立会话 → 查询当前用户 → 退出”，不接入 OAuth/SSO、验证码、注册找回、JWT 刷新体系或通用 RBAC 框架。
 
 用户记录存 username 和 bcrypt password_hash；使用同一个 `mass user create --config mass.yaml` 子命令初始化用户，密码通过交互输入或指定秘密来源提供，不作为明文命令参数或配置常量。支持多个用户，不能用全局共享密码代替用户身份。
 
@@ -177,9 +182,22 @@ Cookie 使用 SameSite=Lax，HTTPS 下 Secure；本地回环地址开发可显�
 
 同源写请求校验 Origin 和预期 Content-Type；文件上传同样验证来源。保持基础防跨站请求措施，不建立独立 CSRF Token 子系统。SSE 复用同源 Cookie，定期检查登录是否到期，不把令牌放到 URL。
 
-空间隔离仍保留：用 space_members 检查成员关系，用 is_owner 区分基础管理操作。MVP 不维护角色矩阵和逐动作授权配置；成员可操作本空间 Agent/Skill/Run，owner 管理成员和模型凭证。首版账号及成员配置可由同一二进制的管理子命令完成，前端先提供登录、退出、当前用户和空间切换。
+空间隔离用 space_members 检查成员关系，is_owner 区分管理操作；成员可操作本空间 Agent/Skill/Run，owner 管理成员和模型凭证。不建设角色矩阵或邀请系统。账号由 `mass user create` 初始化；空间与成员必须有以下最小页面及 API，不能仅靠管理命令：
 
-接口最少为 `POST /auth/login`、`POST /auth/logout`、`GET /auth/me` 和当前用户空间列表；用户未登录或不属于目标空间时拒绝读取，包括 SSE、TOS 文件代理与历史载荷。复杂用户管理页面不作为首版认证阻塞项。
+| API（相对 /api/v1） | 行为 |
+| --- | --- |
+| POST /spaces、GET /spaces | 创建空间并将创建者设为 owner；列出本人所属空间 |
+| GET /spaces/{space_id}/members | 成员查看本空间成员列表 |
+| POST /spaces/{space_id}/members | owner 按已有账号 username 添加普通成员；重复添加幂等 |
+| DELETE /spaces/{space_id}/members/{user_id} | owner 移除普通成员；本人可退出；MVP 禁止删除 owner，空间删除/所有权转移留待后续 |
+
+页面提供创建、切换、成员列表、添加与移除，服务端重新校验每次操作。用户名只做精确匹配，不开放全站用户枚举。成员变更与 audit_logs 同事务。
+
+**权限失效只报错并结束任务。** 最小身份 API 保留 POST /auth/login、POST /auth/logout 和 GET /auth/me。HTTP 入口、文件下载、SSE 输出批次、模型调用和每个工具/宿主 I/O 前重新检查当前主体；排队任务认领时也检查。移除成员提交成功后，进程内通知 Supervisor 取消该 actor 在该 space 的 queued/running Run，撤销活跃读取连接；Supervisor 的已有心跳定期复核作为通知遗漏兜底。不增加新任务状态、重新授权等待或自动续跑。未登录/登录失效返回 401 unauthenticated，成员失效返回 403 forbidden；Run 以 failed 和同名错误原因结束。已完成 Run 不因后来移除成员改写。
+
+模型 HTTP、代码网络请求、文件循环和 VM 接收取消；等待实际退出后才释放会话占用。正在传输的请求或已经发生的副作用不能追溯撤销，但之后不启动新动作。服务使用独立有界收尾 context 保存已收到的结果、权限失败和已有文件快照；这是系统收尾权限，不允许被移除主体借此读取内容或继续执行。数据库无法验证权限时拒绝继续，以实际存储错误结束，不伪称 403。
+
+SSE/下载已发送响应头后无法改 HTTP 状态：停止后续数据并关闭连接，前端通过普通 API 复核；得到 401/403 后清空私有视图、显示对应错误并停止重连。订阅者失去权限只终止其连接；只有 Run 发起者失去权限才终止该 Run，其他授权成员可查询失败事实。
 
 ## T02 M02 定义、Skill 依赖与发布
 
@@ -240,9 +258,9 @@ func (s *CatalogService) PublishAgent(ctx context.Context, in PublishInput) (Ver
 }
 ```
 
-重复版本由唯一约束拒绝；并发草稿变化不会发布错内容。提交失败留下未引用 Blob，延迟清理；不得先声明发布成功再补文件。
+重复版本由唯一约束拒绝；并发草稿变化不会发布错内容。提交失败留下不可见的未引用 Blob，MVP 不自动清理；不得先声明发布成功再补文件。
 
-调试使用同一解析与校验链创建不可变 snapshot。默认版本切换不改版本内容；归档只阻止新的选择，不破坏原有引用。删除未引用草稿资源和发布版本保留使用不同策略。
+调试使用同一解析与校验链创建不可变 snapshot。默认版本切换不改版本内容；归档只阻止新的选择，不破坏原有引用。从草稿移除资源不删除已保存的历史对象；MVP 无自动过期或回收策略。
 
 接口组：Agent/Skill 创建、草稿 GET/PUT（携带 revision）、TOS 资源上传、发布、版本列表/详情/差异、依赖查询、归档；Agent 另有默认版本切换与调试快照创建。
 
@@ -264,13 +282,15 @@ Run 固定非秘密有效配置和凭证引用；每次实际调用重新验证�
 
 创建 Session 时追加 session.created，固定 Agent/Skill 准确版本、指令原文对象、有序 Skill 清单、平台指令内容及版本；不能只保存可变配置 ID。Agent/Skill 发布库负责编辑与版本管理，日志用不可变引用复用内容，投影通过日志和它引用的对象读取定义。
 
-用户提交先把原始文本和附件保存为 content_objects；同一数据库事务检查权限、锁定 Session、追加 user.message.accepted 和 run.created、更新消息/queued Run 视图、插入 session_active_runs 占用及幂等记录。run.created 固定模型非秘密配置、工具 Schema/实现版本、预算、构建标识和 user_event_id。未提交成功的输入不进入后续投影。默认 Agent 版本只在创建新 Session 时解析。
+用户提交先把原始文本和附件保存为 content_objects；同一数据库事务检查权限、锁定 Session、追加 user.message.accepted 和 run.created、更新消息/queued Run 视图、插入 session_active_runs 占用及幂等记录。run.created 同时记录 base_workspace_snapshot_id，并固定模型非秘密配置、工具 Schema/实现版本、预算、构建标识和 user_event_id。未提交成功的输入不进入后续投影。默认 Agent 版本只在创建新 Session 时解析。
 
 相同主体/操作/幂等键且请求摘要相同返回原结果；内容不同返回 409。幂等核实先于活跃 Run 冲突判断；并发提交由唯一约束裁决，不重复追加用户事件。占用主键冲突时整个事务回滚。
 
 终态为 succeeded/failed/cancelled；queued/running 属于活跃状态。run.cancel.requested 表示收到取消，不代表停止；queued 可在同事务追加 run.finished 并释放占用，running 等实际停止后终结。
 
-run.finished、最终回复的来源响应引用、usage 汇总、状态视图更新及占用删除同事务提交。最终回复引用 model.response.completed，不另造一份同内容原始消息。部分输出保留在日志，但不作为成功回复。失败运行的历史参与规则见 T07；取消或失败不能抹去已确认副作用。
+对于实际开始执行的 Run，Supervisor 等待执行停止后保存完整工作目录快照（包括失败/取消后的已发生变更），再将 workspace.snapshot.created、快照 URI/索引、Session 最新快照指针、run.finished、最终回复引用、usage、状态及占用删除同事务提交。上传与 SQL 不构成共同事务；快照失败处理见 T11.4，不能返回成功。排队取消且未使用目录的 Run 不产生新快照。最终回复引用 model.response.completed，不另造一份同内容原始消息。部分输出保留在日志，但不作为成功回复。失败运行的历史参与规则见 T07；取消或失败不能抹去已确认副作用。
+
+同一 Session 的下一 Run 复用当前目录；目录丢失或服务重启时恢复 latest_workspace_snapshot_id。新 Session 可传 source_workspace_snapshot_id，服务仅解析当前主体可访问的同空间快照，记录来源后恢复到独立目录；不接受任意 URI，不复制旧会话对话，也不改变新会话选择的 Agent 定义。恢复事实追加 workspace.restored，快照错误时拒绝开始执行，不把恢复失败当空目录。
 
 MVP 不原地修改已接受的消息。补充或纠错追加新用户消息；历史分支和消息编辑重算不属于首版范围。视图重建只读取事件和内容，不调用模型或工具；离线重建验证通过后才切换视图，不直接驱动生产调度。
 
@@ -303,7 +323,7 @@ COMMIT;
 
 Run context 派生自服务执行生命周期，不使用提交请求的 context。取消先写 MariaDB，再通知执行器；queued 取消与占用释放同事务，running 直到实际停止才释放占用。断开浏览器不会自动取消。
 
-确认旧进程退出后，重启将遗留 running 标记为 interrupted 失败，保存未完成调用并释放占用；queued 继续调度。资源从 MariaDB/TOS 恢复，不读取宿主工作目录，也不自动重做未知副作用。
+确认旧进程退出后，重启将遗留 running 标记为 interrupted 失败，保存未完成调用并释放占用；queued 继续调度。会话文件从 MariaDB 指向的最近已提交 TOS 快照恢复到新临时目录，不信任遗留脏目录，也不自动重做未知副作用。中断 Run 尚未保存的文件修改可能丢失，恢复结果明确注明快照来源与中断原因；无已提交快照只可恢复创建时的空目录或指定起始快照。
 
 停机先停止接单和认领，有界等待或取消已有执行，刷写 Trace；无法停止的工具由进程退出终止，重启时标记中断，而不是提前报告成功取消。
 
@@ -324,7 +344,7 @@ Run context 派生自服务执行生命周期，不使用提交请求的 context
 | runtime/modelgateway | M08 | PreparedContext 与 purpose → 已记录的完整 ModelReply 或失败；attempt、重试、授权/预算、流聚合、完整性与 usage | 不回调 Planner、不执行工具、不决定 Run 终态 |
 | runtime/tool/registry | M09 | 平台内置定义与快照版本 → 不可变工具描述和 Handler；名称/版本索引、Schema 编译与精确版本解析 | 不按模型文本动态注册、不做运行调度 |
 | runtime/tool/dispatcher | M09 | 已完成响应中的 ToolCall → 已记录的工具结果；授权、参数校验、限额、超时、调用及结果提交 | 不把 TOOL_CALL_END 当作执行结果、不直接写 SQL |
-| runtime/tool/builtin | M09 | 已校验参数与受限资源接口 → PreparedToolResult；T09 的 14 个内置工具具体实现 | 不接触宿主文件、不自行提交 tool 终结事件、不控制执行循环 |
+| runtime/tool/builtin | M09 | 已校验参数与受限资源接口 → PreparedToolResult；T09 的 14 个内置工具具体实现 | 不越过 resource 直接访问任意宿主文件、不自行提交 tool 终结事件、不控制执行循环 |
 
 包内再按实现职责拆文件：supervisor 分为 supervise/cancel/recover，planner 分为 prepare/epoch/summary，projector 分为 history/units/render/manifest，modelgateway 分为 attempt/stream/retry/usage，dispatcher 分为 authorize/validate/execute/commit；文件共享该包的内部类型，不再为每个函数增加子包。供应商帧解码与实际 HTTP 捕获仍属于 adapter/eino。
 
@@ -336,9 +356,9 @@ Run context 派生自服务执行生命周期，不使用提交请求的 context
 | --- | --- |
 | domain | RunSnapshot、事件/内容引用、ProjectionSpec、ModelReply、ToolCall、Outcome 等跨模块值类型和纯状态规则；不依赖 runtime、数据库、HTTP 或供应商 SDK |
 | app | 接受会话/Run/取消请求、权限校验与查询编排；M04 通过 Journal 提交事件，不直接调用 Executor |
-| journal | SessionJournal 的可信追加与读取服务、事件校验及纯 reducer；状态、消息、用量和工作区变更进入统一事务，供 app/runtime 共用 |
-| resource | 内容完整性、版本资源读取、逻辑工作区读取与写入准备；返回不可变对象引用和预期 revision，不单独提交运行文件指针更新 |
-| adapter/mariadb、adapter/tos、adapter/eino | 分别实现事务/查询、对象访问、Eino 模型/原文捕获的基础设施接口；供应商配置与框架类型限定在模型适配边界 |
+| journal | SessionJournal 的可信追加与读取服务、事件校验及纯 reducer；状态、消息、用量和快照引用进入统一事务；本地文件动作不属于 SQL 事务，供 app/runtime 共用 |
+| resource | 内容完整性、版本资源读取、会话真实目录管理、文件操作与快照准备；通过 adapter/workspace 执行文件系统动作，返回内容摘要与实际效果，不宣称 SQL 回滚可撤销文件 |
+| adapter/mariadb、adapter/tos、adapter/workspace、adapter/eino | 分别实现事务/查询、对象访问、会话文件与快照、Eino 模型/原文捕获；供应商配置与框架类型限定在模型适配边界 |
 | transport/agui、transport/http | Journal 到 AG-UI 的持久化派生视图，以及 API/SSE 传输；不成为执行器、模型网关或投影器的依赖 |
 | bootstrap | 构造具体组件并注入依赖、注册内置 Handler、启动/关闭后台任务；不包含业务状态转换 |
 
@@ -366,13 +386,13 @@ bootstrap → 上述具体实现及 adapter/*，完成组装
 | 消费方 | 最小接口与实现方 | 关键返回约束 |
 | --- | --- | --- |
 | scheduler | CandidateReader、ClaimWriter（MariaDB/Journal）；RunLauncher（Supervisor） | 认领提交后交接；启动结果明确是否接收了名额所有权 |
-| supervisor | Runner（Executor）、FinishWriter（Journal）、取消/心跳存储接口 | 运行实际退出后才提交终态；重复 Finish 返回相同结果或状态冲突 |
+| supervisor | Runner（Executor）、WorkspaceSnapshots（resource）、FinishWriter（Journal）、取消/心跳存储接口 | 运行实际退出后才提交终态；重复 Finish 返回相同结果或状态冲突 |
 | executor | ContextPreparer（Planner）、ModelCaller（Gateway）、ToolDispatcher、RunControl | 返回成功即对应动作已持久化；Executor 只保留引用，不缓存另一份历史 |
 | planner | JournalReader、ContentReader、Projector、SummaryCaller（同一 Gateway）、ProjectionWriter（Journal） | 摘要先保存再选用；PreparedContext 仅引用已提交的 context.projected |
 | projector | 固定边界 JournalReader、不可变 ContentReader、版本化计数器/渲染器 | 只读；返回投影值/有界内容流，不保存对象与事件 |
 | modelgateway | ModelTransport（Eino adapter）、AttemptRecorder（Journal/ContentStore）、RunControl、授权/凭证接口 | 原文先保存再消费；完整 ModelReply 携带已提交响应 event_id |
-| dispatcher | ToolResolver（Registry）、RunControl、授权接口、ToolOutcomeWriter（Journal） | 终结事件与工作区指针变更原子提交；结果引用与副作用状态入日志，下一轮从日志读取 |
-| builtin | ContentReader、WorkspaceReader/WritePreparer、SkillResourceReader（resource）；CodeRunner（JS adapter）、受限 InputRecorder（Dispatcher 注入） | 只获得当前空间/Run/版本范围能力，返回准备结果，不自行宣告提交成功 |
+| dispatcher | ToolResolver（Registry）、RunControl、授权接口、ToolOutcomeWriter（Journal） | 终结事件与业务视图同事务；本地/网络动作先发生，实际效果及结果入日志，下一轮从日志读取 |
+| builtin | ContentReader、SessionWorkspace、SkillResourceReader（resource）；CodeRunner（JS adapter）、NetworkClient、受限 I/O 记录接口（Dispatcher 注入） | 只获得当前空间/Session/版本范围能力，报告实际效果与结果，不自行提交终结事件 |
 
 Eino 的 `schema.Message`/`ToolInfo` 转换由 `adapter/eino` 负责；domain 的有序内容块和供应商扩展字段必须能无损保留后续对话所需信息，不能以“通用 DTO”为由删除协议字段。网关面向领域 ModelTransport；T08 的 Eino 流示例属于该适配边界，SDK 的真实传输仍统一捕获。
 
@@ -427,9 +447,9 @@ func (e *Executor) Execute(ctx context.Context, run RunSnapshot) (Outcome, error
 }
 ```
 
-只有 Supervisor 为已认领的 Run 提交成功/失败/取消终态。Executor 返回 Outcome 不代表数据库状态已经完成；Supervisor 校验最终响应引用，并在 T04/T10 的事务中追加 run.finished、更新视图和释放会话占用。queued 取消仍由 M04 在事务内终结；启动中断恢复由 Supervisor 发起，均使用同一 Journal 状态规则。
+只有 Supervisor 为已认领的 Run 提交成功/失败/取消终态。Executor 返回 Outcome 不代表数据库状态已经完成；Supervisor 校验最终响应引用，执行 T11 的快照收尾后，在 T04/T10 的事务中追加 run.finished、更新视图和释放会话占用。queued 取消仍由 M04 在事务内终结；启动中断恢复由 Supervisor 发起，均使用同一 Journal 状态规则。
 
-Supervisor 区分 cancelled、deadline、模型失败、持久化失败及 panic，使用独立且有超时的收尾 context 保存终态；不能复用已取消的执行 context，也不能无限等待数据库恢复。成功返回与取消请求竞态在 Finish 事务中裁决：锁内已存在取消请求则记 cancelled 并保留已完成响应；成功终态先提交则后来的取消不能改写成功。
+Supervisor 区分 cancelled、deadline、模型失败、持久化失败及 panic，使用独立且有超时的收尾 context 保存终态；不能复用已取消的执行 context，也不能无限等待数据库恢复。Finish 事务最后复核 Run 主体的成员权限并与成员变更串行裁决；已撤销则 failed/forbidden，保留已完成响应与快照，不被普通 context cancelled 覆盖。权限仍有效时再裁决取消：锁内已存在取消请求则 cancelled，成功终态先提交则后来取消/撤权不改写旧终态。收尾期间撤权也遵循此规则。
 
 scheduler 取得并发名额，认领失败自行释放；认领成功后 Supervisor 接收 Run 与名额并承担一次性释放责任。交接失败由 scheduler 调用 Supervisor 的启动失败收尾入口；认领成功后不重新入队重放。取消后必须等待执行栈和子调用退出才能释放执行名额；会话占用仅随终态事务释放。收尾持久化失败时可以释放已停止执行的内存名额，但 Run/会话仍保持待恢复状态，停止继续认领并暴露运行子系统异常，不能假报结束。
 
@@ -439,16 +459,16 @@ Run context 由 Supervisor 从服务生命周期派生；模型流、摘要和�
 
 ### T06.4 动作记录、事务与预算边界
 
-模块拆分不拆开事实的原子提交。内容上传在事务外，运行事实和必要视图在 Journal 的一次短事务内提交；调用者不能通过回调向 Journal 注入任意 SQL。
+模块拆分不拆开日志与数据库视图的原子提交；文件系统、网络、TOS 与 SQL 之间没有共同事务。内容上传在事务外，运行事实和必要视图在 Journal 的一次短事务内提交；调用者不能通过回调向 Journal 注入任意 SQL。
 
 | 动作 | 编排者 | 持久化边界 |
 | --- | --- | --- |
 | 投影/摘要 | Planner | Projector 返回值 → ContentStore 保存不可变内容 → Journal 追加 context.projected/context.summary.created；返回前提交引用与索引 |
 | 一次模型 attempt | Gateway + Eino 传输适配 | 请求/响应原文由 AttemptRecorder 保存到 TOS/Journal；完整聚合后 Gateway 提交 completed，失败提交 failed；回调不重复提交终结 |
-| 一次工具调用 | Dispatcher | started 先提交；Handler 准备结果/内容对象；Dispatcher 通过可信 ToolOutcomeWriter 一次提交结果事件及允许的工作区变更 |
-| 一次 Run | Supervisor | 执行停止 → FinishWriter 提交 run.finished、最终回复来源、usage 视图与会话占用释放 |
+| 一次工具调用 | Dispatcher | started 先提交；Handler 执行文件/网络动作并保存 I/O 事实；Dispatcher 通过 ToolOutcomeWriter 提交工具结果及计划/产物视图 |
+| 一次 Run | Supervisor | 执行停止 → 打包上传工作目录 → FinishWriter 提交快照引用、run.finished、usage 与占用释放；失败不能假报快照成功 |
 
-`write_file` 的 PreparedToolResult 包含结果引用、目标逻辑路径、expected_revision 和新内容引用。builtin/resource 仅准备，不提前改 workspace_files；ToolOutcomeWriter 是 Journal.Append 的类型化门面，校验工具版本与能力后构造事件，可信 reducer 在同一 MariaDB 事务校验 revision、更新文件指针并提交 tool.execution.completed。CAS 冲突全部回滚，再记录无副作用的工具失败；提交结果未知先用 operation_id 查询核实，不能追加矛盾失败或重做写入。其他工具也由 Dispatcher 统一终结，避免两层重复记录。类型化变更还包括移动/墓碑、多文件输出、计划版本和产物登记，全部通过相应可信 reducer 校验，细节见 T09；Handler 不能提交任意业务事件。
+`write_file` 先记录意图及输入，在会话目录锁内校验 expected_sha256 并写临时文件、同目录 rename 替换；执行结果经 Dispatcher 记录。PreparedToolResult 名称只表示待登记的结果，不表示文件动作尚未发生。文件操作确认完成时 side_effect=committed，表示实际动作已完成，不代表已上传目录快照；快照持久状态由独立 workspace_snapshot_id 表达。代码执行可包含多个文件及网络动作，失败可以已有部分效果；不得宣称多动作整体回滚。结果提交未知先查 operation_id，缺证据记 unknown，禁止自动重做。计划及产物登记仍由可信 reducer 与工具结果在同一 SQL 事务维护。
 
 control 的可变状态按 space_id/run_id 隔离，同一 Run 的 Executor、Planner 间接触发的模型调用及 Dispatcher 共用同一控制实例；进程重启不恢复执行中的 Run。
 
@@ -491,7 +511,8 @@ ContextPlanner 保存上述内容并追加 context.projected
 | context.summary.created | 仅在被本次投影选中时替代指定完整历史单元，原文不删除 |
 | model.response.chunk.recorded / attempt.failed | 原文用于审计；流式片段和失败尝试不拼成成功助手消息 |
 | purpose=summary 的模型响应 | 仅通过摘要记录使用，不作为用户任务回复 |
-| tool.execution.input_resolved / plan.updated / artifact.published | 审计/业务事实；对应工具结果已经进入对话，不重复加入，也不读取当前计划视图 |
+| tool.execution.input_resolved / tool.io.recorded / workspace.snapshot.created / workspace.snapshot.failed / plan.updated / artifact.published | 审计/业务事实；对应工具结果已经进入对话，不重复加入，也不读取当前计划视图 |
+| workspace.restored | 正常恢复只审计；若从中断/快照失败回退到旧快照，追加一次带事件来源的文件状态说明，标明哪些 Run 的未保存改动不保证存在，不能修改旧工具事实或旧投影 |
 | context.projected / 请求原文 / run.finished | 用于追溯、状态和最终回复选择，不重复加入已有内容 |
 
 同一用户消息、助手响应和工具结果各出现一次。构建完整对话单元再预算：一个助手响应中的所有工具调用及对应结果作为一组，不拆对、不重排 call_id。助手最终回复视图不再作为另一条消息加载。
@@ -514,7 +535,7 @@ context_projections 的核心字段如下；大清单/消息体进入 TOS，记�
 | projected_messages_ref、tools_schema_ref、content_digest | 已保存的逻辑输入和确定性比较依据 |
 | token_estimate、counter_version、prefix_change_reason | 容量估计、计数方法和前缀变化解释 |
 
-context.projected 自身序号晚于 through_sequence；实际 model.request.prepared 引用 projection_id 和确切请求体。为了审计，保留最终逻辑输入与实际请求，不能只依赖未来重新执行旧版本代码。内容删除、过期或缺失时明确标记不能完整重建。
+context.projected 自身序号晚于 through_sequence；实际 model.request.prepared 引用 projection_id 和确切请求体。为了审计，保留最终逻辑输入与实际请求，不能只依赖未来重新执行旧版本代码。内容缺失或损坏时明确标记不能完整重建；首版不设置历史过期策略。
 
 来源事件序号和 Run ID 存在 Manifest 中，默认不写进模型可见内容。摘要引用、模型配置、内容摘要等字段用于平台校验，不等于供应商缓存键，也不证明缓存命中。context_projections 是已执行投影的历史记录；页面查询索引可重建，但历史摘要和实际请求原文必须保留。
 
@@ -572,7 +593,7 @@ MVP 先实现固定前缀、阶段压缩与真实命中观测；不把显式缓�
 
 ### T08.1 框架与模块边界
 
-统一采用 `github.com/cloudwego/eino` 的 model/schema 接口及 `eino-ext` 模型组件。MASS 的 M08 包装 Eino，M06 负责执行与工具循环，M07 管理上下文，M09 保留工具权限和 TOS 工作区访问边界。Eino 是进程内框架，不额外启动 LLM 服务，也不代替实际模型 endpoint 与凭证。
+统一采用 `github.com/cloudwego/eino` 的 model/schema 接口及 `eino-ext` 模型组件。MASS 的 M08 包装 Eino，M06 负责执行与工具循环，M07 管理上下文，M09 保留工具权限和 会话工作目录访问边界。Eino 是进程内框架，不额外启动 LLM 服务，也不代替实际模型 endpoint 与凭证。
 
 首版使用 `model.ToolCallingChatModel`、`schema.Message`、`schema.ToolInfo`，通过 `Generate`/`Stream` 接入实际模型。工具用 `WithTools` 绑定到当前调用实例，避免并发共享模型上原地修改工具集合。模型能力和协议信息通过组件适配，不丢弃继续对话所需字段。[Eino 模型接口](https://github.com/cloudwego/eino/blob/main/components/model/interface.go)
 
@@ -654,20 +675,20 @@ MVP 固定提供下列 14 个平台内置工具。每个 Agent 选择授权子�
 
 | 工具 | 主要参数 | 结果与语义 |
 | --- | --- | --- |
-| list_files | directory、cursor、limit | 逻辑目录条目、类型、大小、revision、下一页；目录由路径推导 |
-| read_file | path、可选 revision、range | 返回版本、媒体类型、文本/字节范围、内容引用和截断状态 |
-| write_file | path、content、media_type、expected_revision | 创建或整体更新单个文件，返回新 revision/内容引用；不隐式追加 |
-| edit_file | path、expected_revision、edits[{old_text,new_text}] | UTF-8 文本精确替换，全部成功才提交一个新版本 |
+| list_files | directory、cursor、limit | 当前会话真实目录条目、类型、大小及下一页 |
+| read_file | path、可选 expected_sha256、range | 读取当前文件，返回摘要、范围、不可变内容引用和截断状态；可连续分段读取 |
+| write_file | path、content、media_type、expected_sha256 | 创建或整体更新单文件；新建使用 missing，更新匹配摘要；返回新摘要 |
+| edit_file | path、expected_sha256、edits[{old_text,new_text}] | UTF-8 精确替换，全部匹配成功才替换该文件 |
 | glob_files | pattern、cursor、limit | 按逻辑路径模式查找文件，如 reports/**/*.csv；返回版本及范围完整性 |
-| search_files | pattern、mode、path_glob、cursor、limit | mode=literal/regex，返回路径、revision、行号和片段；不跨工作区搜索 |
-| move_file | source、target、expected_revision | 单文件移动/重命名；目标存在即冲突，MVP 不提供覆盖目标选项 |
-| delete_file | path、expected_revision | 删除逻辑路径并返回墓碑 revision；不递归删除，不直接删 TOS 原文 |
+| search_files | pattern、mode、path_glob、cursor、limit | mode=literal/regex，返回路径、sha256、行号和片段；不跨工作区搜索 |
+| move_file | source、target、expected_sha256 | 单文件移动/重命名；目标存在即冲突，MVP 不提供覆盖目标选项 |
+| delete_file | path、expected_sha256 | 删除当前单文件；不递归删除，不删除已有快照或 TOS 原文 |
 | list_skill_resources | skill_binding_id、prefix、cursor、limit | 绑定版本的资源清单、类型、大小及可用说明 |
 | read_skill_resource | skill_binding_id、path、range | 固定 SkillVersion 的只读内容、版本及来源 |
 | read_attachment | attachment_id、range、format | 读取本会话已接受的附件；返回原文引用、解析方式/版本、范围和完整性 |
-| run_code | language、code、input、resources、outputs | 受限 JavaScript 计算；返回 JSON 值、日志引用、已提交输出文件及来源 |
+| run_code | language、code、input | JavaScript 计算、当前目录文件操作及网络请求；返回 JSON、日志/I/O 引用和已发生效果 |
 | update_plan | expected_revision、steps[{id,title,status}] | 当前 Run 的完整计划及新 revision；status=pending/in_progress/completed/skipped |
-| publish_artifact | path、expected_revision、display_name、media_type | 固定文件版本为产物，返回 artifact_id 和本服务鉴权下载入口 |
+| publish_artifact | path、expected_sha256、display_name、media_type | 固定文件版本为产物，返回 artifact_id 和本服务鉴权下载入口 |
 
 `range` 为互斥的行范围或字节范围；文本行号从 1 开始，字节范围为 offset/length，服务器施加上限。二进制只能返回受限编码片段/内容引用，不能伪装成文本；非法编码明确失败。结构化 format=json/csv 在输入上限内先验证完整文档，再返回有界记录；不能把截断的字节片段冒充完整 JSON/CSV。read_attachment 首版解释 UTF-8 文本、JSON、CSV，其他格式返回 unsupported_media_type；PDF、Office、图片识别不属于首版承诺。SKILL.md 自动加载，其他资源通过工具按需读取；脚本作为资源可读，但不能因此自动执行。
 
@@ -675,15 +696,15 @@ MVP 固定提供下列 14 个平台内置工具。每个 Agent 选择授权子�
 
 所有工具先校验 Run 主体的当前空间归属、Agent 工具允许列表、准确版本、参数、预算与取消状态，再执行。参数 JSON 只解码一次，禁止额外 URL 解码。工具定义还包含超时、输入/输出大小、扫描限额及允许的副作用类型；服务上限优先，调用者不能自行提高。
 
-WorkspaceStore 按 `(space_id, run_id, logical_path)` 查找逻辑文件；Skill 从固定绑定清单读取；附件必须由同 Session 的已提交 user.message.accepted 引用。上传成功但尚未被接受的附件不是模型可用资源。用户输入事件保存附件清单，使模型知道可用 attachment_id、名称、类型和大小。其他 Run 的工作区不自动共享。
+SessionWorkspace 按 `(space_id, session_id)` 绑定真实临时目录，文件参数只允许目录内相对路径；Skill 从固定绑定清单读取；附件必须由同 Session 的已提交 user.message.accepted 引用。上传成功但尚未被接受的附件不是模型可用资源。用户输入事件保存附件清单，使模型知道可用 attachment_id、名称、类型和大小。同会话 Run 连续共享文件；其他 Session 的目录不可直接访问，新会话只允许显式恢复授权快照的独立副本。
 
-调用者不能传 bucket、TOS key、预签名 URL 或其他空间 ID。服务端解析的不可变引用进入 source_refs；每次读取复核授权、内容保留状态与摘要，不以“知道 object_id”作为权限。代码资源也遵守同样规则。
+调用者不能传 bucket、TOS key、预签名 URL 或其他空间 ID。服务端解析的不可变引用进入 source_refs；每次读取复核授权、对象可用性与摘要，不以“知道 object_id”作为权限。代码资源也遵守同样规则。
 
-工具结果统一包含 `status`、`data_ref`、有界 `preview`、`source_refs`、`truncated`、`complete`、`error`、`side_effect`；分页结果另含 `next_cursor` 和扫描范围。source_refs 记录对象摘要、文件 revision、SkillVersion 或附件绑定事件。error 包含稳定 code 及可恢复性，side_effect=none/committed/unknown；只有 Dispatcher/Journal 可确认 committed。超限或缺失不得返回貌似完整的空结果；完整原始结果保存 TOS，界面和模型节选明确标记。
+工具结果统一包含 `status`、`data_ref`、有界 `preview`、`source_refs`、`truncated`、`complete`、`error`、`side_effect`；分页结果另含 `next_cursor` 和扫描范围。source_refs 记录对象摘要、文件 sha256、快照来源、SkillVersion 或附件绑定事件。error 包含稳定 code 及可恢复性，side_effect=none/committed/unknown；committed 表示已确认实际效果，目录快照是否持久保存另行表示。超限或缺失不得返回貌似完整的空结果；完整原始结果保存 TOS，界面和模型节选明确标记。
 
-PreparedToolResult 是内部准备结果，包含内容引用及类型化变更意图；Handler 不能自行写业务视图、发终结事件或调用其他工具。Dispatcher 通过 Journal 提交 tool.execution.completed/failed 与必要业务事件、视图及幂等结果。失败或副作用未知时遵循 T06/T10，禁止自动重做未知写入。
+PreparedToolResult 是内部准备结果，包含内容引用、已发生效果及类型化登记意图；Handler 不能自行写业务视图、发终结事件或调用其他工具。Dispatcher 通过 Journal 提交 tool.execution.completed/failed 与必要业务事件、视图及幂等结果。失败或副作用未知时遵循 T06/T10，禁止自动重做未知写入。
 
-逻辑路径校验保留如下核心规则，目录参数另允许规范化的根目录标识；文件不支持符号链接、硬链接或归档自动解包：
+逻辑路径校验保留如下核心规则，目录参数另允许规范化的根目录标识；不允许绝对路径、符号链接、硬链接或特殊文件。以下仅是逻辑校验片段，实现还必须校验所有路径分量及根目录归属，实际文件操作统一通过 SessionWorkspace；只做字符串前缀比较不够。快照恢复由服务执行受控解包（T11），不提供任意上传归档自动解包工具：
 
 ```go
 package workspace
@@ -710,58 +731,53 @@ func ValidateLogicalPath(name string) (string, error) {
 
 ### T09.3 文件发现、读取与修改
 
-路径按大小写敏感的正斜杠规范存储，工作区保留单调 revision 与删除墓碑，防止删除后重建导致旧 revision 再次匹配。首次创建使用 expected_revision=0 且要求路径从未存在；墓碑路径重建必须匹配墓碑 revision。更新、编辑、移动和删除都校验 expected_revision；read_file 未指定时解析当前版本并在结果中固定，不能分段读取时静默切换版本。旧版本由同空间/Run 的已提交变更事件及内容引用解析，可建立派生索引；不可重建或已过期则明确失败，禁止回退到当前版本。
+SessionWorkspace 由服务创建专属目录（服务生成 ID、目录权限 0700），Agent 只看到相对路径。同 Session 一次仅一个 Run，所有文件工具与代码宿主函数共享目录锁；禁止 Agent 创建链接或访问目录外路径，不向 VM 暴露底层 Go 文件句柄。文件名称使用正斜杠规范，平台不承诺大小写不敏感宿主能够同时保存仅大小写不同的文件名，遇到冲突明确报错。
 
-`edit_file` 仅支持受大小限制的 UTF-8 文本；在原始版本上定位每个非空 old_text，要求各恰好出现一次且替换区间互不重叠，再按位置逆序应用。任意匹配失败/歧义/重叠则整次不写入；new_text 允许为空。保留未修改内容及换行，不做隐式格式化或模糊匹配。
+文件读取不要求预声明：read_file 和 fs.readFile 可在循环内连续读取。每次结果保存不可变内容引用、实际范围及 sha256 后才能进入模型结果；分段读取用 expected_sha256 绑定同一内容，文件变化返回 conflict，不能静默拼接不同版本。读取操作返回的完整原始结果持续保留，后续投影不重新读取当前目录。
 
-`write_file`/`edit_file` 先生成新不可变 TOS 对象；Journal 的可信 reducer 在一个短事务内校验 revision、更新 workspace_files 和 tool.execution.completed。move_file 在同事务检查目标未占用、创建目标映射并将源置为墓碑，保留内容引用；delete_file 只更新墓碑并保留历史引用。多路径按规范化路径排序加锁，继续遵守 Session → Run → 其他视图的锁顺序。CAS 冲突全体回滚，返回 conflict；提交结果未知先按 operation_id 核实。
+write_file/edit_file 在目录锁内校验 expected_sha256；新建使用 missing，更新要求当前完整文件摘要匹配。edit_file 仅支持有界 UTF-8 文本，每个 old_text 必须非空、恰好出现一次且区间不重叠，全部匹配后逆序替换，保留未修改内容及换行。写入通过同目录临时文件及 rename 完成单文件替换；移动只允许未占用目标；删除只删除当前单文件。临时文件不纳入快照；不对多个文件或文件与日志提供共同事务。代码宿主函数执行同样的校验与目录锁规则。
 
-`glob_files` 使用 [doublestar.Match](https://github.com/bmatcuk/doublestar#match) 在数据库返回的逻辑路径上匹配，不使用访问宿主文件系统的 Glob/Walk API。search_files 使用 Go strings/regexp，限制表达式长度、候选文件数、扫描字节数、单行长度和结果数；只扫描允许的文本类型，不新增全文搜索服务。
+glob_files 使用 [doublestar.Match](https://github.com/bmatcuk/doublestar#match) 匹配目录枚举得到的相对路径；search_files 使用 strings/regexp，限制表达式、文件数量、扫描字节、行长及结果数量。枚举和扫描只遍历当前 Session 的目录，不新增搜索服务。
 
-分页/搜索在短只读一致性事务中取得有界候选清单，固定 path/revision/content_ref 和工作区范围，离开事务后读取 TOS。候选清单、搜索结果按稳定顺序保存为工具输出对象；游标绑定该清单、查询摘要、空间/Run 与位置，不跨页重查可变目录。超出候选/扫描上限标记 complete=false 及原因，要求缩小范围；只有已固定清单内可继续的位置才提供 next_cursor。下一页仍检查授权；不声称检索覆盖整个超限工作区。
+分页查询首次在目录锁内取得有界清单，搜索片段/候选摘要保存成不可变工具输出；游标绑定该输出、查询摘要、空间/Session 与位置，后续页读取相同输出并再次鉴权。超限标记 complete=false 和覆盖范围，不声称扫描了整个目录。list/glob 的返回清单不等于未来文件内容固定；再次 read_file 时以摘要检查并保存当次实际读取结果。
 
-### T09.4 run_code：进程内受限计算
+### T09.4 run_code：会话文件与网络能力
 
-实现采用纯 Go 的 [goja](https://github.com/dop251/goja)，经 `adapter/javascript` 实现 builtin 所消费的 CodeRunner 接口，由 bootstrap 注入。它不属于 LLM Gateway，也不另启服务。每次调用创建独立 VM，只有一个执行 goroutine 使用该实例；超时/取消通过 Interrupt 通知，调用方等待实际退出后再释放名额。具体引擎版本在 D00 锁定，D05 验证支持的语言子集。[goja 并发与中断说明](https://github.com/dop251/goja#is-it-goroutine-safe)
+采用纯 Go [goja](https://github.com/dop251/goja)，adapter/javascript 实现 CodeRunner，经 bootstrap 注入 SessionWorkspace、NetworkClient 和受限 I/O 记录接口。每次调用使用独立 VM 和单一执行 goroutine；取消/超时发 Interrupt，等待实际退出后释放名额。输入为 language=javascript、同步函数体 code 与 JSON input；不要求预先声明资源/输出清单，文件直接在当前 Session 目录读写。启用 run_code 即授权下面的文件和网络能力，Agent 编辑页须明确展示这一范围；不要求为了调用 fs 再逐项启用同名文件工具。
 
-输入契约固定为 language=javascript、同步函数体 code、JSON input、resources 清单和 outputs 清单。input 作为函数参数传入，resources/outputs 的 alias 和输出路径各自唯一。resources 按别名声明 workspace(path,revision)、skill(binding,path) 或 attachment(id)；Handler 先鉴权、记录精确引用并在总字节限额内加载，只向 VM 传入复制后的纯数据。outputs 预先声明允许写入的路径、expected_revision 与媒体类型；更新输出文件同样使用 CAS。调用者不能在代码中临时扩大读取或写入范围。声明 workspace/skill/attachment 输入分别要求 Agent 同时启用 read_file/read_skill_resource/read_attachment，声明文件输出要求启用 write_file；复用相同权限校验而不嵌套调用这些工具。仅启用 run_code 时可做纯数据计算，不能借它绕过关闭的资源能力。
+| 宿主 API | 能力和约束 |
+| --- | --- |
+| fs.list / fs.readFile / fs.mkdir | 当前工作目录下枚举、读取和建目录；读取支持范围与 expected_sha256，返回摘要与内容 |
+| fs.writeFile / fs.editFile / fs.rename / fs.remove | 采用 T09.3 的摘要检查；单文件即时生效，不自动回滚；不支持链接或任意宿主路径 |
+| net.request({method,url,headers,body}) | 同步 HTTP(S)，返回 status、受控 headers、body；允许读取及有副作用请求，非 2xx 明确返回状态 |
+| log、CSV 解析/编码、JSON | 有界日志及数据转换；不允许把对象无界导出 |
 
-MVP 暴露的宿主辅助函数仅为 `readResource(alias)`、受限 `log(...)`、`emitFile(alias,text)` 以及受限 CSV 解析/编码函数；JSON 由语言内置能力处理。CSV 辅助函数用 encoding/csv，限制行、列、字段和总大小，并持续检查 context。输出 alias 必须已声明，不允许重复 emit；没有 emit 的声明不产生变更。不暴露 Go 对象、客户端、反射入口、环境变量、凭证、Node require/process、网络、宿主文件、进程启动、定时器或动态包安装；不支持异步任务和 Promise 结果，也不向代码传入其他工具的调用入口。
+NetworkClient 使用 net/http，绑定 Run/tool context 和调用超时，限制请求次数、请求/响应体、重定向次数；每次发送和重定向前重新授权，不自动重试，不将服务配置、模型凭证、Cookie 或环境变量注入请求。仅允许 http/https，拒绝 URL userinfo；跨源重定向不转发认证头，Trace 对认证头及秘密查询参数脱敏并注明，保存允许范围内实际请求/响应体和状态。网络访问是 run_code 的内置能力，不新增独立自定义 HTTP、MCP、浏览器或搜索工具。
 
-代码作为平台生成的同步函数体执行，示例：
+不暴露 Go 对象、反射、环境变量、进程启动、Node require/process、动态包安装、其他工具入口或跨调用 VM 状态；不支持 Promise/后台异步任务。禁用 goja 默认外部 source map 加载路径，全部编译入口使用关闭 source map 的解析配置，避免绕过显式文件和网络接口。文件工具与网络宿主函数每次检查授权、取消和容量，使用相同服务范围；传入的用户文件和响应内容不是可提升权限的指令。
+
+示例中的文件由前序步骤写入当前目录：
 
 ```javascript
-const rows = JSON.parse(readResource("records"));
+const source = fs.readFile("records.json");
+const rows = JSON.parse(source.content);
 const total = rows.reduce((sum, row) => sum + Number(row.amount), 0);
-log({ rows: rows.length });
-emitFile("summary", JSON.stringify({ count: rows.length, total }));
-return { count: rows.length, total };
+fs.writeFile("summary.json", JSON.stringify({ total }), { expected_sha256: "missing" });
+log({ count: rows.length });
+return { total, path: "summary.json" };
 ```
 
-执行与提交核心顺序：
+执行顺序：持久化 tool.execution.started（原始代码/input）→ 保存 tool.execution.input_resolved（Session、工作目录逻辑标识、起始快照）→ 启动 VM → 每次宿主 I/O 先保存 prepared 意图，再操作、保存 completed/failed 的输入/结果和实际效果 → 保存工具终结结果。I/O 记录共享 operation_id，使用递增 io_sequence 和 phase，由 tool.io.recorded 表达；不另建日志库。读取文件/网络得到的数据保存不可变引用后才返回 VM，写入意图保存目标及内容引用。文件或请求已经发生而记录失败时停止代码，缺证据为 unknown，不自动重放。
 
-```text
-validate arguments / permissions / limits
-append tool.execution.started with code + declared inputs/outputs
-resolve and record immutable input manifest; load bounded input
-acquire code execution slot; run fresh VM with cancellation watcher
-validate and encode result/logs/emitted files within bounds; signal completion and await watcher exit
-upload output objects and trace payloads; construct PreparedToolResult
-Journal transaction: recheck permissions/revisions -> all output mappings + tool terminal event
-return only after commit; release execution resources when actual execution stops
-```
+工具返回有界 JSON 值、日志及 I/O 引用，拒绝循环引用、函数、Promise、超深结构和不可表达数字。代码长度、文件/网络调用次数、读取/写入/返回总量、日志与耗时都计限额；CSV 和 Go 宿主 I/O 持续检查 context。代码异常、取消或序列化失败不撤销此前文件修改/外部请求，结果明确 none/committed/unknown 及已完成操作，Run 收尾仍保存工作目录快照。需要交付下载文件时使用 publish_artifact。
 
-程序返回值限制为可编码的 JSON 数据；循环引用、函数、Promise、超深结构或无法表达的数字明确拒绝。序列化、日志和文件收集也计入调用时限与限额，不能在返回时无界 Export/打印整个对象。限制代码长度、输入总量、返回值/日志/文件总量、文件数及运行并发；参数示例在 T00.5，最终数值经压测锁定。
-
-代码及结构化参数在执行前持久化，Dispatcher 向 Handler 注入仅允许记录本 operation 输入清单的 InputRecorder；解析后的资源清单通过它保存为 tool.execution.input_resolved 后才启动 VM。代码异常、取消、序列化/上传失败不提交任何文件变更；已上传对象按孤儿策略回收。成功时所有输出文件映射与工具完成事件在一个事务提交，任一 revision 冲突整体回滚。代码执行不会自动登记产物，产物交付使用 publish_artifact。日志及已收到的错误尽力保存，丢失尾部显式 incomplete，不能假称保存了未接收内容。
-
-这仍是无沙箱的同进程执行，不提供每次调用的硬内存隔离。Interrupt 不能替代宿主函数的取消检查，也不能承诺中断所有本地库操作或解析阶段；大分配、引擎缺陷或无法中断的操作仍可能影响整个 Go 服务。仅暴露有界辅助函数，验证限额与取消能力，但不得将测试结果描述为强隔离。服务内存限制是整体限制，不是单 VM 配额；若需要安全运行任意程序，必须另行设计隔离执行环境。当前不支持 Shell、Python、任意 Skill 脚本、自定义 HTTP、MCP、浏览器或联网搜索工具。
+此方案没有沙箱，不提供每次 VM 的硬内存隔离；Interrupt 不能替代 Go 宿主函数的取消检查，也不能保证终止所有引擎内部操作。服务等待实际退出，无法退出则随进程终止并按中断处理，不能提前宣称已取消。MVP 不支持 Shell、Python 或任意 Skill 脚本执行。[goja 中断限制](https://github.com/dop251/goja#interrupting)、[解析器配置](https://pkg.go.dev/github.com/dop251/goja/parser)
 
 ### T09.5 计划与产物
 
 `update_plan` 操作当前 Run 的计划，初始 expected_revision=0。每次提交完整有界步骤清单，步骤 ID 唯一、最多一个 in_progress；既有 ID 保持语义，调整清单记录新 revision。标题和状态是任务数据，不能变成系统指令。Journal 同事务追加 plan.updated 与 tool.execution.completed、更新 run_plans；工具结果返回完整新计划，前端可以独立展示。计划不触发新 Run、不自动派发工具，也不以步骤全部 completed 代替 Run 成功；它是 Agent 报告的进度，不是独立验收结论。
 
-`publish_artifact` 解析当前 Run 的文件和指定 revision，在同一事务追加 artifact.published 与 tool.execution.completed、建立 artifact 记录和保留引用。产物保存 object_id/hash、来源 path/revision、名称与媒体类型；不只保存可变路径或临时 URL。返回本服务 `/api/v1/spaces/{space_id}/artifacts/{id}/download`，下载仍检查当前成员权限；媒体类型验证并按附件下载，不把生成内容作为服务页面执行。源文件后续修改、移动、删除不改变已交付内容。重复 operation 返回同一产物，不重复登记；新的显式发布可以产生新的产物版本。
+`publish_artifact` 在会话目录锁内校验 expected_sha256，复制当前文件为不可变内容并上传 TOS；确认 ready 后，在同一事务追加 artifact.published 与 tool.execution.completed、建立 artifact 记录和保留引用。产物保存 object_id/hash、来源 Session/path/sha256、名称与媒体类型；不只保存可变路径或临时 URL。返回本服务 `/api/v1/spaces/{space_id}/artifacts/{id}/download`，下载仍检查当前成员权限；媒体类型验证并按附件下载，不把生成内容作为服务页面执行。源文件后续修改、移动、删除不改变已交付内容。重复 operation 返回同一产物，不重复登记；新的显式发布可以产生新的产物版本。
 
 计划和产物专用事件服务于审计及界面视图，不重复加入 LLM 对话；模型读取对应 tool 结果一次。摘要保留任务所需的计划状态、产物 ID 和来源，仍只基于固定日志边界，不从 run_plans/artifacts 当前视图反向组装上下文。
 
@@ -820,28 +836,31 @@ return only after commit; release execution resources when actual execution stop
 | model.attempt.failed | 非成功响应、截断、流/解析/保存失败等；保留已存区块和完整性状态 |
 | model.usage.reported | 供应商后续补充的用量及缓存统计，关联原 attempt 和统计版本；汇总按最新已确认统计替换，不能重复累加 |
 | tool.execution.started | 调用意图和参数已保存，即将执行；不能证明已产生副作用 |
-| tool.execution.input_resolved | run_code 的精确资源清单已确认保存，属于工具原始输入，不单独作为对话消息 |
+| tool.execution.input_resolved | run_code 的会话工作目录逻辑标识和起始快照已确认保存，属于工具原始输入，不单独作为对话消息 |
+| tool.io.recorded | 一次代码文件/网络 I/O 的 prepared/completed/failed 及原文引用、效果；tool 结果按需引用，不另当一条对话消息 |
+| workspace.snapshot.created / workspace.restored | 目录快照及 URI 已入库 / 已从指定快照恢复；用于文件恢复与审计；异常回退的恢复说明按 T07 投影，不注入归档正文 |
+| workspace.snapshot.failed | 目录快照未确认保存，记录失败原因及最后可恢复快照 |
 | tool.execution.completed | 工具结果及允许的业务变更已确认保存，提供配对结果 |
 | plan.updated / artifact.published | 计划新版本 / 文件版本已登记为产物；与工具完成同事务，审计/UI 使用，不再重复进入模型输入 |
 | tool.execution.failed | 错误、拒绝、取消或未执行等已确认，保留 side_effect 和错误结果 |
 | context.summary.created | 摘要、准确来源事件及生成调用已保存，供明确选择后投影 |
 | run.cancel.requested / run.finished | 请求取消 / 实际终结；最终回复引用已有响应 |
 | operation.reconciled | 中断恢复时对遗留调用追加核实结论；未知保持 unknown，不追写假成功 |
-| content.unavailable | 内容按保留策略被删除、过期或发现缺失，记录受影响引用；不修改历史事件 |
+| content.unavailable | 发现对象缺失或损坏，记录受影响引用；不修改历史事件 |
 
 事件类型、actor 和作用域由服务端可信执行路径赋值，外部文本不能直接成为可信事件。事件是否参与上下文由版本化投影器决定，不接受客户端提供 include_in_prompt 开关。purpose=task/summary、attempt_id、projection_id 等由模型事件 data 携带；Run/span 父子关系可用于 Trace 展示。
 
-plan.updated/artifact.published 与对应工具终结组成一个 Append 批次，批次使用稳定 append_key 和事件 ID；业务事件以 tool.execution.started 为因果来源并共享 operation_id，operation 的唯一终结约束仅作用于工具 completed/failed，不误将业务事件计为第二次完成。run_plans、artifacts 和 workspace_files 均由可信 reducer 维护。
+plan.updated/artifact.published 与对应工具终结组成一个 Append 批次，批次使用稳定 append_key 和事件 ID；业务事件以 tool.execution.started 为因果来源并共享 operation_id，operation 的唯一终结约束仅作用于工具 completed/failed，不误将业务事件计为第二次完成。run_plans、artifacts 和 workspace_snapshots 索引均由可信 reducer 维护；工作目录由 SessionWorkspace 操作，不以数据库视图替代真实文件。
 
 每个模型 attempt 只允许一个终结事实 completed 或 failed；同一 operation 的重复完成按幂等规则处理，不能选择两份响应同时进入上下文。协议完整性同时检查结束原因、工具参数、配对所需标识及必要状态。终结后追加的核实或用量补充是独立事实，不原地改写原事件。
 
-工具 side_effect 明确为 none、committed 或 unknown；failed 不等于没有副作用。写文件的对象映射更新与 tool.execution.completed 在同事务提交。执行完成但记录前崩溃时，恢复追加 operation.reconciled；缺证据保持 unknown，不能依据只有 started 推断未执行，也不自动重放。
+工具 side_effect 明确为 none、committed 或 unknown；failed 不等于没有副作用。本地文件/网络动作与 tool.execution.completed 不在共同事务中，已发生效果不会因日志失败回滚；目录快照单独记录持久状态。执行完成但记录前崩溃时，恢复追加 operation.reconciled；缺证据保持 unknown，不能依据只有 started 推断未执行，也不自动重放。
 
 原始 HTTP 字节区块可以跨协议帧，解析器负责帧组装。大内容按有界区块写 TOS，成功后提交事件引用；尚未完成的 multipart 不能作为已可读区块。完成标识需全部已收到内容保存且协议完整；崩溃前未持久化尾部明确 incomplete。认证秘密不保存，必要脱敏记录规则和位置，不能声称脱敏后的内容为逐字原文。
 
 ### T10.2 追加、事务与恢复
 
-唯一写入口为 Journal.Append，调用者提供同一逻辑写入重试时稳定的 event_id 或 append_key；服务端校验事件 schema、权限、操作状态、同空间引用和 ready 对象。使用 event_digest 比较类型、因果字段、data 和有序内容摘要，排除提交序号/记录时间；同 ID 同内容返回已提交结果，不同内容返回冲突。
+唯一写入口为 Journal.Append，调用者提供同一逻辑写入重试时稳定的 event_id 或 append_key；服务端校验事件 schema、权限、操作状态、同空间引用和 ready 对象。权限失效后的结果、快照及终态使用 T01 限定的系统收尾身份，保留原 actor 关联，不再次要求已撤销的主体授权。使用 event_digest 比较类型、因果字段、data 和有序内容摘要，排除提交序号/记录时间；同 ID 同内容返回已提交结果，不同内容返回冲突。
 
 ```text
 Append(session_id, expected_sequence?, append_key, proposed_events)
@@ -871,7 +890,7 @@ COMMIT;
 
 关键事件或引用保存失败时停止后续动作；数据库不可用时不能保证失败事件立即落库，重启后依据遗留操作追加中断核实。事件只追加与内容摘要校验不等于防管理员篡改，也不保证模型/工具结果恰好一次。
 
-视图重建固定 reducer_version，读取已有事实，不触发模型/工具。重建结果与线上视图对比，覆盖失败、取消、重复追加和未知副作用；完整重建依赖未过期的内容对象。历史原文按保留规则删除后追加 content.unavailable，保留审计元数据并明确不可重建范围。
+视图重建固定 reducer_version，读取已有事实，不触发模型/工具。重建结果与线上视图对比，覆盖失败、取消、重复追加和未知副作用；完整重建依赖完好的内容对象。MVP 不自动过期或删除历史；发现对象缺失/损坏则追加 content.unavailable 并明确不可重建范围。
 
 usage 按 attempt 记录并汇总，摘要和失败尝试均计入；缺失用量为 unknown，价格估算保存价格版本。缓存统计口径见 T07.6。运维日志不复制原始用户内容，空间授权同样用于日志和载荷读取。
 
@@ -896,6 +915,7 @@ threadId 映射 Session ID，runId 映射 Run ID。messageId 由 Run/attempt/响
 | task 模型回复的可展示文本增量 | TEXT_MESSAGE_START / CONTENT / END | 同一 messageId，非空 delta；按协议边界闭合 |
 | task 模型的完整工具调用描述 | TOOL_CALL_START / ARGS / END | 同一 toolCallId，参数是 JSON 字符串；MVP 在响应完成校验后输出完整参数，后续可流式优化 |
 | tool.execution.started | CUSTOM mass.tool.status.v1 | 工具执行中；与参数结束分开 |
+| tool.io.recorded / workspace.snapshot.created / workspace.snapshot.failed / workspace.restored | CUSTOM mass.trace.v1 | 展示 I/O 和目录快照来源/状态，不能当作对话或运行终态；无 run_id 的恢复事实仅在 Session 查询展示 |
 | tool.execution.completed | TOOL_CALL_RESULT | messageId、toolCallId、role=tool、content 为字符串 |
 | 可恢复工具业务错误 | TOOL_CALL_RESULT + CUSTOM mass.tool.status.v1 | content 中明确错误结构，不伪装成功；最终是否终止由 Run 状态决定 |
 | 未知副作用、未执行或协议不完整 | CUSTOM mass.tool.status.v1 / mass.message.status.v1 | 明确 unknown/incomplete/not_executed，不能补造成功结果 |
@@ -935,9 +955,9 @@ protocol_profile、分块与标识规则在 Run 创建时锁定；同一流后�
 
 GET /spaces/{space_id}/runs/{run_id}/events 使用 Cookie 空间鉴权，返回 text/event-stream；Last-Event-ID 或 after 是该 Run 的 ui_sequence，两者同时出现且不同返回错误。按已提交 ui_sequence > cursor 升序补齐，不以连接打开时间作为起点。首连从 0 读取完整生命周期；续传是旧流的后缀，不能再添加一次 RUN_STARTED。
 
-游标、已应用界面状态和协议版本必须配套。页面刷新时若只有游标而没有对应状态，应从 0 回放；大历史可调用 GET /runs/{id}/ui-snapshot 获取同一水位的 reducerState、cursor、protocolProfile，再从该 cursor 续传。快照需要包含尚未结束的消息/工具状态以及同水位的计划 revision 和产物清单。SSE 历史过期返回 cursor_expired；仅当存在覆盖该位置的完整快照时允许快照恢复，否则明确无法完整回看。不得跳过缺失数据并返回成功。
+游标、已应用界面状态和协议版本必须配套。页面刷新时若只有游标而没有对应状态，应从 0 回放；大历史可调用 GET /runs/{id}/ui-snapshot 获取同一水位的 reducerState、cursor、protocolProfile，再从该 cursor 续传。快照需要包含尚未结束的消息/工具状态以及同水位的计划 revision 和产物清单。MVP 不过期或裁剪 SSE 历史；非法游标返回 invalid_cursor，存储缺失则明确返回历史不可用。不得跳过缺失数据并返回成功。
 
-断线、代理超时、鉴权失败和 UI 投影服务错误是传输问题，不能凭空追加 RUN_ERROR 将仍在运行的任务改成失败；客户端查询 Run 状态并按已应用游标重连。慢客户端有界超时断开，不阻塞执行器；投影延迟显示为同步中。终态提交并投影后，发送终态事件关闭流，客户端停止订阅；已应用终态后无需再连接。终态后的用量补充或核实仍可追加原始日志并通过查询展示，但不能继续向已终结 AG-UI 流追加事件或改写旧帧。定期复核成员与登录状态。
+断线、代理超时和 UI 投影服务错误不改变 Run 状态；客户端查询 Run 并按已应用游标重连。鉴权失败按 T01 关闭连接并停止重连；若 Run 主体也已失去权限，由 Supervisor 以实际权限错误终结 Run，AG-UI 从该终态派生 RUN_ERROR，不由订阅连接伪造。慢客户端有界超时断开，不阻塞执行器；投影延迟显示为同步中。终态提交并投影后，发送终态事件关闭流，客户端停止订阅；已应用终态后无需再连接。终态后的用量补充或核实仍可追加原始日志并通过查询展示，但不能继续向已终结 AG-UI 流追加事件或改写旧帧。定期复核成员与登录状态。
 
 ### T10.6 SSE 帧与编码示例
 
@@ -992,20 +1012,20 @@ func WriteAGUIEvent(w http.ResponseWriter, cursor string, body json.RawMessage) 
 
 ### T11.1 统一对象存储
 
-采用火山引擎 TOS 官方 Go SDK `github.com/volcengine/ve-tos-golang-sdk/v2/tos`，通过 endpoint、region、bucket 和凭证创建 ClientV2。MASS 中所有需要持久保留的工程资源都由它承接，不实现生产本地 BlobStore，不在失败时写宿主磁盘备用。[TOS 官方 SDK](https://github.com/volcengine/ve-tos-golang-sdk)
+采用火山引擎 TOS 官方 Go SDK `github.com/volcengine/ve-tos-golang-sdk/v2/tos`，通过 endpoint、region、bucket 和凭证创建 ClientV2。MASS 中所有需要持久保留的工程资源都由它承接。本地会话目录是执行工作区，TOS 快照才是文件恢复依据；不以本地目录替代失败的持久化操作。[TOS 官方 SDK](https://github.com/volcengine/ve-tos-golang-sdk)
 
-对象 key 由服务生成，例如 `mass/{space_id}/objects/{object_id}`；保存对象类型、SHA-256、字节数、ETag、可选 version_id 与状态。路径映射、引用关系和当前版本在 MariaDB 中。不得把 ETag 直接当作内容 SHA-256，也不依赖 TOS Bucket 版本控制替代 Agent/Skill 的业务版本。
+对象 key 由服务生成，例如 `mass/{space_id}/objects/{object_id}`；保存对象类型、SHA-256、字节数、ETag、可选 version_id 与状态。快照索引、引用关系和最新快照指针在 MariaDB 中。不得把 ETag 直接当作内容 SHA-256，也不依赖 TOS Bucket 版本控制替代 Agent/Skill 的业务版本。
 
 | 资源 | 持久化方式 |
 | --- | --- |
 | AGENTS.md、SKILL.md、模板、版本 assets | 不可变 TOS 对象 + MariaDB 发布版本清单 |
 | 用户附件、工具产物 | TOS 对象 + 授权元数据 |
-| 运行工作区文件 | TOS 内容版本 + workspace_files 逻辑路径及 revision |
+| 会话工作目录 | 本地临时目录连续使用；每个 Run 收尾生成 TOS 全量 tar.gz 快照，MariaDB 保存 URI/摘要/清单引用及来源 |
 | 模型实际请求/响应、工具完整大结果 | 有序 TOS 区块 + Trace 清单/完整性状态 |
 | 运行、会话、runtime_events、event_objects、空间和权限 | MariaDB；不依赖本地文件 |
 | 用户原文、摘要、投影消息/Manifest、结构化模型响应 | TOS 不可变对象 + 事件/投影引用 |
 
-所有事件及其投影引用都参与对象保留判断；同一不可变对象可被多个事件引用，避免重复复制定义或结果。普通上传使用流/有界缓冲直接发送 TOS，大文件使用受限并发 multipart；不使用 SDK 的本地文件上传/下载帮助方法。配置和编译产物属于部署输入，可以存在本地，但不能存用户运行内容。
+同一不可变对象可被多个事件引用，避免重复复制定义或结果；MVP 不设置自动过期或 GC。普通载荷使用有界流上传，目录快照采用 archive/tar + compress/gzip 打包后上传，允许使用工作目录之外的临时归档文件，上传完成即清理该临时归档。Agent 不可访问临时根目录、其他会话目录或归档中间文件。
 
 ### T11.2 对象写入示例
 
@@ -1037,24 +1057,34 @@ func PutNewObject(ctx context.Context, client *tos.ClientV2,
 
 GetObjectV2 成功后必须关闭返回结果的 Content（io.ReadCloser），使用有界流传输给工具或用户。具体 SDK 字段和 multipart/重试行为用锁定版本验证。[TOS Go API](https://pkg.go.dev/github.com/volcengine/ve-tos-golang-sdk/v2/tos)
 
-### T11.3 跨存储一致性
+### T11.3 会话目录与快照提交
 
-1. MariaDB 记录上传意图、对象 ID 和用途，暂不可被业务引用。
-2. 上传到新 TOS key；收到成功或通过受控 Head/Get 核实内容后，将对象标为 ready。
-3. 发布、写文件或完成工具结果的事务只引用 ready 对象，维护业务引用和 revision。
-4. DB 提交失败留下未引用对象；有宽限期地查询上传状态和引用，回收确认无引用对象，并清理超时 multipart。
+resource 管理 SessionWorkspace 与 SnapshotStore，adapter/workspace 用 os/path/filepath、archive/tar、compress/gzip 实现本地操作；adapter/tos 负责对象上传。临时根通过统一配置指定，Session 目录路径由服务生成，不接受模型/用户指定宿主根。工作目录在 Session 存续期间跨 Run 复用，不在每轮结束后删除重建。
 
-TOS 与 MariaDB 没有共同事务；不能使用“本地 rename 后提交数据库”的假设。响应丢失时根据对象 ID、摘要和请求记录核实，不盲目覆盖或把对象缺失当作成功。引用删除与回收需锁定元数据、设置 deleting 状态并拒绝新引用，防止 GC 与发布竞争。
+最小元数据约定：workspace_snapshots 保存 id、space_id、session_id、source_run_id、base_snapshot_id、object_id、tos_uri、archive_sha256、manifest_ref、format_version、created_at；URI 使用稳定 `tos://bucket/key`，不保存临时签名下载 URL。Manifest 包含规范相对路径、类型（文件/目录）、文件大小及 SHA-256，保存空目录，不保存可执行权限或链接。sessions.latest_workspace_snapshot_id 指向最后确认快照；初始来源快照也通过 session.created 固定记录，Session 字段为派生指针。Run 记录开始时的 base 和结束时的 workspace_snapshot_id。
 
-读取私有 Bucket 必须由 Go 服务先做用户/空间鉴权，再从 TOS 流式代理；浏览器不获得 AK/SK，不要求直连 TOS 或额外 CORS 服务。前端静态资源来自 Go 二进制，业务附件来自 TOS，二者不混淆。
+快照提交按以下顺序执行，MVP 只做全量归档，不引入 Git、增量快照或跨快照去重服务：
 
-### T11.4 保留、恢复与故障
+1. Supervisor 等待所有执行/I/O 退出，仍持有会话占用，锁定目录，生成 Manifest 和 tar.gz；检查文件数、单文件/目录总字节和收尾超时。
+2. 分配唯一对象 ID，记录上传意图；上传 TOS 不覆盖旧 key。确认内容可读、大小及摘要后标 ready；不在 SQL 事务中等待上传。
+3. 一个 Journal 事务追加 workspace.snapshot.created，写入快照 URI/索引、最新指针和 run.finished/usage，释放占用。终态返回快照 ID；只有此步成功才代表目录持久化完成。
+4. SQL 提交结果未知时先按稳定快照 ID/append_key 核实，不能再次执行 Agent；上传成功而无引用的对象不可见，首版不自动回收。
 
-工具 publish_artifact 在运行中显式登记固定文件版本为 Artifact（T09.5），Run 结束保留已登记产物；未发布文件仍按工作区/日志引用策略保留，不自动将全部文件视为交付物；清理工作区只移除不再需要的逻辑引用，不删除仍被版本、日志、投影或产物引用的对象。TOS 生命周期策略必须与应用引用策略协调，不能按前缀盲删活跃内容。
+publish_artifact 和 Trace 原文仍在调用期间单独上传，不等待目录收尾；每次已读内容已保存到日志引用的不可变对象。快照正文不用于模型消息拼装；发生回退时仅按 T07 投影 workspace.restored 的状态说明。ContextProjector 不扫描当前工作目录，即使文件被修改也能重建先前 input。
 
-TOS 不可用或对象无法确认保存时，拒绝新的相关写操作，停止后续 Agent 动作；不得回退到本地持久化。可以保留有限内存中的未完成块，但重启后不声称其已保存。
+恢复先鉴权解析快照 ID、检查 TOS 对象和摘要，解压到新建空临时目录；验证全部清单后才绑定 Session 并追加 workspace.restored。逐条拒绝绝对路径、..、重复路径、链接、设备文件及越界项，限制解压大小、文件数和时长，禁止归档覆盖目录外文件；失败删除未绑定的临时副本，不提供部分恢复目录。原 Session 恢复最新快照；新 Session 可显式选择同空间可访问快照并独立复制，不自动继承原对话或执行状态。
 
-恢复需要 MariaDB 备份、仍保留的 TOS 对象及解密材料；数据库备份不包含对象内容。恢复验收校验对象清单/摘要和缺失状态。删除 MASS 主机运行目录后，登录状态、已发布资源和历史产物仍应能从数据库与 TOS 读取；中断执行本身按 T05 失败处理，不自动续跑。
+### T11.4 失败、保留与恢复边界
+
+正常完成、失败、超时、权限撤销及取消的已执行 Run 均尝试保存当前目录；未开始或目录尚未成功恢复的任务不生成伪快照。快照失败时追加 workspace.snapshot.failed，设置 sessions.workspace_error，保留旧快照指针；原本成功的任务改为 failed/workspace_snapshot_failed，原本失败或取消的任务保留原因并附 snapshot_error。禁止仅因已有最终模型回复就报告整个 Run 成功。
+
+实际执行停止且失败终态事务成功后可释放占用，但 workspace_error 未消除前拒绝新 Run。临时目录仍在时，授权成员可通过 `POST /sessions/{id}/workspace-snapshots/retry` 重试打包上传：占用同一会话锁，只保存当前目录及快照事实、清除错误，不重跑代码、不改写旧 Run 终态；追加事件绑定 source_run_id，终态后的事件仅供 Trace/快照查询，不再续写已关闭的 AG-UI 流。若提交结果未知，先核实原快照 ID，不能并发再保存。数据库无法保存终态时沿用 Supervisor 的故障处理，不能假报结束。
+
+临时目录丢失或进程重启后，只恢复最近已提交快照，明确展示来源及中断/未保存变更可能丢失；恢复成功后清除 workspace_error，不尝试重放工具。没有 Run 完成快照时，恢复 session.created 固定的初始来源快照；初始来源也为空才恢复空目录。workspace.restored 记录实际 snapshot_id、恢复原因和涉及的未完成/未保存 Run，异常回退同时向界面及后续模型投影说明状态（T07）。TOS 不可用或摘要不符时停止恢复并报错，不能静默降级为空目录。系统收尾权限仅能写已发生事实及已有目录快照，不能继续模型/工具执行或向失权用户提供下载。
+
+版本、日志、投影、AG-UI 历史、目录快照和产物持续保留；不增加数据 TTL、过期标记、保留时长配置、自动 GC 或生产对象生命周期删除策略。临时归档/失败解压副本随操作结束清理，已完整保存且无活跃任务的会话目录可在服务退出时清理，这是临时资源释放，不删除远端历史。认证会话有效期和供应商自身缓存有效期是既有协议约束，不属于业务历史过期方案；MVP 不因此增加后台清理系统。
+
+读取私有 Bucket 由 Go 服务鉴权代理，浏览器不获得存储凭证；恢复需要 MariaDB 备份、完整 TOS 对象和解密材料。删除原主机临时目录后仍可读取版本、Trace、产物并恢复最后确认的会话文件；不承诺恢复未保存的进程内状态。
 
 ## T12 M12 前端管理与调试
 
@@ -1062,7 +1092,7 @@ TOS 不可用或对象无法确认保存时，拒绝新的相关写操作，停�
 
 ### T12.1 页面与数据流
 
-前端源码只放在 `frontend/src/`，按 features/agents、skills、sessions、debug、runs、settings 组织；package.json、lockfile、Vite 配置和前端测试均位于 `frontend/`。公共组件为定义编辑器、版本差异、依赖选择、Trace 时间线、原始载荷查看、上下文检查、计划进度和产物列表。代码工具展示原始代码、输入版本、日志、错误及输出文件；计划进度与 Run 终态分别展示。
+前端源码只放在 `frontend/src/`，按 features/spaces、agents、skills、sessions、debug、runs、settings 组织；package.json、lockfile、Vite 配置和前端测试均位于 `frontend/`。公共组件为定义编辑器、版本差异、依赖选择、Trace 时间线、原始载荷查看、上下文检查、计划进度和产物列表。代码工具展示原始代码、文件/网络 I/O、日志、错误及已发生效果；计划进度与 Run 终态分别展示。spaces 提供创建/切换和成员列表/添加/移除；sessions 展示最近快照、快照错误及重试保存入口，新会话可选择授权快照作为文件起点。
 
 查询键统一包含 space_id，详情继续包含对象及版本 ID；变更后只失效相关查询。切换空间关闭旧 SSE、撤销旧请求、清理私有缓存和未保存表单。草稿保存携带 revision，409 时提示差异，不自动覆盖。
 
@@ -1088,7 +1118,7 @@ onFrame(message):
   commit(next, cursor)  // 状态应用成功后才前移游标
 ```
 
-这里检查的是连续的 Run 传输序号，不是允许跳号的 Session 原始序号。客户端统一控制重连：onerror/解码或应用失败时关闭旧 EventSource，用最后成功应用的 after 重新建立连接；不让浏览器已接收但未成功应用的 Last-Event-ID 跳过事件。刷新时从 0 或成对保存的快照/游标恢复，不仅凭一个旧游标重连。
+这里检查的是连续的 Run 传输序号，不是允许跳号的 Session 原始序号。客户端统一控制重连：onerror/解码或应用失败时关闭旧 EventSource，先用普通查询确认权限；401/403 显示权限错误并停止重连，其余按最后成功应用的 after 恢复；不让浏览器已接收但未成功应用的 Last-Event-ID 跳过事件。刷新时从 0 或成对保存的快照/游标恢复，不仅凭一个旧游标重连。
 
 TEXT_MESSAGE_CONTENT 按 messageId 追加，工具参数按 toolCallId 聚合，TOOL_CALL_END 只关闭参数，结果到达后才展示执行结果。失败 attempt 的已显示文本标为 incomplete，重试新建消息；RUN_CANCELLED 显示已取消，其他 RUN_ERROR 显示失败，终态关闭订阅。事件回放只更新界面，不发起工具调用。
 
@@ -1126,11 +1156,11 @@ func Assets() (fs.FS, error) {
 
 `/health/live` 表示进程存活；`/health/ready` 检查 MariaDB schema、配置及必要 TOS 连通/授权状态，使用有界缓存避免每次探针都发云请求。外部模型暂时不可用以调用错误呈现，不使整个管理服务伪装进程死亡。
 
-服务日志输出到 stdout，附 request_id/space_id/run_id，不复制用户原始内容。监控队列、并发、模型错误、Trace/TOS 写入失败、上传字节数和数据库连接；不配置业务数据目录或磁盘缓存。关闭时停止认领并完成有界 TOS/事件刷写。
+服务日志输出到 stdout，附 request_id/space_id/run_id，不复制用户原始内容。监控队列、并发、模型错误、Trace/TOS 写入失败、上传字节数和数据库连接；仅配置会话临时目录，不提供本地持久 BlobStore。关闭时停止认领并完成有界 TOS/事件刷写。
 
 ## T14 接口清单与错误语义
 
-下表的业务接口均在 `/api/v1/spaces/{space_id}` 下。字段约定在各模块与后续机器可读契约内保持一致；发布和调用操作必须记录审计或 Trace。
+空间创建/列表及成员接口见 T01；下表的空间内业务接口均在 `/api/v1/spaces/{space_id}` 下。字段约定在各模块与后续机器可读契约内保持一致；发布和调用操作必须记录审计或 Trace。
 
 | 接口组 | 主要操作 | 重要语义 |
 | --- | --- | --- |
@@ -1139,17 +1169,18 @@ func Assets() (fs.FS, error) {
 | /agents/{id}/versions、/skills/{id}/versions | POST 发布、GET 列表/详情 | 发布内容不可变，依赖精确版本 |
 | /agents/{id}/default-version | PUT | 指向合法发布版本，只影响新会话 |
 | /agents/{id}/debug-snapshots | POST | 固定草稿 revision 与 Skill 依赖 |
-| /sessions | POST/GET | 固定定义；版本和快照二选一 |
+| /sessions | POST/GET | 固定定义；发布版本和调试快照二选一；可选 source_workspace_snapshot_id 只用于文件起点 |
+| /sessions/{id}/workspace-snapshots、/sessions/{id}/workspace-snapshots/retry | GET 快照清单、POST 重试保存 | 同空间鉴权；与 Run 互斥，重试只保存未落盘的目录，不重跑任务 |
 | /sessions/{id}/runs | POST | 幂等键；同会话最多一个活跃 Run |
-| /runs/{id}、/runs/{id}/cancel | GET、POST | 取消请求不等于已停止 |
+| /runs/{id}、/runs/{id}/cancel | GET、POST | 取消请求不等于已停止；返回 workspace_snapshot_id/snapshot_error |
 | /runs/{id}/events、/runs/{id}/ui-snapshot | AG-UI over SSE、快照 GET | 同源鉴权，独立 ui_sequence、协议版本与水位一致性 |
 | /runs/{id}/trace、/sessions/{id}/journal | 分页 GET | 内部原始日志及内容引用，Session sequence 与 UI 游标分离 |
 | /runs/{id}/contexts、/payloads/{id} | GET | 投影/Manifest、epoch、缓存统计和受控完整载荷 |
-| /attachments | POST 上传并返回同空间附件 ID | 先保存原文，随 user.message.accepted 绑定后才允许工具读取；取消未引用上传按孤儿清理 |
-| /artifacts/{id}/download | GET | 权限校验、受控文件名、保留状态 |
-| /models、/credentials、/members | 基础 owner 管理操作；成员可先用同二进制命令配置 | 不引入权限矩阵；秘密不回显 |
+| /attachments | POST 上传并返回同空间附件 ID | 先保存原文，随 user.message.accepted 绑定后才允许工具读取；未引用上传不可用，不自动清理 |
+| /artifacts/{id}/download | GET | 权限校验、受控文件名、对象可用性 |
+| /models、/credentials、/members | 基础 owner 管理 API 及页面；成员规则见 T01 | 不引入权限矩阵；秘密不回显 |
 
-错误码至少包括 unauthenticated、forbidden、not_found、draft_conflict、version_conflict、run_active、idempotency_conflict、context_overflow、unsupported_capability、unsupported_event_schema、projection_unavailable、event_conflict、budget_exceeded、trace_unavailable、cursor_expired、interrupted。错误码与展示文案分离，内部堆栈不返回给客户端。
+错误码至少包括 unauthenticated、forbidden、not_found、draft_conflict、version_conflict、run_active、idempotency_conflict、context_overflow、unsupported_capability、unsupported_event_schema、projection_unavailable、event_conflict、budget_exceeded、trace_unavailable、invalid_cursor、workspace_unavailable、workspace_snapshot_failed、interrupted。错误码与展示文案分离，内部堆栈不返回给客户端。
 
 OpenAPI 是接口的可执行契约来源；事件 schema_version 单独管理，不把供应商原始响应强制转成自有固定字段。接口变更同步生成类型与契约测试，不靠修改页面绕过不一致。
 
@@ -1162,7 +1193,7 @@ mass/
 │   ├── domain/                     # 跨模块值类型、事件及纯领域规则
 │   ├── app/                        # 定义/发布、会话/Run 提交、查询与取消
 │   ├── journal/                    # 统一事件追加/读取、可信 reducer 与视图规则
-│   ├── resource/                   # 不可变内容、工作区读取与写入准备
+│   ├── resource/                   # 不可变内容、会话目录及快照编排
 │   ├── runtime/                    # 组织目录；不设包级全局 RuntimeService
 │   │   ├── scheduler/              # 轮询、准入、认领、交接
 │   │   ├── supervisor/             # Run context、取消/心跳、终态与恢复
@@ -1174,13 +1205,14 @@ mass/
 │   │   ├── modelgateway/           # attempt、重试、聚合、完整性与 usage
 │   │   └── tool/
 │   │       ├── registry/           # 工具版本、Schema 与 Handler 解析
-│   │       ├── dispatcher/         # 授权、限额、执行和原子结果提交
+│   │       ├── dispatcher/         # 授权、限额、I/O 审计和结果提交
 │   │       └── builtin/            # T09 的 14 个工具，按工具拆文件
 │   ├── adapter/
 │   │   ├── mariadb/                # 事务持久化与查询接口实现
 │   │   ├── tos/                    # TOS 对象访问，不拥有工作区业务规则
+│   │   ├── workspace/             # 当前会话真实文件、tar.gz 打包与受控恢复
 │   │   ├── eino/                   # Eino 组件、DTO 转换和原文捕获
-│   │   └── javascript/             # goja 引擎与受限数据桥接，不直接访问资源
+│   │   └── javascript/             # goja 引擎及注入的 fs/net 接口，不能越过授权范围
 │   ├── transport/agui/             # 协议事件映射与持久化传输视图
 │   ├── transport/http/ui/          # assets.go + 生成的 dist 嵌入目录
 │   └── bootstrap/                  # 单配置树及依赖组装
@@ -1202,9 +1234,9 @@ mass/
     └── engineering.md
 ```
 
-不建立持久化的 `data/blobs`、宿主工作区或前端独立服务配置。源码和构建缓存可以使用开发磁盘，应用资源持久化只使用 MariaDB/TOS。
+不建立持久化的 `data/blobs` 或前端独立服务配置；允许通过 workspace_temp_root 创建会话临时工作目录。持久资源仍只使用 MariaDB/TOS，本地目录可由快照重建。
 
-待收敛项仅包括 MariaDB/Go/Node 与 Eino/TOS SDK 的精确版本、实际 TOS 配置与权限、Eino 模型供应商和模型、计数器、默认限额及保留时长；已指定的单服务、MariaDB、TOS、Eino、frontend、简单登录及 AG-UI over SSE 不再作为待选方案。AG-UI Go/TS SDK 精确版本与兼容事件子集在 D00 固定并验证。
+待收敛项仅包括 MariaDB/Go/Node 与 Eino/TOS SDK 的精确版本、实际 TOS 配置与权限、Eino 模型供应商和模型、计数器、默认限额与快照容量上限；已指定的单服务、MariaDB、TOS、Eino、frontend、简单登录及 AG-UI over SSE 不再作为待选方案。AG-UI Go/TS SDK 精确版本与兼容事件子集在 D00 固定并验证。
 
 模型缓存能力、默认压缩阈值/目标余量和投影策略版本在对应实现阶段收敛；未知缓存命中不能用假数据补齐。
 
