@@ -21,4 +21,4 @@ try {
 const missing = spawnSync(resolve('bin/mass'), ['check-config', '--config', 'configs/mass.example.yaml'], { env: { PATH: '' }, encoding: 'utf8' })
 assert.notEqual(missing.status, 0, 'missing required environment must fail')
 assert.match(missing.stderr, /requires a nonempty environment value/)
-console.log('D00 process smoke passed: embedded UI/API, honest readiness, no runtime Node/PATH dependency, clean SIGTERM, missing-config failure.')
+console.log('D02 process smoke passed: embedded UI/API, honest readiness, no runtime Node/PATH dependency, clean SIGTERM, missing-config failure.')

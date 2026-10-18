@@ -1,0 +1,38 @@
+-- +goose NO TRANSACTION
+-- +goose Up
+CREATE TABLE users (
+ id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
+ username VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL UNIQUE,
+ password_hash VARBINARY(128) NOT NULL,
+ created_at DATETIME(6) NOT NULL DEFAULT UTC_TIMESTAMP(6)
+) ENGINE=InnoDB;
+CREATE TABLE spaces (
+ id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
+ name VARCHAR(100) NOT NULL,
+ created_at DATETIME(6) NOT NULL DEFAULT UTC_TIMESTAMP(6)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE space_members (
+ space_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ user_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ is_owner BOOLEAN NOT NULL DEFAULT FALSE,
+ PRIMARY KEY(space_id,user_id),
+ FOREIGN KEY(space_id) REFERENCES spaces(id),
+ FOREIGN KEY(user_id) REFERENCES users(id)
+) ENGINE=InnoDB;
+CREATE TABLE auth_sessions (
+ token_hash BINARY(32) PRIMARY KEY,
+ user_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ expires_at DATETIME(6) NOT NULL,
+ FOREIGN KEY(user_id) REFERENCES users(id),
+ KEY session_expiry(expires_at)
+) ENGINE=InnoDB;
+CREATE TABLE audit_logs (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ space_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ actor_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ action VARCHAR(64) CHARACTER SET ascii NOT NULL,
+ target_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ created_at DATETIME(6) NOT NULL DEFAULT UTC_TIMESTAMP(6),
+ FOREIGN KEY(space_id) REFERENCES spaces(id),
+ FOREIGN KEY(actor_id) REFERENCES users(id)
+) ENGINE=InnoDB;

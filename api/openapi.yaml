@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: MASS API
-  version: 0.0.0-d00
-  description: D00 foundation endpoints. Business endpoints are added with their implementation stages.
+  version: 0.2.0
+  description: D02 identity, spaces and approved Ark model configuration. D01 object storage readiness remains incomplete.
 servers:
   - url: /
 paths:
@@ -16,18 +16,22 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [status]
+                required:
+                  - status
                 properties:
-                  status: {type: string, const: alive}
+                  status:
+                    type: string
+                    const: alive
   /health/ready:
     get:
       operationId: getReadiness
       responses:
         '503':
-          description: D00 has no storage/schema checks; the application is not ready for business operations.
+          description: Full D01 storage readiness is not implemented; this does not claim TOS connectivity.
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/Error'}
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/system:
     get:
       operationId: getSystem
@@ -36,66 +40,1066 @@ paths:
           description: Non-secret application build metadata.
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/SystemInfo'}
+              schema:
+                $ref: '#/components/schemas/SystemInfo'
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      security: []
+      parameters:
+        - name: Origin
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginInput'
+  /api/v1/auth/me:
+    get:
+      operationId: currentUser
+      security:
+        - SessionCookie: []
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/auth/logout:
+    post:
+      operationId: logout
+      security: []
+      parameters:
+        - name: Origin
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
+      responses:
+        '204':
+          description: Success
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces:
+    post:
+      operationId: createSpace
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: Origin
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Space'
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpaceInput'
+    get:
+      operationId: listSpaces
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpacePage'
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/members:
+    get:
+      operationId: listMembers
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberPage'
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: addMember
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: Origin
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
+      responses:
+        '204':
+          description: Success
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemberInput'
+  /api/v1/spaces/{space_id}/members/{user_id}:
+    delete:
+      operationId: removeMember
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: Origin
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
+      responses:
+        '204':
+          description: Success
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/credentials:
+    get:
+      operationId: listCredentials
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialPage'
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: createCredential
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: Origin
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Credential'
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialCreate'
+  /api/v1/spaces/{space_id}/credentials/{id}:
+    put:
+      operationId: replaceCredential
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: Origin
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Credential'
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialUpdate'
+  /api/v1/spaces/{space_id}/models:
+    get:
+      operationId: listModels
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: available
+          in: query
+          schema:
+            type: boolean
+          description: Only enabled models with enabled credentials.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelPage'
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: createModel
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: Origin
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Model'
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModelInput'
+  /api/v1/spaces/{space_id}/models/{id}:
+    get:
+      operationId: getModel
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Model'
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      operationId: updateModel
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: Origin
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Model'
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModelUpdate'
+    delete:
+      operationId: disableModel
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: Origin
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
+      responses:
+        '204':
+          description: Success
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevisionInput'
+  /api/v1/spaces/{space_id}/model-capabilities:
+    get:
+      operationId: modelCapabilities
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelCapabilities'
+        default:
+          description: >-
+            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
+            type, 429 login throttled or 500 storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   schemas:
     SystemInfo:
       type: object
       additionalProperties: false
-      required: [name, version, stage, protocol_profile]
+      required:
+        - name
+        - version
+        - stage
+        - protocol_profile
       properties:
-        name: {type: string, const: MASS}
-        version: {type: string}
-        stage: {type: string, const: D00}
-        protocol_profile: {type: string, const: mass-agui-v1}
+        name:
+          type: string
+          const: MASS
+        version:
+          type: string
+        stage:
+          type: string
+          enum:
+            - D00
+            - D02
+        protocol_profile:
+          type: string
+          const: mass-agui-v1
     Error:
       type: object
-      required: [code, message, request_id]
+      required:
+        - code
+        - message
+        - request_id
       additionalProperties: false
       properties:
-        code: {type: string, pattern: '^[a-z][a-z0-9_]*$'}
-        message: {type: string}
-        request_id: {type: string, pattern: '^[0-9a-f]{32}$'}
-        details: {type: object, additionalProperties: true}
+        code:
+          type: string
+          pattern: ^[a-z][a-z0-9_]*$
+        message:
+          type: string
+        request_id:
+          type: string
+          pattern: ^[0-9a-f]{32}$
+        details:
+          type: object
+          additionalProperties: true
     ResourceID:
       type: string
       format: uuid
       description: Server-generated UUID; opaque to callers, case-sensitive in storage.
     Sequence:
       type: string
-      pattern: '^(0|[1-9][0-9]{0,18})$'
+      pattern: ^(0|[1-9][0-9]{0,18})$
       description: Canonical decimal string in 0..9223372036854775807. Journal and UI sequences are distinct domains.
     PageCursor:
       type: string
       maxLength: 1024
-      description: Opaque cursor bound to scope, query and immutable result boundary; never an offset into mutable data.
+      description: >-
+        Authenticated keyset cursor bound to the current actor, space and query. D02 management lists are live views;
+        refresh to see entries inserted before the cursor.
     PageInfo:
       type: object
-      required: [next_cursor]
+      required:
+        - next_cursor
       properties:
-        next_cursor: {type: [string, 'null'], maxLength: 1024}
+        next_cursor:
+          type:
+            - string
+            - 'null'
+          maxLength: 1024
     IdempotencyKey:
       type: string
       minLength: 1
       maxLength: 128
-      pattern: '^[A-Za-z0-9._:-]+$'
+      pattern: ^[A-Za-z0-9._:-]+$
       description: Scoped to space, actor and operation. Same key/content returns the previous result; changed content is 409.
+    User:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - username
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceID'
+        username:
+          type: string
+          pattern: ^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,63}$
+    Space:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - is_owner
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceID'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        is_owner:
+          type: boolean
+    Member:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - username
+        - is_owner
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceID'
+        username:
+          type: string
+          pattern: ^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,63}$
+        is_owner:
+          type: boolean
+    LoginInput:
+      type: object
+      additionalProperties: false
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          pattern: ^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,63}$
+        password:
+          type: string
+          format: password
+          maxLength: 72
+    SpaceInput:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+    MemberInput:
+      type: object
+      additionalProperties: false
+      required:
+        - username
+      properties:
+        username:
+          type: string
+          pattern: ^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,63}$
+    Credential:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - enabled
+        - revision
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceID'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        enabled:
+          type: boolean
+        revision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+    CredentialInput:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - enabled
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        secret:
+          type: string
+          format: password
+          writeOnly: true
+          maxLength: 8192
+        enabled:
+          type: boolean
+        revision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+    Model:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - provider
+        - model_id
+        - endpoint
+        - credential_id
+        - context_window
+        - max_output_tokens
+        - temperature
+        - enabled
+        - revision
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceID'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        provider:
+          type: string
+          const: ark
+        model_id:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$
+        endpoint:
+          type: string
+          const: https://ark.cn-beijing.volces.com/api/v3
+        credential_id:
+          $ref: '#/components/schemas/ResourceID'
+        context_window:
+          type: integer
+          minimum: 2
+          maximum: 2000000
+        max_output_tokens:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+        enabled:
+          type: boolean
+        revision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+    RevisionInput:
+      type: object
+      additionalProperties: false
+      required:
+        - revision
+      properties:
+        revision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+    ModelCapabilities:
+      type: object
+      additionalProperties: false
+      required:
+        - provider
+        - endpoint
+        - input_types
+        - streaming
+        - tool_calling
+      properties:
+        provider:
+          type: string
+          const: ark
+        endpoint:
+          type: string
+          const: https://ark.cn-beijing.volces.com/api/v3
+        input_types:
+          type: array
+          items:
+            type: string
+            const: text
+        streaming:
+          type: boolean
+          const: true
+        tool_calling:
+          type: boolean
+          const: true
+    ModelInput:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - provider
+        - model_id
+        - endpoint
+        - credential_id
+        - context_window
+        - max_output_tokens
+        - temperature
+        - enabled
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        provider:
+          type: string
+          const: ark
+        model_id:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$
+        endpoint:
+          type: string
+          const: https://ark.cn-beijing.volces.com/api/v3
+        credential_id:
+          $ref: '#/components/schemas/ResourceID'
+        context_window:
+          type: integer
+          minimum: 2
+          maximum: 2000000
+        max_output_tokens:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+        enabled:
+          type: boolean
+        revision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+    SpacePage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Space'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+    MemberPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Member'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+    CredentialPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Credential'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+    ModelPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Model'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+    CredentialCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - secret
+        - enabled
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        secret:
+          type: string
+          format: password
+          writeOnly: true
+          maxLength: 8192
+        enabled:
+          type: boolean
+        revision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+    CredentialUpdate:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - enabled
+        - revision
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        secret:
+          type: string
+          format: password
+          writeOnly: true
+          maxLength: 8192
+        enabled:
+          type: boolean
+        revision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+    ModelUpdate:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - provider
+        - model_id
+        - endpoint
+        - credential_id
+        - context_window
+        - max_output_tokens
+        - temperature
+        - enabled
+        - revision
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        provider:
+          type: string
+          const: ark
+        model_id:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$
+        endpoint:
+          type: string
+          const: https://ark.cn-beijing.volces.com/api/v3
+        credential_id:
+          $ref: '#/components/schemas/ResourceID'
+        context_window:
+          type: integer
+          minimum: 2
+          maximum: 2000000
+        max_output_tokens:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+        enabled:
+          type: boolean
+        revision:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
       in: header
       required: true
-      schema: {$ref: '#/components/schemas/IdempotencyKey'}
+      schema:
+        $ref: '#/components/schemas/IdempotencyKey'
     Limit:
       name: limit
       in: query
-      schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
     Cursor:
       name: cursor
       in: query
-      schema: {$ref: '#/components/schemas/PageCursor'}
+      schema:
+        $ref: '#/components/schemas/PageCursor'
     After:
       name: after
       in: query
-      schema: {$ref: '#/components/schemas/Sequence'}
+      schema:
+        $ref: '#/components/schemas/Sequence'
       description: Run UI sequence; if Last-Event-ID is also supplied they must be equal.
+  securitySchemes:
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: mass_session

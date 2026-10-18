@@ -13,7 +13,7 @@ for (const line of lines) {
 }
 
 const root = execFileSync('sh', ['scripts/go.sh', 'env', 'GOROOT'], { encoding: 'utf8' }).trim()
-const sources = execFileSync('sh', ['scripts/go.sh', 'list', '-f', '{{.Dir}}|{{join .GoFiles ","}}|{{join .TestGoFiles ","}}|{{join .XTestGoFiles ","}}', './cmd/...', './internal/...', './tests/...', './scripts/...'], { encoding: 'utf8' }).trim().split('\n').flatMap(line => {
+const sources = execFileSync('sh', ['scripts/go.sh', 'list', '-f', '{{.Dir}}|{{join .GoFiles ","}}|{{join .TestGoFiles ","}}|{{join .XTestGoFiles ","}}', './cmd/...', './internal/...', './db/...', './tests/...', './scripts/...'], { encoding: 'utf8' }).trim().split('\n').flatMap(line => {
   const [directory, ...groups] = line.split('|')
   return groups.flatMap(group => group.split(',').filter(Boolean).map(file => join(directory, file)))
 })

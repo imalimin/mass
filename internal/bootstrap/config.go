@@ -25,7 +25,8 @@ type Config struct {
 		ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
 	} `yaml:"http"`
 	Database struct {
-		DSNEnv string `yaml:"dsn_env"`
+		DSNEnv          string `yaml:"dsn_env"`
+		MigrationDSNEnv string `yaml:"migration_dsn_env"`
 	} `yaml:"database"`
 	TOS struct {
 		EndpointEnv  string `yaml:"endpoint_env"`
@@ -140,14 +141,14 @@ func (c Config) validate(getenv func(string) string) error {
 	if c.Auth.CookieSecure && u.Scheme != "https" {
 		return errors.New("secure cookies require HTTPS public_url")
 	}
-	if c.HTTP.ShutdownTimeout <= 0 || c.Auth.SessionTTL <= 0 || c.Runtime.SnapshotTimeout <= 0 || c.Runtime.MaxConcurrentRuns < 1 {
+	if c.HTTP.ShutdownTimeout <= 0 || c.Auth.SessionTTL < time.Second || c.Runtime.SnapshotTimeout <= 0 || c.Runtime.MaxConcurrentRuns < 1 {
 		return errors.New("timeouts and concurrency limits must be positive")
 	}
 	if !filepath.IsAbs(c.Runtime.WorkspaceTempRoot) || filepath.Clean(c.Runtime.WorkspaceTempRoot) == string(filepath.Separator) {
 		return errors.New("workspace_temp_root must be an absolute dedicated directory")
 	}
 	if c.LLM.Framework != "eino" || c.LLM.Provider != "ark" {
-		return errors.New("D00 supports the verified eino/ark provider")
+		return errors.New("only the verified eino/ark provider is supported")
 	}
 	if c.TOS.Prefix == "" || strings.HasPrefix(c.TOS.Prefix, "/") || strings.Contains(c.TOS.Prefix, "..") {
 		return errors.New("tos.prefix must be a relative object prefix")
@@ -157,7 +158,7 @@ func (c Config) validate(getenv func(string) string) error {
 		return errors.New("tools.code limits must be positive")
 	}
 	refs := []struct{ field, name string }{
-		{"database.dsn_env", c.Database.DSNEnv}, {"tos.endpoint_env", c.TOS.EndpointEnv}, {"tos.region_env", c.TOS.RegionEnv}, {"tos.bucket_env", c.TOS.BucketEnv}, {"tos.access_key_env", c.TOS.AccessKeyEnv}, {"tos.secret_key_env", c.TOS.SecretKeyEnv}, {"llm.model_env", c.LLM.ModelEnv}, {"llm.api_key_env", c.LLM.APIKeyEnv}, {"secrets.master_key_env", c.Secrets.MasterKeyEnv},
+		{"database.dsn_env", c.Database.DSNEnv}, {"tos.endpoint_env", c.TOS.EndpointEnv}, {"tos.region_env", c.TOS.RegionEnv}, {"tos.bucket_env", c.TOS.BucketEnv}, {"tos.access_key_env", c.TOS.AccessKeyEnv}, {"tos.secret_key_env", c.TOS.SecretKeyEnv}, {"secrets.master_key_env", c.Secrets.MasterKeyEnv},
 	}
 	for _, ref := range refs {
 		if ref.name == "" || getenv == nil || strings.TrimSpace(getenv(ref.name)) == "" {

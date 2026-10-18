@@ -5,7 +5,7 @@
 > - 包含：建设阶段、前置条件、具体任务、交付物、测试门槛、验收清单、运行交付步骤和进度证据。
 > - 不包含：替代用户目标或维护另一套技术方案；发现缺失细节应先补入技术方案再实施。
 > - 输入依次为[系统设计指引](design-guide.md)、[系统架构设计](architecture.md)、[技术方案](technical-design.md)。所有开发计划、验收和操作说明集中在本文，不再拆计划、测试或操作主文档。
-> - 状态：D00 已完成，D01—D10 未开始；更新：2026-10-18。当前实现与验证证据见 E15.1，后续阶段的命令和路径仍为待建立约定。
+> - 状态：D00 已完成，D02 管理能力已实现并验收；D01 仅补齐数据库前置、完整存储仍未完成，D03—D10 未开始；更新：2026-10-18。当前实现与验证证据见 E15.1，后续阶段的命令和路径仍为待建立约定。
 
 ## E00 四份文档与 AI 执行规则
 
@@ -45,8 +45,8 @@
 | 阶段 | 对应模块 | 前置条件 | 阶段产出 | 当前状态 |
 | --- | --- | --- | --- | --- |
 | D00 工程与契约基础 | M08/M09/M13 | 四文档基线 | 可构建服务/页面、依赖锁定、Eino 传输与 goja 宿主接口验证 | 已完成，2026-10-18，见 E15.1 |
-| D01 数据、文件与事件基础 | M10/M11/M13 | D00 | MariaDB/TOS、会话目录与快照、会话日志、基础迁移 | 未开始 |
-| D02 身份、空间与模型配置 | M01/M03/M12 | D01 | 登录、空间/成员页面与 API、最小模型/凭证配置及隔离 | 未开始 |
+| D01 数据、文件与事件基础 | M10/M11/M13 | D00 | MariaDB/TOS、会话目录与快照、会话日志、基础迁移 | 数据库连接与身份/空间迁移已补齐；TOS、快照与日志未实现，见 E15.2 |
+| D02 身份、空间与模型配置 | M01/M03/M12 | D01 | 登录、空间/成员页面与 API、最小模型/凭证配置及隔离 | 本阶段管理闭环已验收，2026-10-18；D01 完整前置仍有缺口，见 E15.2 |
 | D03 定义与版本闭环 | M02/M12 | D02 | Agent/Skill 编辑、发布、引用与版本查看 | 未开始 |
 | D04 最小运行纵向闭环 | M04—M11 | D03 | Eino 接入、原文 Trace、最小投影、读写文件/产物、取消和快照恢复 | 未开始 |
 | D05 内置工具闭环 | M09/M11 | D04 | 补齐 14 个工具、代码文件/网络能力、计划/交付与 I/O 记录 | 未开始 |
@@ -261,16 +261,17 @@ D00 已建立下表中标明 D00 的入口；后续阶段入口随实现增加�
 | make fmt / make lint | Go 格式、静态检查、前端 lint | D00 |
 | make typecheck | 单独执行 TypeScript 类型检查 | D00 |
 | make test-unit | Go 单元/协议测试与 Vitest | D00 起逐步增加 |
-| make test-integration | 专用 MariaDB 和授权 TOS 测试前缀的集成测试 | D01 起 |
-| make test-e2e | 当前为进程冒烟与 Playwright 应用壳检查；D02 起扩展业务闭环 | D00 起 |
+| make test-integration | 当前为真实 MariaDB 的 D02 事务/隔离与 API 契约测试；TOS 集成尚未实现 | D02，D01 存储待补 |
+| make test-e2e | 进程冒烟与 Playwright 双账号空间/成员/模型/凭证闭环；需隔离 MariaDB | D02 |
 | make test-race | 支持平台上执行 Go race 检查 | D00 起 |
 | make build-frontend | 构建 frontend 并同步 Go embed 目录，Go 编译/测试的前置步骤 | D00 |
 | make dev | 前端构建监听与 Go 重建，浏览器只访问 Go 服务地址 | D00 |
 | make build | 前端嵌入与单一 Go 二进制交付构建 | D00/D10 |
 | make smoke-tos | 显式授权测试前缀中的真实 TOS 上传、读取、不可变与清理验证 | D01 |
 | make smoke-real | 显式配置凭证后的最小真实模型验证，D07 扩展工具/摘要 | D04/D07 |
-| make verify-d00 | 汇总当前阶段生成物、类型、静态、单元/协议、进程/浏览器与构建检查 | D00 |
-| make verify | 完整 MVP 门槛；当前明确失败并提示使用 verify-d00，不能伪报集成通过 | D10 前完成 |
+| make verify-d00 | 保留生成物、类型、静态与单元/协议检查；D02 后业务进程测试需数据库 | D00 兼容入口 |
+| make verify-d02 | 生成、类型、lint、单元/协议、真实 MariaDB 集成、进程与浏览器检查 | D02 |
+| make verify | 完整 MVP 门槛；当前明确失败并提示使用 verify-d02，不能伪报集成通过 | D10 前完成 |
 
 Vite 构建不能代替 TypeScript 类型检查。Vitest 用于前端状态与工具函数；Playwright 用于实际浏览器流程，不通过页面内部状态注入绕过核心后端行为。工具参考：[Vitest](https://vitest.dev/guide/)、[Playwright](https://playwright.dev/docs/intro)。
 
@@ -280,7 +281,7 @@ Vite 构建不能代替 TypeScript 类型检查。Vitest 用于前端状态与�
 
 ## E14 MVP 验收矩阵
 
-以下是完整 MVP 验收要求；D00 已覆盖的协议/工程部分证据见 E15.1，其余仍待验证。各用例使用两个用户、两个空间、至少两个 Skill 和一个可控模型夹具，涉及真实模型的用例单独注明。
+以下是完整 MVP 验收要求；D00 证据见 E15.1；D02 的 A01/A50 和 A02/A49 身份管理部分见 E15.2，其余仍待相应阶段验证。各用例使用两个用户、两个空间、至少两个 Skill 和一个可控模型夹具，涉及真实模型的用例单独注明。
 
 | 编号 | 目标/模块 | 操作与故障注入 | 预期结果 | 验证阶段 |
 | --- | --- | --- | --- | --- |
@@ -359,6 +360,7 @@ P1 审查整改文档更新完成：按用户确认将 run_code 文件范围限�
 | 阶段/日期 | 代码版本及实现位置 | 验证环境与命令 | 结果与证据位置 | 剩余事项 |
 | --- | --- | --- | --- | --- |
 | D00 / 2026-10-18 | 基于 c61cd19 的当前工作区；cmd/mass、internal、frontend、api、db、scripts、tests/dependencies | macOS arm64；Go 1.26.9、Node 24.22.0、npm 11.19.1 | 总门槛、race、隔离源码重建与浏览器通过，见 E15.1 | D01 存储/日志实现与真实 MariaDB/TOS 验证 |
+| D02 / 2026-10-18 | 基于 8d7a615；identity/mariadb/secrets、迁移、HTTP、空间页面与集成测试 | 同上；真实 MariaDB 11.8.9 | verify-d02、race、双账号浏览器闭环通过，见 E15.2 | D01 TOS/快照/Journal 与 D04 Supervisor 接入 |
 
 每次交接应说明当前阶段、已完成小步、实际文件、通过的检查、未通过/未运行的检查及下一步。不得把设计片段写入仓库后即标记功能完成，也不得跳过真实模型验证而宣称完整交付。
 
@@ -401,3 +403,48 @@ Linux 缺 Chromium 系统库时执行 `make setup-browser PLAYWRIGHT_INSTALL_FLA
 日常运行：复制 configs/mass.example.yaml 为不入库的 mass.yaml，设置其中各 *_env 指定的值（主密钥为 base64 编码的 32 字节），执行 `bin/mass check-config --config mass.yaml`，再 `bin/mass serve --config mass.yaml`。`make dev CONFIG=mass.yaml` 监听源码/配置变化并构建重启，浏览器始终只访问 Go 地址。D00 的 ready=503 是阶段边界，不是云服务验证结果。`make test-e2e` 可执行无需私人配置的进程和浏览器预览检查。
 
 下一阶段为 D01：MariaDB 事务/迁移、TOS 对象与 ready 引用、会话目录/快照、SessionJournal 与视图原子提交。专用数据库及 TOS 测试配置用于真实集成验收，D00 的 SDK 编译和本地协议试验不能替代它。
+
+
+### E15.2 D02 身份、空间与模型配置（2026-10-18）
+
+用户明确要求继续 D02，仓库起点为 8d7a615（只有 D00）。本次先补齐 D02 必需的 D01 子集：MariaDB 连接池、UTC/utf8mb4、事务封装、嵌入式 goose 迁移、区分应用/迁移账号、用户与空间基础表；随后完成 D02 管理闭环。D01 的 content_objects、TOS、SessionJournal、会话目录和快照均未实现，D01 不标记完成，后续运行相关阶段仍需先补这些前置。
+
+交付入口：
+
+- cmd/mass 新增 migrate、user create；internal/app/identity 实现登录会话、成员、凭证/模型规则及权限复核/撤销订阅，internal/adapter/mariadb 实现真实事务和空间条件，internal/adapter/secrets 实现 AES-GCM。
+- internal/transport/http/identity.go 与 api/openapi.yaml 提供登录/退出/me、空间、成员、凭证、模型/能力查询；更新自动生成前端类型。
+- frontend/src/features/spaces 与应用壳提供真实登录、空间创建/切换、成员添加/移除/本人退出、凭证创建/替换/禁用、模型创建/修改/停用。401/403 清空私有视图，取消旧请求并停止权限失败页面的重复查询。
+- db/migrations/00001_identity.sql、00002_models.sql 为真实迁移；应用启动必须已有版本 2，不自动借用迁移权限。数据库 schema 检查通过仍不表示 TOS 接入，/health/ready 继续诚实返回 503/dependencies_not_initialized。
+
+验证环境为 macOS arm64、Go 1.26.9、Node 24.22.0、npm 11.19.1、真实 MariaDB 11.8.9。MariaDB Homebrew bottle 与 OpenSSL 依赖下载到 /tmp 后仅用于测试，数据目录 /tmp/mass-d02-tools/data，禁用 TCP、使用专用 Unix socket；没有安装/启动系统服务。每次测试随机创建 mass_test_* 数据库及独立应用账号，清理只删除本次生成的库/账号，不读取部署 DSN。tests/testdb 同时验证空库迁移和重复迁移，应用账号仅授予 SELECT/INSERT/UPDATE/DELETE。
+
+执行结果：make verify-d02 与 make test-race 全部通过；远端 CI 未触发。
+
+```sh
+# PATH 中使用 .node-version 指定的工具链；设置的必须是专用测试服务器。
+export MASS_TEST_ADMIN_DSN='root@unix(/tmp/mass-d02-tools/mysql.sock)/'
+make verify-d02
+make test-race
+```
+
+真实数据库/API 集成覆盖：密码摘要、错误/未知账号、匿名/到期/退出会话、Cookie 属性、Origin/Content-Type 拒绝、基础限速；两用户两空间、owner 不可删除、添加成员幂等、本人退出、跨空间模型/凭证引用拒绝；游标作用域防移植；审计触发器故障导致成员变更回滚；并发读取与撤销、撤销订阅通知及后续秘密解析拒绝；凭证密文不含明文、替换/禁用、revision 冲突、可用模型过滤。集成测试还按 OpenAPI Schema 校验实际 HTTP 响应，独立密码学测试覆盖 nonce 随机性、AAD 空间/ID/key 绑定和篡改拒绝。
+
+Playwright 使用 CLI 预置的 alice/bob 两个账号，经页面完成登录→分别创建空间→添加已有成员→普通成员查看→创建凭证和模型→修改模型→移除成员→被撤销页面清理→禁用凭证→退出后访问拒绝。桌面与 390px 页面检查无横向溢出、无浏览器运行错误；截图为忽略的 .cache/d02-desktop.png / d02-mobile.png。CLI 迁移/用户创建/serve 的子进程使用空 PATH，验证运行不依赖 Node。A01/A50 通过；A02/A49 当前已有身份/空间/模型资源部分通过，下载、SSE、运行期 I/O 与 Supervisor 取消尚待 D04/D05/D08/D09，不能视为整条 MVP 验收通过。
+
+启动步骤（配置值通过受控环境提供，密码不要放命令行明文）：
+
+```sh
+make build
+cp configs/mass.example.yaml mass.yaml
+# 配置 MASS_MARIADB_DSN、MASS_MARIADB_MIGRATION_DSN、MASS_MASTER_KEY
+# 及模板列出的 TOS 环境引用；D02 不调用 TOS，但保留配置校验。
+bin/mass migrate --config mass.yaml
+# MASS_INITIAL_PASSWORD 由你的秘密环境提供，12—72 字节。
+bin/mass user create --config mass.yaml --username alice --password-env MASS_INITIAL_PASSWORD
+# 为第二个账号设置独立密码后再次执行 user create。
+bin/mass serve --config mass.yaml
+```
+
+应用账号的授权范围为该业务库的 SELECT/INSERT/UPDATE/DELETE；迁移账号另行提供建表/索引/外键等 DDL 权限，生产 serve 无需注入 migration DSN。http.public_url 必须是浏览器实际访问的 origin，HTTPS 使用 cookie_secure=true。新建空间后通过页面添加已有账号，再配置 Ark API 密钥与已开通模型；示例/测试密钥不代表真实供应商调用成功。主密钥备份与限制见 T03.1，当前不能直接更换主密钥后丢弃旧值。
+
+CI 已配置固定 mariadb:11.8.9 服务与 verify-d02/race，本地验收不代表远端 CI 已执行。完整 make verify 仍拒绝宣称 MVP 完成。下一步应补完 D01 对象、日志与快照，再进入依赖它们的定义与运行阶段；D02 的后台权限复核接口将在 D04 接到 Supervisor。

@@ -1,13 +1,13 @@
 SHELL := /bin/sh
 .NOTPARALLEL:
 GO := sh scripts/go.sh
-GO_PACKAGES := ./cmd/... ./internal/... ./tests/... ./scripts/...
+GO_PACKAGES := ./cmd/... ./internal/... ./db/... ./tests/... ./scripts/...
 CONFIG ?= mass.yaml
 VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
 export NPM_CONFIG_CACHE := $(CURDIR)/.cache/npm
 export PLAYWRIGHT_BROWSERS_PATH := $(CURDIR)/.cache/playwright
 
-.PHONY: setup setup-browser generate generate-check fmt lint typecheck test-unit test-race test-e2e build-frontend dev build verify-d00 verify
+.PHONY: setup setup-browser generate generate-check fmt lint typecheck test-unit test-race test-e2e build-frontend dev build verify-d00 verify-d02 test-integration verify
 setup:
 	node scripts/check-toolchain.mjs
 	$(GO) mod download
@@ -55,10 +55,17 @@ test-e2e: build
 dev:
 	node scripts/dev.mjs $(CONFIG)
 
-verify-d00: generate-check typecheck lint test-unit test-e2e
+test-integration: build-frontend
+	@test -n "$$MASS_TEST_ADMIN_DSN" || (echo 'Set MASS_TEST_ADMIN_DSN to an isolated MariaDB server' >&2; exit 1)
+	$(GO) test -count=1 ./tests/integration/...
+
+verify-d02: generate-check typecheck lint test-unit test-integration test-e2e
+	git diff --check
+
+verify-d00: generate-check typecheck lint test-unit
 	git diff --check
 
 # Full MVP verification must not claim success while later stages are absent.
 verify:
-	@echo 'Full MVP verify is unavailable before D10; use make verify-d00 for the implemented stage.' >&2
+	@echo 'Full MVP verify is unavailable before D10; use make verify-d02 for identity/space/model management.' >&2
 	@exit 1

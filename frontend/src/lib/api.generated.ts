@@ -52,6 +52,182 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["currentUser"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listSpaces"];
+        put?: never;
+        post: operations["createSpace"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listMembers"];
+        put?: never;
+        post: operations["addMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/members/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["removeMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listCredentials"];
+        put?: never;
+        post: operations["createCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/credentials/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["replaceCredential"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listModels"];
+        put?: never;
+        post: operations["createModel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/models/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getModel"];
+        put: operations["updateModel"];
+        post?: never;
+        delete: operations["disableModel"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/model-capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["modelCapabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -60,8 +236,8 @@ export interface components {
             /** @constant */
             name: "MASS";
             version: string;
-            /** @constant */
-            stage: "D00";
+            /** @enum {string} */
+            stage: "D00" | "D02";
             /** @constant */
             protocol_profile: "mass-agui-v1";
         };
@@ -80,13 +256,138 @@ export interface components {
         ResourceID: string;
         /** @description Canonical decimal string in 0..9223372036854775807. Journal and UI sequences are distinct domains. */
         Sequence: string;
-        /** @description Opaque cursor bound to scope, query and immutable result boundary; never an offset into mutable data. */
+        /** @description Authenticated keyset cursor bound to the current actor, space and query. D02 management lists are live views; refresh to see entries inserted before the cursor. */
         PageCursor: string;
         PageInfo: {
             next_cursor: string | null;
         };
         /** @description Scoped to space, actor and operation. Same key/content returns the previous result; changed content is 409. */
         IdempotencyKey: string;
+        User: {
+            id: components["schemas"]["ResourceID"];
+            username: string;
+        };
+        Space: {
+            id: components["schemas"]["ResourceID"];
+            name: string;
+            is_owner: boolean;
+        };
+        Member: {
+            id: components["schemas"]["ResourceID"];
+            username: string;
+            is_owner: boolean;
+        };
+        LoginInput: {
+            username: string;
+            /** Format: password */
+            password: string;
+        };
+        SpaceInput: {
+            name: string;
+        };
+        MemberInput: {
+            username: string;
+        };
+        Credential: {
+            id: components["schemas"]["ResourceID"];
+            name: string;
+            enabled: boolean;
+            revision: number;
+        };
+        CredentialInput: {
+            name: string;
+            /** Format: password */
+            secret?: string;
+            enabled: boolean;
+            revision?: number;
+        };
+        Model: {
+            id: components["schemas"]["ResourceID"];
+            name: string;
+            /** @constant */
+            provider: "ark";
+            model_id: string;
+            /** @constant */
+            endpoint: "https://ark.cn-beijing.volces.com/api/v3";
+            credential_id: components["schemas"]["ResourceID"];
+            context_window: number;
+            max_output_tokens: number;
+            temperature: number;
+            enabled: boolean;
+            revision: number;
+        };
+        RevisionInput: {
+            revision: number;
+        };
+        ModelCapabilities: {
+            /** @constant */
+            provider: "ark";
+            /** @constant */
+            endpoint: "https://ark.cn-beijing.volces.com/api/v3";
+            input_types: "text"[];
+            /** @constant */
+            streaming: true;
+            /** @constant */
+            tool_calling: true;
+        };
+        ModelInput: {
+            name: string;
+            /** @constant */
+            provider: "ark";
+            model_id: string;
+            /** @constant */
+            endpoint: "https://ark.cn-beijing.volces.com/api/v3";
+            credential_id: components["schemas"]["ResourceID"];
+            context_window: number;
+            max_output_tokens: number;
+            temperature: number;
+            enabled: boolean;
+            revision?: number;
+        };
+        SpacePage: {
+            items: components["schemas"]["Space"][];
+            next_cursor: string | null;
+        };
+        MemberPage: {
+            items: components["schemas"]["Member"][];
+            next_cursor: string | null;
+        };
+        CredentialPage: {
+            items: components["schemas"]["Credential"][];
+            next_cursor: string | null;
+        };
+        ModelPage: {
+            items: components["schemas"]["Model"][];
+            next_cursor: string | null;
+        };
+        CredentialCreate: {
+            name: string;
+            /** Format: password */
+            secret: string;
+            enabled: boolean;
+            revision?: number;
+        };
+        CredentialUpdate: {
+            name: string;
+            /** Format: password */
+            secret?: string;
+            enabled: boolean;
+            revision: number;
+        };
+        ModelUpdate: {
+            name: string;
+            /** @constant */
+            provider: "ark";
+            model_id: string;
+            /** @constant */
+            endpoint: "https://ark.cn-beijing.volces.com/api/v3";
+            credential_id: components["schemas"]["ResourceID"];
+            context_window: number;
+            max_output_tokens: number;
+            temperature: number;
+            enabled: boolean;
+            revision: number;
+        };
     };
     responses: never;
     parameters: {
@@ -134,7 +435,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description D00 has no storage/schema checks; the application is not ready for business operations. */
+            /** @description Full D01 storage readiness is not implemented; this does not claim TOS connectivity. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -161,6 +462,596 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemInfo"];
+                };
+            };
+        };
+    };
+    login: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
+                Origin: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    currentUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
+                Origin: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listSpaces: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpacePage"];
+                };
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createSpace: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
+                Origin: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpaceInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Space"];
+                };
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listMembers: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberPage"];
+                };
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    addMember: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
+                Origin: string;
+            };
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    removeMember: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
+                Origin: string;
+            };
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+                user_id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listCredentials: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialPage"];
+                };
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createCredential: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
+                Origin: string;
+            };
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialCreate"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Credential"];
+                };
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    replaceCredential: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
+                Origin: string;
+            };
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+                id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialUpdate"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Credential"];
+                };
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listModels: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Only enabled models with enabled credentials. */
+                available?: boolean;
+            };
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelPage"];
+                };
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createModel: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
+                Origin: string;
+            };
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Model"];
+                };
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getModel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+                id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Model"];
+                };
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    updateModel: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
+                Origin: string;
+            };
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+                id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelUpdate"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Model"];
+                };
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    disableModel: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
+                Origin: string;
+            };
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+                id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevisionInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    modelCapabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCapabilities"];
+                };
+            };
+            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };

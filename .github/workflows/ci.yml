@@ -1,4 +1,4 @@
-name: D00 foundation
+name: D02 management
 on: [push, pull_request]
 permissions:
   contents: read
@@ -6,6 +6,18 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    services:
+      mariadb:
+        image: mariadb:11.8.9
+        env:
+          MARIADB_ROOT_PASSWORD: mass-ci-test-only
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    env:
+      MASS_TEST_ADMIN_DSN: root:mass-ci-test-only@tcp(127.0.0.1:3306)/
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -18,5 +30,5 @@ jobs:
       - run: npm install --global npm@11.19.1
       - run: make setup
       - run: make setup-browser PLAYWRIGHT_INSTALL_FLAGS=--with-deps
-      - run: make verify-d00
+      - run: make verify-d02
       - run: make test-race

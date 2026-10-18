@@ -17,16 +17,21 @@ type ErrorBody struct {
 	RequestID string `json:"request_id"`
 }
 
-// NewHandler exposes only foundation capabilities. Readiness deliberately fails
-// until the MariaDB/schema and TOS checks are installed in D01.
-func NewHandler(assets fs.FS, version string, logger *slog.Logger) http.Handler {
+// NewHandler optionally installs D02 management endpoints. Full readiness stays
+// unavailable until the remaining D01 object storage checks are implemented.
+func NewHandler(assets fs.FS, version string, logger *slog.Logger, options ...IdentityOptions) http.Handler {
 	mux := http.NewServeMux()
+	stage := "D00"
+	if len(options) > 0 {
+		registerIdentity(mux, options[0], logger)
+		stage = "D02"
+	}
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status": "alive"}) })
 	mux.HandleFunc("GET /health/ready", func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, 503, "dependencies_not_initialized", "Storage readiness checks are scheduled for D01")
+		writeError(w, 503, "dependencies_not_initialized", "TOS and complete D01 storage readiness are not yet implemented")
 	})
 	mux.HandleFunc("GET /api/v1/system", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]string{"name": "MASS", "version": version, "stage": "D00", "protocol_profile": "mass-agui-v1"})
+		writeJSON(w, 200, map[string]string{"name": "MASS", "version": version, "stage": stage, "protocol_profile": "mass-agui-v1"})
 	})
 	// Reserve both roots and descendants; API/health misses never become HTML.
 	for _, prefix := range []string{"/api", "/api/", "/health", "/health/"} {
@@ -39,7 +44,7 @@ func NewHandler(assets fs.FS, version string, logger *slog.Logger) http.Handler 
 			writeError(w, 405, "method_not_allowed", "Method not allowed")
 			return
 		}
-		if r.URL.Path == "/" || r.URL.Path == "/spaces" {
+		if r.URL.Path == "/" || r.URL.Path == "/spaces" || r.URL.Path == "/login" {
 			index, err := fs.ReadFile(assets, "index.html")
 			if err != nil {
 				writeError(w, 503, "ui_unavailable", "UI build is unavailable")

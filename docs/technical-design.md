@@ -5,7 +5,7 @@
 > - 包含：技术选型、模块算法、存储与接口设计、核心代码、运行配置、兼容性和实现限制。
 > - 不包含：重新定义产品目标，或维护开发进度、测试执行报告和交付步骤。
 > - 依据：[系统设计指引](design-guide.md)和[系统架构设计](architecture.md)；编码、测试与交付按[工程开发文档](engineering.md)执行。以后各模块细节继续补充在本文，不拆专题文档。
-> - 状态：技术方案基线，D00 已收敛契约见 T00.6；更新：2026-10-18。实际实现与验证范围见工程开发文档；片段中未定义的工程类型需在对应阶段补齐。
+> - 状态：技术方案基线，D00 已收敛契约见 T00.6，D02 管理能力见 T01.1/T03.1；更新：2026-10-18。实际实现与验证范围见工程开发文档；片段中未定义的工程类型需在对应阶段补齐。
 
 ## T00 技术基线与依赖
 
@@ -124,6 +124,7 @@ http:
   public_url: "https://mass.example.com"
 database:
   dsn_env: "MASS_MARIADB_DSN"
+  migration_dsn_env: "MASS_MARIADB_MIGRATION_DSN"
 tos:
   endpoint_env: "MASS_TOS_ENDPOINT"
   region_env: "MASS_TOS_REGION"
@@ -164,7 +165,7 @@ tools:
 
 ### T00.6 D00 已收敛的工程契约（2026-10-18）
 
-工具链固定 Go 1.26.9、Node.js 24.22.0（npm 11.19.1），MariaDB 目标版本为 11.8.9 LTS；实际数据库接入与迁移执行在 D01 验证。精确 Go/前端依赖分别以 go.mod/go.sum、frontend/package-lock.json 为准；TypeScript 使用 5.9.3 以满足 openapi-typescript 的 5.x peer 约束。服务编译前必须构建并同步前端资源。
+工具链固定 Go 1.26.9、Node.js 24.22.0（npm 11.19.1），MariaDB 目标版本为 11.8.9 LTS；D00 时尚未接入数据库；D02 补齐的连接与迁移契约见 T01.1。精确 Go/前端依赖分别以 go.mod/go.sum、frontend/package-lock.json 为准；TypeScript 使用 5.9.3 以满足 openapi-typescript 的 5.x peer 约束。服务编译前必须构建并同步前端资源。
 
 D00 只开放 `serve`、`check-config`、`version` 命令及 `/api/v1/system`、`/health/live`、`/health/ready`。配置拒绝未知字段、多文档、别名、过深/过大输入及缺失秘密来源；master_key_env 使用 base64 编码的 32 字节密钥。`http.shutdown_timeout` 控制有界关闭。此时 live=200，ready=503/dependencies_not_initialized；D01 安装真实存储/schema 检查后再具备业务就绪条件，不以静态成功响应冒充接入。
 
@@ -208,6 +209,18 @@ Cookie 使用 SameSite=Lax，HTTPS 下 Secure；本地回环地址开发可显�
 模型 HTTP、代码网络请求、文件循环和 VM 接收取消；等待实际退出后才释放会话占用。正在传输的请求或已经发生的副作用不能追溯撤销，但之后不启动新动作。服务使用独立有界收尾 context 保存已收到的结果、权限失败和已有文件快照；这是系统收尾权限，不允许被移除主体借此读取内容或继续执行。数据库无法验证权限时拒绝继续，以实际存储错误结束，不伪称 403。
 
 SSE/下载已发送响应头后无法改 HTTP 状态：停止后续数据并关闭连接，前端通过普通 API 复核；得到 401/403 后清空私有视图、显示对应错误并停止重连。订阅者失去权限只终止其连接；只有 Run 发起者失去权限才终止该 Run，其他授权成员可查询失败事实。
+
+### T01.1 D02 已实现的身份与空间契约
+
+应用编排位于 internal/app/identity，MariaDB Repository 位于 internal/adapter/mariadb，HTTP 层只负责 Cookie、请求检查与 DTO。新增依赖 golang.org/x/crypto v0.58.0（bcrypt 默认 cost=10）；用户名为大小写敏感 ASCII 的 3—64 字符，密码创建要求 12—72 字节。CLI 只接受 --password-env 指定秘密环境来源，不接受明文密码参数。登录返回统一失败信息，未知用户也执行 bcrypt；每个直接连接 IP 每分钟最多 10 次尝试、全局最多 4 个并发密码校验，限速桶上限 4096。暂不信任 X-Forwarded-For；反向代理部署目前共享代理地址限额，后续需要显式可信代理配置才能扩展。
+
+随机会话令牌为 32 字节，浏览器只收到十六进制 Cookie；MariaDB 保存 SHA-256 摘要和 UTC 固定到期时间。Cookie 名 mass_session，Path=/、HttpOnly、SameSite=Lax，Secure 由经过回环/HTTPS 检查的配置控制。重新登录替换当前 Cookie 对应的旧服务端会话；退出删除服务端记录。请求体上限 16 KiB，拒绝未知字段及额外 JSON 文档。所有管理写请求（包括 DELETE 和退出）要求 application/json 与精确匹配 http.public_url 的 Origin；不根据客户端 Host 推导可信来源。
+
+迁移 00001_identity 建立 users、spaces、space_members、auth_sessions、audit_logs；00002_models 建立 credentials/model_configs。迁移嵌入同一二进制，只提供向前迁移，serve 检查版本而不自动执行 DDL。database.migration_dsn_env 仅 migrate 要求和使用，应用 DSN 只需 SELECT/INSERT/UPDATE/DELETE；DDL 不能假定回滚，部分失败须检查实际 schema 后修复。连接统一 utf8mb4/UTC、有界连接池和网络超时。基础迁移是本次 D02 的必要前置补充，不表示 D01 的对象、快照与日志已存在。
+
+所有空间内 Repository 操作按「空间行 → 成员关系 → 资源」顺序在事务内授权并加锁；成员变更、模型和凭证变更与审计共同提交。添加已有成员幂等且不重复审计，普通成员可退出自己，owner 永不可删除。模型/凭证联合外键携带 space_id，跨空间 ID 不可用于建立引用。列表默认 20、最多 100 条，以 UUID keyset 排序，HMAC 游标绑定 actor/space/list/filter；管理列表为实时视图，新增到已翻页位置之前的项需刷新才能看到，不宣称不可变历史快照。
+
+WatchAccess 先登记取消订阅再查询权限，消除订阅和撤权的检查竞态；RemoveMember 事务提交后通知同空间/主体的订阅者。CheckAccess 为每次动作与心跳提供重新查询入口，数据库错误保持存储失败语义。D04 尚未实现，通知目前通过真实数据库集成测试验证；尚无 Supervisor、后台 Run 或长连接可供终止，不能把 context 取消等同于实际退出。前端私有查询键包含 space_id；切换、退出、401/403 时取消请求、清空私有缓存及表单，成员页面每 5 秒复核，收到权限失败后停止该页面查询。
 
 ## T02 M02 定义、Skill 依赖与发布
 
@@ -285,6 +298,14 @@ Run 固定非秘密有效配置和凭证引用；每次实际调用重新验证�
 参数能力在发布/调试和实际调用前校验。Provider 不支持工具、流式或输入类型时返回明确错误，不静默降级。费用记录同时保存价格来源及版本；无价格时只展示 usage。
 
 接口组：模型配置 CRUD、可用模型能力查询、凭证创建/替换/禁用；凭证响应永不回显秘密。
+
+### T03.1 D02 最小模型配置
+
+批准端点固定 https://ark.cn-beijing.volces.com/api/v3，组件固定 D00 已验证的 Ark；model-capabilities 查询给出 text、streaming、tool_calling 支持范围。owner 填写已开通的模型 ID、context_window、max_output_tokens 和 temperature，后端检查模型 ID 格式、端点、容量和参数边界，不允许任意 URL。可用模型列表只返回模型和凭证均启用的配置。供应商的实际模型能力仍需 D04/D07 真实调用验证；D02 的配置保存不发起收费调用，也不声称测试用 ep-test 真实存在。
+
+模型支持创建、列表、详情、修改、停用；DELETE 是保留引用的软停用。凭证支持创建、修改/替换/禁用；修改必须携带 revision，旧 revision 返回 409。响应和审计不包含秘密、密文或主密钥。AES-256-GCM 使用 Go 随机 nonce AEAD，AAD 为版本化的 space_id/credential_id/key_id 元组；key_id 为主密钥 SHA-256 的前 16 字节标识。主密钥由已有 base64 32 字节配置来源加载，缺失或不匹配不能解密。
+
+当前只有一个有效主密钥；不得直接更换主密钥后丢弃旧值。主密钥迁移/密钥环未实现，备份恢复须保留与密文对应的旧主密钥；D07 再扩展完整轮换流程。供应商 API 密钥替换已支持，使用新随机 nonce 并增加 revision。服务端 ModelSecret 重新检查成员、模型/凭证启用状态后才能解密，HTTP 不暴露此方法；D04 必须在每次调用前使用并配合撤权通知/心跳，而不能缓存授权结果。llm.model_env/api_key_env 保留为后续接入字段，D02 不再要求它们非空，也不会从这些变量自动向所有空间导入凭证。
 
 ## T04 M04 会话、消息与 Run
 
