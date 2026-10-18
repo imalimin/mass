@@ -5,7 +5,7 @@
 > - 包含：技术选型、模块算法、存储与接口设计、核心代码、运行配置、兼容性和实现限制。
 > - 不包含：重新定义产品目标，或维护开发进度、测试执行报告和交付步骤。
 > - 依据：[系统设计指引](design-guide.md)和[系统架构设计](architecture.md)；编码、测试与交付按[工程开发文档](engineering.md)执行。以后各模块细节继续补充在本文，不拆专题文档。
-> - 状态：技术方案基线，D00 已收敛契约见 T00.6，D02 管理能力见 T01.1/T03.1，D01 持久化实现在 T10.2.1/T11.5；更新：2026-10-18。实际实现与验证范围见工程开发文档；片段中未定义的工程类型需在对应阶段补齐。
+> - 状态：技术方案基线，D00 已收敛契约见 T00.6，D02 管理能力见 T01.1/T03.1，D01 持久化实现在 T10.2.1/T11.5，D03 定义管理见 T02.1；更新：2026-10-18。实际实现与验证范围见工程开发文档；片段中未定义的工程类型需在对应阶段补齐。
 
 ## T00 技术基线与依赖
 
@@ -61,9 +61,9 @@ MVP 不增加 Redis、独立消息队列、向量数据库或独立认证服务�
 | --- | --- |
 | users / auth_sessions | username、password_hash；会话令牌摘要、到期时间 |
 | spaces / space_members | 空间、成员归属、is_owner；不引入细粒度权限表 |
-| agents / agent_drafts / agent_versions | 草稿 revision、内容对象引用、不可变版本和默认指针 |
-| skills / skill_drafts / skill_versions | 方法内容、草稿、版本及 TOS 资源清单 |
-| agent_version_skills | AgentVersion 到准确 SkillVersion、显示版本号和顺序 |
+| definitions / definition_drafts / definition_versions | Agent/Skill 共用结构，kind 区分；草稿 revision、不可变发布版本/调试快照、默认指针 |
+| definition_dependencies | Agent 发布版本/调试快照到准确 SkillVersion、显示版本号、摘要和顺序 |
+| definition_draft_objects / definition_version_objects | 分别保存草稿/历史版本的同空间 ready 内容引用 |
 | model_configs / credentials | Eino 组件类型、实际模型配置、加密供应商凭证 |
 | sessions | 空间归属、last_sequence、latest_workspace_snapshot_id、workspace_error；固定定义来自 session.created；本地目录位置由服务生成 |
 | runtime_events / event_objects | Session 内追加日志、事件格式版本、因果关系、有序内容对象关联 |
@@ -236,11 +236,11 @@ skill: SKILL.md + assets/
 ```yaml
 schema_version: 1
 name: research-assistant
-model: default-model
+model: 00000000-0000-4000-8000-000000000001 # 本空间可用模型配置 ID
 skills:
-  - id: information-extraction
+  - id: 00000000-0000-4000-8000-000000000002
     version: 1.2.0
-  - id: report-writing
+  - id: 00000000-0000-4000-8000-000000000003
     version: 2.0.1
 tools: [read_file, write_file, read_skill_resource]
 context:
@@ -286,6 +286,20 @@ func (s *CatalogService) PublishAgent(ctx context.Context, in PublishInput) (Ver
 调试使用同一解析与校验链创建不可变 snapshot。默认版本切换不改版本内容；归档只阻止新的选择，不破坏原有引用。从草稿移除资源不删除已保存的历史对象；MVP 无自动过期或回收策略。
 
 接口组：Agent/Skill 创建、草稿 GET/PUT（携带 revision）、TOS 资源上传、发布、版本列表/详情/差异、依赖查询、归档；Agent 另有默认版本切换与调试快照创建。
+
+### T02.1 D03 已实现的定义契约
+
+新增迁移 00004_definitions，不改动已发布的前三份迁移；serve 要求 schema 4。Agent 与 Skill 的元数据、草稿和版本复用 definitions / definition_drafts / definition_versions，以 kind 区分，外部 API 仍为 /agents 和 /skills。全部关联含 space_id；definition_dependencies 保存有序、准确的 Skill 内部版本 ID，数据库外键限制删除被引用版本。版本 label 在单一定义内区分大小写且唯一；latest（不区分大小写）及范围表达式不被接受。debug=true 的不可变快照无发布 label，不改变默认版本。
+
+定义名称为 1—64 字节的小写字母/数字/连字符标识，首字符为字母。agent.yaml 的 model 和 skills[].id 分别使用本空间模型配置 ID 与 Skill ID，version 是准确显示版本；name 必须与定义名称一致。严格拒绝未知字段、重复键、多 YAML 文档、alias/anchor、合并键、非法类型、未知工具、重复 Skill/工具及越界限额。草稿允许空正文和空配置便于新建；非空配置保存时校验结构，发布和调试快照进一步要求非空正文、完整配置、可用模型/凭证和未归档的准确依赖。输入/输出预留总量不得超过模型上下文容量，输出预留不超过模型上限。平台上限为 1000 步、3600 秒；这里是配置校验，运行时执行仍由 D04/D05 实现。
+
+Document 包含 Markdown 原文、配置原文和资源清单；正文上限 256 KiB、配置 64 KiB、资源最多 100 个、单资源 8 MiB。资源路径只允许 assets/ 下的规范相对路径，拒绝穿越、绝对路径、大小写冲突及文件/目录前缀冲突。JSON 上传接口使用 data_base64，HTTP 请求上限 12 MiB；资源上传自动推进草稿 revision。上传先经 ContentStore 写 TOS 并验证 ready，再在普通管理事务中提交草稿与引用；失败的未引用对象不能下载。草稿移除资源只移除当前引用，历史版本引用仍有效。
+
+发布准备阶段在授权事务中读取草稿、解析依赖和当前模型非秘密有效配置；随后在事务外将完整 Bundle 保存为 TOS 不可变对象，内容含原文、资源摘要、有序依赖 ID/label/hash、模型和凭证引用，不含秘密。最终事务再次检查成员、归档状态、草稿 revision、模型/依赖和 Bundle 摘要，再原子写入版本、依赖、对象引用、审计及 Agent 首次默认指针。准备后模型或草稿变化返回 draft_conflict，不发布混合内容；唯一版本冲突返回 version_conflict。网络写入不占用 SQL 事务，SQL 回滚保留不可见孤立对象，无 GC。
+
+调试快照走相同准备/发布链，读取版本时验证 TOS 完整摘要并在远端读取后复核成员。默认版本切换只改指针；当前默认版本必须先切换后才能归档。归档阻止新的发布/依赖选择，已发布依赖与历史内容可继续读取。DELETE 版本不会物理删除；被引用返回 version_referenced，其他返回 invalid_definition，生命周期通过归档管理。复制定义创建独立新草稿，重写 Agent 配置 name，资源复用不可变对象。资源下载复用 D01 payloads 鉴权读取。
+
+前端使用延迟加载的 Monaco 编辑器和只读差异视图；支持模型/Skill 准确版本选择、工具选择、Markdown 预览、上传/移除资源、发布、默认版本、归档、复制、反向引用和调试快照。409 保留本地内容，读取服务器草稿展示差异，仅在显式点击后载入服务器内容。Markdown 不执行原始 HTML、不显示外部图片，只开放 http/https 链接。run_code 选择项说明文件与网络权限范围。调试快照只表明定义已固定，页面明确运行尚待 D04。
 
 ## T03 M03 模型配置与凭证
 

@@ -109,4 +109,5 @@ func TestRealTOSStorage(t *testing.T) {
 		t.Fatal("TOS immutable object changed")
 	}
 	exerciseStorage(t, tracked, prefix)
+	exerciseCatalog(t, tracked, prefix+"catalog/")
 }

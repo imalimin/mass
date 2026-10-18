@@ -13,11 +13,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/imalimin/mass/internal/app/catalog"
 	"github.com/imalimin/mass/internal/app/identity"
 	"github.com/imalimin/mass/internal/domain/storage"
 )
 
+type endpoint func(http.ResponseWriter, *http.Request, identity.User) error
 type IdentityOptions struct {
+	Catalog *catalog.Service
 	Storage *StorageOptions
 	Service *identity.Service
 	Origin  string
@@ -80,6 +83,7 @@ func apiError(w http.ResponseWriter, err error, logger *slog.Logger) {
 		status  int
 		message string
 	}{
+		{catalog.ErrDraft, 409, "Draft changed; compare and reload before saving"}, {catalog.ErrVersion, 409, "Version label already published"}, {catalog.ErrReferenced, 409, "Version is referenced"}, {catalog.ErrConfig, 400, "Invalid definition or operation"},
 		{storage.ErrConflict, 409, "Storage fact conflict"}, {storage.ErrSchema, 400, "Unsupported event schema"}, {storage.ErrInvalid, 400, "Invalid storage request"}, {storage.ErrIntegrity, 503, "Content unavailable"}, {storage.ErrWorkspace, 409, "Workspace unavailable"}, {storage.ErrActive, 409, "Session has an active run"},
 		{identity.ErrUnauthenticated, 401, "Please sign in"}, {identity.ErrForbidden, 403, "Access denied"}, {identity.ErrNotFound, 404, "Resource not found"}, {identity.ErrConflict, 409, "Resource changed or already exists"}, {identity.ErrInvalid, 400, "Invalid request"}, {identity.ErrCapability, 400, "Unsupported model capability or endpoint"},
 	} {
@@ -108,7 +112,6 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 	cookie := func(w http.ResponseWriter, value string, expiry time.Time, maxAge int) {
 		http.SetCookie(w, &http.Cookie{Name: "mass_session", Value: value, Path: "/", HttpOnly: true, Secure: options.Secure, SameSite: http.SameSiteLaxMode, Expires: expiry, MaxAge: maxAge})
 	}
-	type endpoint func(http.ResponseWriter, *http.Request, identity.User) error
 	register := func(pattern string, auth bool, fn endpoint) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
@@ -211,6 +214,7 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 		q, err := svc.Query(scope, r.URL.Query().Get("cursor"), limit)
 		return q, limit, scope, err
 	}
+	registerCatalog(register, options, query)
 	register("GET /api/v1/spaces", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		q, n, scope, err := query(r, u)
 		if err != nil {

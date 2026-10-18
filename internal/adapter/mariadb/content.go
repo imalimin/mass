@@ -59,7 +59,7 @@ func (s *Store) Object(ctx context.Context, actor, space, id string, referenced 
 	err = s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
 		query := "SELECT " + objectColumns + " FROM content_objects WHERE space_id=? AND id=? AND state='ready'"
 		if referenced {
-			query += " AND EXISTS(SELECT 1 FROM event_objects e WHERE e.space_id=content_objects.space_id AND e.object_id=content_objects.id)"
+			query += " AND (EXISTS(SELECT 1 FROM event_objects e WHERE e.space_id=content_objects.space_id AND e.object_id=content_objects.id) OR EXISTS(SELECT 1 FROM definition_draft_objects d WHERE d.space_id=content_objects.space_id AND d.object_id=content_objects.id) OR EXISTS(SELECT 1 FROM definition_version_objects v WHERE v.space_id=content_objects.space_id AND v.object_id=content_objects.id))"
 		}
 		var e error
 		o, e = scanObject(tx.QueryRowContext(ctx, query, space, id).Scan)

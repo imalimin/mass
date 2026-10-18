@@ -15,6 +15,7 @@ import (
 	"github.com/imalimin/mass/internal/adapter/secrets"
 	"github.com/imalimin/mass/internal/adapter/tos"
 	"github.com/imalimin/mass/internal/adapter/workspace"
+	"github.com/imalimin/mass/internal/app/catalog"
 	"github.com/imalimin/mass/internal/app/identity"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
@@ -64,10 +65,10 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Handler: httptransport.NewHandler(ui.Assets(), version, logger, httptransport.IdentityOptions{Service: service, Origin: strings.TrimSuffix(c.HTTP.PublicURL, "/"), Secure: c.Auth.CookieSecure, Storage: storageOptions}), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
+	server := &http.Server{Handler: httptransport.NewHandler(ui.Assets(), version, logger, httptransport.IdentityOptions{Service: service, Origin: strings.TrimSuffix(c.HTTP.PublicURL, "/"), Secure: c.Auth.CookieSecure, Storage: storageOptions, Catalog: &catalog.Service{Repo: store, Content: content}}), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	result := make(chan error, 1)
 	go func() { result <- server.Serve(listener) }()
-	logger.Info("MASS listening", "address", listener.Addr().String(), "stage", "D02")
+	logger.Info("MASS listening", "address", listener.Addr().String(), "stage", "D03")
 	select {
 	case err := <-result:
 		if errors.Is(err, http.ErrServerClosed) {

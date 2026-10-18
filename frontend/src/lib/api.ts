@@ -2,7 +2,7 @@ import type { components } from './api.generated'
 export type Schema = components['schemas']
 export class APIError extends Error {
   constructor(public status: number, public code: string) {
-    super(({ unauthenticated: '登录已失效，请重新登录。', forbidden: '没有访问权限，或成员资格已被撤销。', conflict: '内容已变更，请刷新后重试。', not_found: '未找到账号或资源。', invalid_request: '请检查输入内容。', unsupported_capability: '模型能力或端点不受支持。', rate_limited: '登录尝试过于频繁，请稍后重试。' } as Record<string, string>)[code] ?? '操作未完成，请稍后重试。')
+    super(({ draft_conflict: '草稿已更新，请比较差异后重新编辑。', version_conflict: '此版本号已经发布，请使用新的版本号。', version_referenced: '此版本正在被引用，不能删除或归档默认版本。', invalid_definition: '请检查定义内容、准确版本、资源路径及配置限额。', content_unavailable: '持久化内容暂不可用，请稍后重试。', unauthenticated: '登录已失效，请重新登录。', forbidden: '没有访问权限，或成员资格已被撤销。', conflict: '内容已变更，请刷新后重试。', not_found: '未找到账号或资源。', invalid_request: '请检查输入内容。', unsupported_capability: '模型能力或端点不受支持。', rate_limited: '登录尝试过于频繁，请稍后重试。' } as Record<string, string>)[code] ?? '操作未完成，请稍后重试。')
   }
 }
 export async function request<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {

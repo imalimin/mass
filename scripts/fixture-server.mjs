@@ -4,13 +4,14 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createServer } from 'node:net'
+import { startTOSFixture } from './tos-fixture.mjs'
 
-export async function startFixtureServer() {
+export async function startFixtureServer({ storage = false } = {}) {
   if (!process.env.MASS_TEST_ADMIN_DSN) throw new Error('MASS_TEST_ADMIN_DSN must identify a disposable MariaDB test server')
   const directory = await mkdtemp(join(tmpdir(), 'mass-d02-'))
   const database = spawn('sh', ['scripts/go.sh', 'run', './scripts/test-database'], { stdio: ['pipe', 'pipe', 'pipe'] })
   const databaseExited = once(database, 'exit')
-  let child, exited, stopped = false, errors = '', fixtureError = ''
+  let tos, child, exited, stopped = false, errors = '', fixtureError = ''
   database.stderr.setEncoding('utf8').on('data', chunk => { fixtureError += chunk })
   const stop = async () => {
     if (stopped) return
@@ -22,6 +23,7 @@ export async function startFixtureServer() {
         try { const [code, signal] = await exited; if (code !== 0 || signal) throw new Error(`Unclean process shutdown: ${code} ${signal}; ${errors}`) } finally { clearTimeout(timeout) }
       }
     } finally {
+      await tos?.stop()
       database.stdin.end()
       const [code] = await databaseExited
       await rm(directory, { recursive: true, force: true })
@@ -41,9 +43,10 @@ export async function startFixtureServer() {
     const url = `http://127.0.0.1:${port}`
     const config = (await readFile('configs/mass.example.yaml', 'utf8')).replaceAll('127.0.0.1:8080', `127.0.0.1:${port}`)
     const configPath = join(directory, 'mass.yaml'); await writeFile(configPath, config)
+    if (storage) tos = await startTOSFixture()
     const env = {
       PATH: '', MASS_MARIADB_DSN: connection.dsn, MASS_MARIADB_MIGRATION_DSN: connection.migration_dsn,
-      MASS_TOS_ENDPOINT: 'offline-fixture', MASS_TOS_REGION: 'offline-fixture', MASS_TOS_BUCKET: 'offline-fixture',
+      MASS_TOS_ENDPOINT: tos?.endpoint ?? 'offline-fixture', MASS_TOS_REGION: 'offline-fixture', MASS_TOS_BUCKET: 'offline-fixture',
       MASS_TOS_ACCESS_KEY: 'offline-fixture', MASS_TOS_SECRET_KEY: 'offline-fixture', MASS_MASTER_KEY: Buffer.alloc(32, 5).toString('base64'),
     }
     const cli = args => { const result = spawnSync(resolve('bin/mass'), [...args, '--config', configPath], { cwd: directory, env, encoding: 'utf8' }); if (result.status !== 0) throw new Error(`Fixture CLI failed: ${result.stderr}`) }

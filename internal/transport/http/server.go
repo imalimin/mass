@@ -24,10 +24,13 @@ func NewHandler(assets fs.FS, version string, logger *slog.Logger, options ...Id
 	if len(options) > 0 {
 		registerIdentity(mux, options[0], logger)
 		stage = "D02"
+		if options[0].Catalog != nil {
+			stage = "D03"
+		}
 	}
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status": "alive"}) })
 	mux.HandleFunc("GET /health/ready", func(w http.ResponseWriter, r *http.Request) {
-		if len(options) == 0 || options[0].Storage == nil {
+		if len(options) == 0 || options[0].Storage == nil || options[0].Storage.Check == nil {
 			writeError(w, 503, "dependencies_not_initialized", "Storage services are unavailable")
 			return
 		}

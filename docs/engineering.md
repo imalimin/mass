@@ -5,7 +5,7 @@
 > - 包含：建设阶段、前置条件、具体任务、交付物、测试门槛、验收清单、运行交付步骤和进度证据。
 > - 不包含：替代用户目标或维护另一套技术方案；发现缺失细节应先补入技术方案再实施。
 > - 输入依次为[系统设计指引](design-guide.md)、[系统架构设计](architecture.md)、[技术方案](technical-design.md)。所有开发计划、验收和操作说明集中在本文，不再拆计划、测试或操作主文档。
-> - 状态：D00—D02 已完成；D01 已补齐并通过与既有 D02 的兼容回归，D03—D10 未开始；更新：2026-10-18。当前实现与验证证据见 E15.1—E15.3，后续阶段的命令和路径仍为待建立约定。
+> - 状态：D00—D03 已完成；D01/D02 兼容回归通过，D04—D10 未开始；更新：2026-10-18。当前实现与验证证据见 E15.1—E15.4，后续阶段的命令和路径仍为待建立约定。
 
 ## E00 四份文档与 AI 执行规则
 
@@ -47,7 +47,7 @@
 | D00 工程与契约基础 | M08/M09/M13 | 四文档基线 | 可构建服务/页面、依赖锁定、Eino 传输与 goja 宿主接口验证 | 已完成，2026-10-18，见 E15.1 |
 | D01 数据、文件与事件基础 | M10/M11/M13 | D00 | MariaDB/TOS、会话目录与快照、会话日志、基础迁移 | 已完成，2026-10-18，见 E15.3 |
 | D02 身份、空间与模型配置 | M01/M03/M12 | D01 | 登录、空间/成员页面与 API、最小模型/凭证配置及隔离 | 已完成；D01 补齐后兼容回归通过，见 E15.2/E15.3 |
-| D03 定义与版本闭环 | M02/M12 | D02 | Agent/Skill 编辑、发布、引用与版本查看 | 未开始 |
+| D03 定义与版本闭环 | M02/M12 | D02 | Agent/Skill 编辑、发布、引用与版本查看 | 已完成，2026-10-18，见 E15.4 |
 | D04 最小运行纵向闭环 | M04—M11 | D03 | Eino 接入、原文 Trace、最小投影、读写文件/产物、取消和快照恢复 | 未开始 |
 | D05 内置工具闭环 | M09/M11 | D04 | 补齐 14 个工具、代码文件/网络能力、计划/交付与 I/O 记录 | 未开始 |
 | D06 上下文完整能力 | M07 | D05 | 确定性投影、阶段摘要、稳定前缀、大结果和来源检查 | 未开始 |
@@ -251,7 +251,7 @@
 
 ## E13 统一开发与验证入口
 
-D00—D02 已建立下表标明相应阶段的入口；后续阶段入口随实现增加，不提供固定成功占位。实际通过范围见 E15.1—E15.3。
+D00—D03 已建立下表标明相应阶段的入口；后续阶段入口随实现增加，不提供固定成功占位。实际通过范围见 E15.1—E15.4。
 
 | 入口 | 行为 | 建立阶段 |
 | --- | --- | --- |
@@ -261,18 +261,20 @@ D00—D02 已建立下表标明相应阶段的入口；后续阶段入口随实�
 | make fmt / make lint | Go 格式、静态检查、前端 lint | D00 |
 | make typecheck | 单独执行 TypeScript 类型检查 | D00 |
 | make test-unit | Go 单元/协议测试与 Vitest | D00 起逐步增加 |
-| make test-integration | 真实 MariaDB 的 D01 日志/快照事务、D02 升级/隔离与 API 契约；默认不访问云存储 | D01/D02 |
+| make test-integration | 真实 MariaDB 的 D01—D03 升级、事务、定义/版本、隔离与 API 契约；默认不访问云存储 | D01—D03 |
 | make test-e2e | 进程冒烟与 Playwright 双账号空间/成员/模型/凭证闭环；需隔离 MariaDB | D02 |
+| make test-catalog-e2e | 真实 Go/MariaDB、官方 SDK 对接回环 TOS 协议夹具，Chromium 完成定义/版本与编辑冲突闭环 | D03 |
 | make test-race | 支持平台上执行 Go race 检查 | D00 起 |
 | make build-frontend | 构建 frontend 并同步 Go embed 目录，Go 编译/测试的前置步骤 | D00 |
 | make dev | 前端构建监听与 Go 重建，浏览器只访问 Go 服务地址 | D00 |
 | make build | 前端嵌入与单一 Go 二进制交付构建 | D00/D10 |
-| make smoke-tos | 显式测试环境中的真实 TOS 上传/读取/不可变、MariaDB 故障与快照恢复；仅清理本次生成的精确对象 key | D01 |
+| make smoke-tos | 真实 TOS 内容/快照和 D03 发布/资源读取、故障回滚；只清理本次精确对象 key | D01/D03 |
 | make smoke-real | 显式配置凭证后的最小真实模型验证，D07 扩展工具/摘要 | D04/D07 |
 | make verify-d00 | 保留生成物、类型、静态与单元/协议检查；D02 后业务进程测试需数据库 | D00 兼容入口 |
 | make verify-d02 | 生成、类型、lint、单元/协议、真实 MariaDB 集成、进程与 D02 浏览器检查（含 D01 本地回归） | D01/D02 |
 | make verify-d01 | verify-d02 加 smoke-tos；必须显式配置专用 MariaDB、TOS 与测试前缀 | D01 全量验收 |
-| make verify | 完整 MVP 门槛；当前明确失败并提示使用 verify-d02，不能伪报集成通过 | D10 前完成 |
+| make verify-d03 | verify-d02 加 D03 浏览器闭环；CI 默认门槛，真实 TOS 另跑 smoke-tos | D03 |
+| make verify | 完整 MVP 门槛；当前明确失败并提示使用 verify-d03，不能伪报集成通过 | D10 前完成 |
 
 Vite 构建不能代替 TypeScript 类型检查。Vitest 用于前端状态与工具函数；Playwright 用于实际浏览器流程，不通过页面内部状态注入绕过核心后端行为。工具参考：[Vitest](https://vitest.dev/guide/)、[Playwright](https://playwright.dev/docs/intro)。
 
@@ -282,7 +284,7 @@ Vite 构建不能代替 TypeScript 类型检查。Vitest 用于前端状态与�
 
 ## E14 MVP 验收矩阵
 
-以下是完整 MVP 验收要求；D00 证据见 E15.1；D02 的 A01/A50 和 A02/A49 身份管理部分见 E15.2；D01 的 A25/A26/A47 基础存储与日志部分见 E15.3，其余仍待相应阶段验证。各用例使用两个用户、两个空间、至少两个 Skill 和一个可控模型夹具，涉及真实模型的用例单独注明。
+以下是完整 MVP 验收要求；D00 证据见 E15.1；D02 的 A01/A50 和 A02/A49 身份管理部分见 E15.2；D01 的 A25/A26/A47 基础存储与日志部分见 E15.3；D03 的 A03、A04 定义绑定部分见 E15.4，其余仍待相应阶段验证。各用例使用两个用户、两个空间、至少两个 Skill 和一个可控模型夹具，涉及真实模型的用例单独注明。
 
 | 编号 | 目标/模块 | 操作与故障注入 | 预期结果 | 验证阶段 |
 | --- | --- | --- | --- | --- |
@@ -363,6 +365,7 @@ P1 审查整改文档更新完成：按用户确认将 run_code 文件范围限�
 | D00 / 2026-10-18 | 基于 c61cd19 的当前工作区；cmd/mass、internal、frontend、api、db、scripts、tests/dependencies | macOS arm64；Go 1.26.9、Node 24.22.0、npm 11.19.1 | 总门槛、race、隔离源码重建与浏览器通过，见 E15.1 | D01 存储/日志实现与真实 MariaDB/TOS 验证 |
 | D02 / 2026-10-18 | 基于 8d7a615；identity/mariadb/secrets、迁移、HTTP、空间页面与集成测试 | 同上；真实 MariaDB 11.8.9 | verify-d02、race、双账号浏览器闭环通过，见 E15.2 | D01 TOS/快照/Journal 与 D04 Supervisor 接入 |
 | D01 补齐 / 2026-10-18 | 基于 3d40695；新增迁移 00003、TOS、Journal、快照、读取 API 与集成测试 | 同上；真实 MariaDB 11.8.9 与 TOS | verify-d01、race、旧库升级与 D02 浏览器回归通过，见 E15.3 | D03 定义管理；D04 完整 reducer 与 Supervisor 接入 |
+| D03 / 2026-10-18 | 基于 69e7eeb；迁移 00004、app/catalog、MariaDB/HTTP、Monaco 页面与集成测试 | 固定工具链、真实 MariaDB/TOS、Chromium | verify-d03、smoke-tos、race 与 D01/D02 升级回归，见 E15.4 | D04 最小运行纵向闭环 |
 
 每次交接应说明当前阶段、已完成小步、实际文件、通过的检查、未通过/未运行的检查及下一步。不得把设计片段写入仓库后即标记功能完成，也不得跳过真实模型验证而宣称完整交付。
 
@@ -383,7 +386,8 @@ OpenAPI 定义当前接口及共享错误/ID/分页/幂等/序号契约；api/ev
 | Eino 实际组件协议 | tests/dependencies/eino_test.go | Ark WithTools 序列化后的请求等于本地 httptest 收到的字节；流式/非流式、429、非法 JSON、记录失败通过；每次最多一次 HTTP 发送，无隐藏重试，认证秘密未进入记录器 |
 | goja 宿主试验 | tests/dependencies/goja_test.go | 连续文件读取/写入、本地 HTTP、写入后异常保留效果、越界拒绝、跨 VM 状态隔离、循环/网络取消通过；顶层/eval/Function source map 加载次数为零；仅测试宿主，非 D05 完整 CodeRunner |
 | AG-UI 跨语言 | scripts/agui-fixtures、frontend/src/lib/agui.test.ts | Go 编码的 11 种标准类型（含 CUSTOM）和 8 个 CUSTOM 名称通过 TS Schema；4 项 Vitest 通过，覆盖 SSE、取消、工具 END/RESULT、版本与大整数游标 |
-| 并发 | make test-race | 当前 Go 包 race 检查通过，包括 VM 中断 goroutine 和本地 HTTP |
+| 并发 | make test-catalog-e2e | 真实 Go/MariaDB、官方 SDK 对接回环 TOS 协议夹具，Chromium 完成定义/版本与编辑冲突闭环 | D03 |
+| make test-race | 当前 Go 包 race 检查通过，包括 VM 中断 goroutine 和本地 HTTP |
 | 单二进制运行 | scripts/smoke.mjs | 从独立临时 cwd、空 PATH 启动，页面/静态资源/API 正常；缺关键配置失败，SIGTERM 正常退出；运行无需 Node 或原 frontend/dist |
 | 开发监听 | scripts/dev.mjs；临时配置进程试验 | 首次构建/启动、配置变化后重建/重启及 SIGTERM 清理通过，全程仅 Go 服务提供 HTTP |
 | 实际浏览器 | scripts/browser-smoke.mjs | 完整 Chromium headless 模式通过：页面渲染、同源 API、导航/刷新、390px 布局，无 pageerror；截图在 .cache/d00-desktop.png、.cache/d00-mobile.png，可再生不入库 |
@@ -490,3 +494,29 @@ make test-race
 部署升级：先备份数据库及原主密钥/TOS 对象，用迁移账号执行新二进制的 mass migrate，再启动 mass serve；不重建旧库、不重新初始化已有账号、不更换旧主密钥。旧 mass.yaml 不增加 storage 字段也可运行，缺省限制见 T11.5；新增模板字段可按实际容量调整。运行账号仍只有业务库 DML 权限，迁移账号独立。旧二进制不支持 schema 3，不建议在新增数据后直接降级。
 
 普通 CI 继续执行 verify-d02/race，包含 D01 本地、真实 MariaDB 与 D02 浏览器回归，不注入用户云凭证；真实云验收由显式 smoke-tos/verify-d01 执行。远端 CI 未触发。本阶段没有实现后台 Agent 执行、模型调用、完整业务投影或自动重跑；下一阶段可按 E05 进入 D03。
+
+### E15.4 D03 Agent/Skill 定义与版本闭环（2026-10-18）
+
+基于 69e7eeb 新增 00004_definitions，保留 00001—00003 不变，schema 推进到 4。共用定义表以 kind 区分 Agent/Skill，外部接口仍独立；迁移、结构与限额见 T02.1。D02 Cookie、空间/owner、凭证密文和模型继续有效；额外从 schema 3 写入真实 D01 日志与内容引用后升级两次，验证事件/序号和原始字节不变。
+
+交付入口：internal/app/catalog 实现严格配置、草稿与不可变发布/调试快照；internal/adapter/mariadb/catalog.go 实现空间授权、revision、依赖/资源/审计原子提交、默认与归档；internal/transport/http/catalog.go 和 OpenAPI 提供创建、复制、草稿、资源上传、版本、差异、反向引用和快照读取。D01 ContentStore 的可见性扩展为已提交事件引用、定义草稿引用或定义版本引用，仍拒绝未引用 ready 对象。
+
+frontend/src/features/catalog 提供完整 Skill/Agent 页面，Monaco 编辑器和差异按需加载，保留双编辑者冲突时的本地文本。空间切换/权限失效清理私有查询与编辑状态，目录查询定期复核成员资格。正文预览限制 HTML/链接/图片，启用 run_code 时展示文件和 HTTP 权限范围。调试仅创建固定快照，界面不会显示已运行成功。
+
+验收覆盖：两 Skill 准确版本组合、升级不改变旧 Agent；同 label 重复发布 409；并发草稿仅一个成功；未知 YAML/重复字段/alias/多文档/无效工具与限额拒绝；缺失或跨空间 Skill/资源不能发布；准备后模型变化拒绝提交；审计故障使版本、依赖、引用与指针一起回滚且孤立对象不可下载；TOS 故障不能发布；旧资源与调试快照独立于后续草稿；默认版本/归档约束、引用查询及数据库外键阻止破坏引用；新接口实际响应逐一通过 OpenAPI Schema 校验。
+
+浏览器通过页面配置模型，完成 Skill 资源上传→两 Skill 发布→Agent v1→Skill 升级→Agent v2，查看原版本内容/下载资源、创建调试快照、切换默认版本和 Monaco 差异；另用两个页面同时编辑验证 409 与显式载入服务器草稿。桌面和 390px 页面无横向溢出、无 pageerror；可再生截图位于忽略的 .cache/d03-desktop.png / d03-mobile.png。浏览器采用本地 TOS HTTP 协议夹具，调用生产官方 SDK；此结果与真实云验证分别记录，不把夹具当真实云。
+
+真实 TOS 验收复用已授权测试配置，在 tmp/ 下创建独立 mass-d01-UUID/，其中 catalog/ 仅包含合成定义/资源。运行 D01 和 D03 共享集成流程，本轮共清理 21 个对象；清理仅逐个删除本轮精确 key/版本并 GET 确认 404。密钥从环境读取，不进入源码/日志。测试数据库每轮随机创建隔离库与 DML 应用账号，退出清理本轮库/账号。
+
+```sh
+# 使用固定工具链及专用测试 MariaDB：MASS_TEST_ADMIN_DSN。
+make verify-d03
+# 真实 TOS 变量同 E15.3，必须显式设置测试前缀。
+make smoke-tos
+make test-race
+```
+
+执行结果：`make verify-d03 smoke-tos test-race` 全部通过，包含 D01/D02 升级兼容、两个浏览器闭环、真实 MariaDB/TOS 和 Go race 检查。Monaco 按需加载，构建仍提示其压缩前约 2.7 MB 的独立编辑器包较大；普通管理页不加载该包。
+
+部署时使用新二进制执行 mass migrate，再启动 mass serve；保留已有配置、主密钥和数据。前端入口为选择空间→Agent 与 Skill；定义名使用小写标识，配置引用实际模型/Skill ID。首次发布自动设置 Agent 默认版本；后续发布须显式切换。更新 CI 默认门槛为 verify-d03/race，远端 CI 未触发。D04 的 Session 固定定义、后台 Run、模型调用、工具执行与完整 reducer 尚未实现。
