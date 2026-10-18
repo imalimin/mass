@@ -7,7 +7,7 @@ VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
 export NPM_CONFIG_CACHE := $(CURDIR)/.cache/npm
 export PLAYWRIGHT_BROWSERS_PATH := $(CURDIR)/.cache/playwright
 
-.PHONY: setup setup-browser generate generate-check fmt lint typecheck test-unit test-race test-e2e build-frontend dev build verify-d00 verify-d02 test-integration verify
+.PHONY: setup setup-browser generate generate-check fmt lint typecheck test-unit test-race test-e2e build-frontend dev build verify-d00 verify-d01 verify-d02 smoke-tos test-integration verify
 setup:
 	node scripts/check-toolchain.mjs
 	$(GO) mod download
@@ -58,6 +58,12 @@ dev:
 test-integration: build-frontend
 	@test -n "$$MASS_TEST_ADMIN_DSN" || (echo 'Set MASS_TEST_ADMIN_DSN to an isolated MariaDB server' >&2; exit 1)
 	$(GO) test -count=1 ./tests/integration/...
+
+smoke-tos: build-frontend
+	@test -n "$$MASS_TEST_ADMIN_DSN" || (echo 'Set MASS_TEST_ADMIN_DSN to an isolated MariaDB server' >&2; exit 1)
+	MASS_TEST_TOS=1 $(GO) test -count=1 -run '^TestRealTOSStorage$$' -v ./tests/integration
+
+verify-d01: verify-d02 smoke-tos
 
 verify-d02: generate-check typecheck lint test-unit test-integration test-e2e
 	git diff --check

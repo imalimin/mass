@@ -36,6 +36,12 @@ type Config struct {
 		AccessKeyEnv string `yaml:"access_key_env"`
 		SecretKeyEnv string `yaml:"secret_key_env"`
 	} `yaml:"tos"`
+	Storage struct {
+		MaxObjectBytes    int64 `yaml:"max_object_bytes"`
+		MaxFileBytes      int64 `yaml:"max_file_bytes"`
+		MaxWorkspaceBytes int64 `yaml:"max_workspace_bytes"`
+		MaxEntries        int   `yaml:"max_entries"`
+	} `yaml:"storage"`
 	Auth struct {
 		SessionTTL   time.Duration `yaml:"session_ttl"`
 		CookieSecure bool          `yaml:"cookie_secure"`
@@ -109,6 +115,19 @@ func ParseConfig(data []byte, getenv func(string) string) (Config, error) {
 	if err := d.Decode(&c); err != nil {
 		return c, errors.New("invalid configuration fields or types")
 	}
+	// Defaults preserve deployment configs written for D02.
+	if c.Storage.MaxObjectBytes == 0 {
+		c.Storage.MaxObjectBytes = 256 << 20
+	}
+	if c.Storage.MaxFileBytes == 0 {
+		c.Storage.MaxFileBytes = 32 << 20
+	}
+	if c.Storage.MaxWorkspaceBytes == 0 {
+		c.Storage.MaxWorkspaceBytes = 128 << 20
+	}
+	if c.Storage.MaxEntries == 0 {
+		c.Storage.MaxEntries = 10000
+	}
 	if err := c.validate(getenv); err != nil {
 		return Config{}, err
 	}
@@ -152,6 +171,9 @@ func (c Config) validate(getenv func(string) string) error {
 	}
 	if c.TOS.Prefix == "" || strings.HasPrefix(c.TOS.Prefix, "/") || strings.Contains(c.TOS.Prefix, "..") {
 		return errors.New("tos.prefix must be a relative object prefix")
+	}
+	if c.Storage.MaxObjectBytes < 1 || c.Storage.MaxObjectBytes > 1<<30 || c.Storage.MaxFileBytes < 1 || c.Storage.MaxFileBytes > c.Storage.MaxWorkspaceBytes || c.Storage.MaxWorkspaceBytes > c.Storage.MaxObjectBytes || c.Storage.MaxEntries < 1 || c.Storage.MaxEntries > 10000 {
+		return errors.New("invalid storage limits")
 	}
 	code := c.Tools.Code
 	if code.Timeout <= 0 || code.MaxConcurrent < 1 || code.MaxSourceBytes < 1 || code.MaxInputBytes < 1 || code.MaxOutputBytes < 1 || code.MaxLogBytes < 1 || code.MaxFileOperations < 1 || code.MaxNetworkRequests < 1 || code.MaxNetworkBodyBytes < 1 {

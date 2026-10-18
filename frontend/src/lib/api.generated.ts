@@ -228,6 +228,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/spaces/{space_id}/sessions/{session_id}/journal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["readJournal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/workspace-snapshots/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getWorkspaceSnapshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/payloads/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["downloadPayload"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -388,6 +436,58 @@ export interface components {
             enabled: boolean;
             revision: number;
         };
+        JournalEvent: {
+            /** Format: uuid */
+            event_id: string;
+            /** Format: uuid */
+            space_id: string;
+            /** Format: uuid */
+            session_id: string;
+            /** Format: uuid */
+            run_id?: string | null;
+            sequence: string;
+            event_type: string;
+            schema_version: number;
+            operation_id?: string | null;
+            /** Format: uuid */
+            causation_event_id?: string | null;
+            correlation_id?: string | null;
+            actor: {
+                kind: string;
+                id: string;
+            };
+            /** Format: date-time */
+            occurred_at: string;
+            /** Format: date-time */
+            recorded_at: string;
+            data: Record<string, never>;
+            content_refs: {
+                role: string;
+                ordinal: number;
+                /** Format: uuid */
+                object_id: string;
+                sha256: string;
+            }[];
+        };
+        JournalPage: {
+            events: components["schemas"]["JournalEvent"][];
+            through_sequence: components["schemas"]["Sequence"];
+            next_after: components["schemas"]["Sequence"];
+            has_more: boolean;
+        };
+        WorkspaceSnapshot: {
+            id: components["schemas"]["ResourceID"];
+            space_id: components["schemas"]["ResourceID"];
+            session_id: components["schemas"]["ResourceID"];
+            source_run_id: components["schemas"]["ResourceID"];
+            base_snapshot_id?: components["schemas"]["ResourceID"];
+            object_id: components["schemas"]["ResourceID"];
+            manifest_ref: components["schemas"]["ResourceID"];
+            tos_uri: string;
+            archive_sha256: string;
+            /** @constant */
+            format_version: 1;
+        };
     };
     responses: never;
     parameters: {
@@ -435,7 +535,19 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Full D01 storage readiness is not implemented; this does not claim TOS connectivity. */
+            /** @description MariaDB schema and TOS HeadBucket checks passed. Result cached for at most five seconds; write/read smoke is a separate acceptance check. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @constant */
+                        status: "ready";
+                    };
+                };
+            };
+            /** @description Database/schema/TOS unavailable; D02 management routes remain independently authenticated. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1046,6 +1158,108 @@ export interface operations {
                 };
             };
             /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    readJournal: {
+        parameters: {
+            query?: {
+                /** @description Exclusive Session journal position; defaults to 0. Not an AG-UI cursor. */
+                after_sequence?: components["schemas"]["Sequence"];
+                /** @description Fixed inclusive Session boundary returned by the first page. Reuse on all following pages. */
+                through_sequence?: components["schemas"]["Sequence"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+                session_id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authorized committed data. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalPage"];
+                };
+            };
+            /** @description 400 invalid cursor/schema, 401 unauthenticated, 403 forbidden, 404 missing or unreferenced, 503 integrity/storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getWorkspaceSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+                id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authorized committed data. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSnapshot"];
+                };
+            };
+            /** @description 400 invalid cursor/schema, 401 unauthenticated, 403 forbidden, 404 missing or unreferenced, 503 integrity/storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    downloadPayload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ResourceID"];
+                id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Verified immutable bytes; unreferenced or uploading objects are not downloadable. Authorization is rechecked during streaming. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description 400 invalid cursor/schema, 401 unauthenticated, 403 forbidden, 404 missing or unreferenced, 503 integrity/storage failure. */
             default: {
                 headers: {
                     [name: string]: unknown;

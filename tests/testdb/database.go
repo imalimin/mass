@@ -12,7 +12,9 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
+	"github.com/imalimin/mass/db/migrations"
 	"github.com/imalimin/mass/internal/adapter/mariadb"
+	"github.com/pressly/goose/v3"
 )
 
 type Database struct {
@@ -24,8 +26,9 @@ type Database struct {
 	cleanup      func()
 }
 
-func (d *Database) Close() { d.cleanup() }
-func New(ctx context.Context) (*Database, error) {
+func (d *Database) Close()                       { d.cleanup() }
+func New(ctx context.Context) (*Database, error) { return NewVersion(ctx, 3) }
+func NewVersion(ctx context.Context, version int64) (*Database, error) {
 	source := os.Getenv("MASS_TEST_ADMIN_DSN")
 	if source == "" {
 		return nil, errors.New("MASS_TEST_ADMIN_DSN must explicitly designate a disposable test server")
@@ -78,10 +81,14 @@ func New(ctx context.Context) (*Database, error) {
 	if err != nil {
 		return fail(err)
 	}
-	if err = d.Admin.Migrate(ctx); err != nil {
+	provider, err := goose.NewProvider(goose.DialectMySQL, d.Admin.DB, migrations.Files)
+	if err != nil {
 		return fail(err)
 	}
-	if err = d.Admin.Migrate(ctx); err != nil {
+	if _, err = provider.UpTo(ctx, version); err != nil {
+		return fail(err)
+	}
+	if _, err = provider.UpTo(ctx, version); err != nil {
 		return fail(err)
 	}
 	cfg.User = user

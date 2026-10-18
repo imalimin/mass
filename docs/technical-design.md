@@ -5,7 +5,7 @@
 > - 包含：技术选型、模块算法、存储与接口设计、核心代码、运行配置、兼容性和实现限制。
 > - 不包含：重新定义产品目标，或维护开发进度、测试执行报告和交付步骤。
 > - 依据：[系统设计指引](design-guide.md)和[系统架构设计](architecture.md)；编码、测试与交付按[工程开发文档](engineering.md)执行。以后各模块细节继续补充在本文，不拆专题文档。
-> - 状态：技术方案基线，D00 已收敛契约见 T00.6，D02 管理能力见 T01.1/T03.1；更新：2026-10-18。实际实现与验证范围见工程开发文档；片段中未定义的工程类型需在对应阶段补齐。
+> - 状态：技术方案基线，D00 已收敛契约见 T00.6，D02 管理能力见 T01.1/T03.1，D01 持久化实现在 T10.2.1/T11.5；更新：2026-10-18。实际实现与验证范围见工程开发文档；片段中未定义的工程类型需在对应阶段补齐。
 
 ## T00 技术基线与依赖
 
@@ -216,7 +216,7 @@ SSE/下载已发送响应头后无法改 HTTP 状态：停止后续数据并关�
 
 随机会话令牌为 32 字节，浏览器只收到十六进制 Cookie；MariaDB 保存 SHA-256 摘要和 UTC 固定到期时间。Cookie 名 mass_session，Path=/、HttpOnly、SameSite=Lax，Secure 由经过回环/HTTPS 检查的配置控制。重新登录替换当前 Cookie 对应的旧服务端会话；退出删除服务端记录。请求体上限 16 KiB，拒绝未知字段及额外 JSON 文档。所有管理写请求（包括 DELETE 和退出）要求 application/json 与精确匹配 http.public_url 的 Origin；不根据客户端 Host 推导可信来源。
 
-迁移 00001_identity 建立 users、spaces、space_members、auth_sessions、audit_logs；00002_models 建立 credentials/model_configs。迁移嵌入同一二进制，只提供向前迁移，serve 检查版本而不自动执行 DDL。database.migration_dsn_env 仅 migrate 要求和使用，应用 DSN 只需 SELECT/INSERT/UPDATE/DELETE；DDL 不能假定回滚，部分失败须检查实际 schema 后修复。连接统一 utf8mb4/UTC、有界连接池和网络超时。基础迁移是本次 D02 的必要前置补充，不表示 D01 的对象、快照与日志已存在。
+迁移 00001_identity 建立 users、spaces、space_members、auth_sessions、audit_logs；00002_models 建立 credentials/model_configs。迁移嵌入同一二进制，只提供向前迁移，serve 检查版本而不自动执行 DDL。database.migration_dsn_env 仅 migrate 要求和使用，应用 DSN 只需 SELECT/INSERT/UPDATE/DELETE；DDL 不能假定回滚，部分失败须检查实际 schema 后修复。连接统一 utf8mb4/UTC、有界连接池和网络超时。这两份基础迁移是 D02 交付时的必要前置补充；后续 D01 通过新增 00003 补齐对象、快照与日志，见 T10.2.1。
 
 所有空间内 Repository 操作按「空间行 → 成员关系 → 资源」顺序在事务内授权并加锁；成员变更、模型和凭证变更与审计共同提交。添加已有成员幂等且不重复审计，普通成员可退出自己，owner 永不可删除。模型/凭证联合外键携带 space_id，跨空间 ID 不可用于建立引用。列表默认 20、最多 100 条，以 UUID keyset 排序，HMAC 游标绑定 actor/space/list/filter；管理列表为实时视图，新增到已翻页位置之前的项需刷新才能看到，不宣称不可变历史快照。
 
@@ -925,6 +925,18 @@ COMMIT;
 
 usage 按 attempt 记录并汇总，摘要和失败尝试均计入；缺失用量为 unknown，价格估算保存价格版本。缓存统计口径见 T07.6。运维日志不复制原始用户内容，空间授权同样用于日志和载荷读取。
 
+### T10.2.1 D01 已落地的事务基础
+
+新增迁移 00003_storage_journal，保留 D02 前两份迁移不变。空间授权锁继续使用 D02 的空间行；其后统一按 Session → Run → 对象/索引顺序操作。授权和查询都经现有 MariaDB Repository，成员撤销后不复用旧权限。所有外部对象 I/O 均在 SQL 事务之外完成。
+
+D01 注册 schema_version=1 的最小事件子集：session.created、run.created、run.started、run.finished、workspace.snapshot.created/failed、workspace.restored、operation.reconciled。未知类型/版本在追加和读取时明确拒绝；其他 T10.1 事件随所属阶段增加。事件由内部可信 Go 调用产生，HTTP 不提供任意 Append 或视图写入接口。目前只允许通过当前成员鉴权的 user actor；D04 接入 Supervisor 时再提供限定范围的系统收尾身份，不把任意字符串 system 当作绕过授权的入口。
+
+一次最多 100 个事件、每个 data 最多 64 KiB、每个事件最多 100 个对象引用；data 规范化保留 JSON 数字精度，引用按 role/ordinal 排序，occurred_at 统一 UTC 微秒。摘要排除服务器序号与记录时间，包含事件 ID、类型、版本、因果/操作/关联、actor、发生时间、data 和有序引用。调用者须保留事件 ID、发生时间及 append_key 重试；幂等核实先于 expected_sequence，部分重复批次拒绝，不把新事件拼到已存在批次。对来自已执行动作的结果使用不带 expected_sequence 的稳定追加，避免期间别的事件造成结果丢失。
+
+基础 reducer 同事务创建 Session、排队/开始/终结 Run 视图和唯一占用；成功终结必须已有该 Run 的已提交快照，运行中无快照的失败终结留下 workspace_error 并阻止新 Run。快照索引和终结可置于同一 Append 批次，释放占用失败时所有视图和事件共同回滚。这里没有调度器、执行器或完整业务 reducer，D04 继续完成 Claim/Finish、取消、用量、快照失败收尾和离线重建。
+
+读取返回 events、through_sequence、next_after、has_more；after_sequence 和 through_sequence 是 Session 日志十进制字符串，不复用 AG-UI 游标。首次分页固定已提交水位，随后带回同一个 through_sequence。日志、快照元数据和载荷的 HTTP 读接口继续复用 D02 Cookie/成员检查；载荷只对已被提交事件引用的 ready 对象开放，下载用 attachment/octet-stream，开始前验证完整摘要、传输期间分块复核身份与成员。
+
 ### T10.3 AG-UI 协议边界与依赖
 
 确定使用 AG-UI 作为运行交互事件协议，SSE 作为 HTTP 传输方式。MASS 内部 runtime_events 保持 T10.1 的事实语义，由 AguiProjector 投影成标准 AG-UI 事件；ContextProjector 仍读取原始日志，不读取前端事件。
@@ -1116,6 +1128,18 @@ publish_artifact 和 Trace 原文仍在调用期间单独上传，不等待目�
 版本、日志、投影、AG-UI 历史、目录快照和产物持续保留；不增加数据 TTL、过期标记、保留时长配置、自动 GC 或生产对象生命周期删除策略。临时归档/失败解压副本随操作结束清理，已完整保存且无活跃任务的会话目录可在服务退出时清理，这是临时资源释放，不删除远端历史。认证会话有效期和供应商自身缓存有效期是既有协议约束，不属于业务历史过期方案；MVP 不因此增加后台清理系统。
 
 读取私有 Bucket 由 Go 服务鉴权代理，浏览器不获得存储凭证；恢复需要 MariaDB 备份、完整 TOS 对象和解密材料。删除原主机临时目录后仍可读取版本、Trace、产物并恢复最后确认的会话文件；不承诺恢复未保存的进程内状态。
+
+### T11.5 D01 已实现的对象与目录边界
+
+ContentStore 将输入流写到权限受限的临时文件，边写边计数和计算 SHA-256；记录包含唯一 key、媒体类型、长度、摘要和 uploading 状态的意图后，使用锁定的 TOS SDK PutObjectV2/ForbidOverwrite。SDK 隐式重试关闭，重试由稳定 object_id 驱动：已有元数据必须完全一致，再通过完整读回核实已上传字节。Put 响应丢失或禁止覆盖冲突不等于失败/成功，只有读回长度和摘要相同才可将意图置为 ready；SQL 失败保留不可见意图/对象供核实。ETag 不作为 SHA-256。临时文件完成即清理，不作为本地持久 BlobStore。
+
+生产只使用 TOS 适配器；tests/fakes 是测试专用内存替身。对象元数据、事件引用和快照均使用带 space_id 的联合外键。下载必须同时满足当前授权、ready 和已提交 event_objects 引用；未引用的成功上传不会因猜到 UUID 而可见。主数据没有自动 TTL、删除或 GC。新增 ready 探针使用 MariaDB schema 校验和 TOS HeadBucket，单次最多 3 秒、缓存 5 秒；HeadBucket 证明连接/桶级授权，对象读写/不可变性必须由独立真实 smoke 验收，不夸大探针结果。
+
+storage 配置是向后兼容的可选段：max_object_bytes 默认 256 MiB（配置上限 1 GiB）、max_file_bytes 32 MiB、max_workspace_bytes 128 MiB、max_entries 10000；文件/目录上限不超过对象上限，Manifest 上限 4 MiB。SnapshotStore 使用已有 runtime.snapshot_timeout；临时根沿用 workspace_temp_root。生成的 Session 目录名只含经过规范 UUID 校验的 space/session ID，使用 os.Root 与可取消的 Session 目录锁。快照要求调用者先停止所有工作目录写入；D04 Supervisor 会统一持有占用并使用相同目录入口。
+
+全量 tar.gz 的 Manifest 包含文件/空目录、规范相对路径、大小和 SHA-256；不保留执行权限、软/硬链接或设备项。恢复先验证格式、数量、总解压量、单文件容量、父目录清单、重复路径和大小写冲突，再解压到未绑定的临时目录；逐文件核验摘要并读完 gzip 校验尾部，全部成功才替换空目标目录。已有非空目录不自动覆盖；恢复失败删除 staging，恢复日志提交失败清理本次新副本。路径与文件接口是应用隔离，不声称对宿主所有者提供 OS 沙箱。
+
+SnapshotStore.Save 接收稳定的快照/归档/Manifest/事件 ID、append_key 和发生时间，可将 run.finished 一同提交。未知提交先按已提交事件核实，成功重试返回原快照，不重新打包已变化的目录；若无提交则用原对象 ID 核实内容。SnapshotBase 防止旧 Run 的重试覆盖较新 Run 或其他活跃占用。Restore 只读取目标 Session 的已提交最新指针，初始 source_snapshot_id 由 session.created 固定；跨 Session 只复制文件，不复制源日志。完整终结失败记录、系统收尾权限与后台恢复协调仍由 D04 承担。
 
 ## T12 M12 前端管理与调试
 

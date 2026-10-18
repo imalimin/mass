@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: MASS API
-  version: 0.2.0
-  description: D02 identity, spaces and approved Ark model configuration. D01 object storage readiness remains incomplete.
+  version: 0.2.1
+  description: D01 durable storage and journal foundations with compatible D02 identity, spaces and model management.
 servers:
   - url: /
 paths:
@@ -26,8 +26,22 @@ paths:
     get:
       operationId: getReadiness
       responses:
+        '200':
+          description: >-
+            MariaDB schema and TOS HeadBucket checks passed. Result cached for at most five seconds; write/read smoke is
+            a separate acceptance check.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                properties:
+                  status:
+                    type: string
+                    const: ready
         '503':
-          description: Full D01 storage readiness is not implemented; this does not claim TOS connectivity.
+          description: Database/schema/TOS unavailable; D02 management routes remain independently authenticated.
           content:
             application/json:
               schema:
@@ -591,6 +605,113 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/sessions/{session_id}/journal:
+    get:
+      operationId: readJournal
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: after_sequence
+          in: query
+          schema:
+            $ref: '#/components/schemas/Sequence'
+          description: Exclusive Session journal position; defaults to 0. Not an AG-UI cursor.
+        - name: through_sequence
+          in: query
+          schema:
+            $ref: '#/components/schemas/Sequence'
+          description: Fixed inclusive Session boundary returned by the first page. Reuse on all following pages.
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Authorized committed data.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JournalPage'
+        default:
+          description: >-
+            400 invalid cursor/schema, 401 unauthenticated, 403 forbidden, 404 missing or unreferenced, 503
+            integrity/storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/workspace-snapshots/{id}:
+    get:
+      operationId: getWorkspaceSnapshot
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+      responses:
+        '200':
+          description: Authorized committed data.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceSnapshot'
+        default:
+          description: >-
+            400 invalid cursor/schema, 401 unauthenticated, 403 forbidden, 404 missing or unreferenced, 503
+            integrity/storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/payloads/{id}:
+    get:
+      operationId: downloadPayload
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+      responses:
+        '200':
+          description: >-
+            Verified immutable bytes; unreferenced or uploading objects are not downloadable. Authorization is rechecked
+            during streaming.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        default:
+          description: >-
+            400 invalid cursor/schema, 401 unauthenticated, 403 forbidden, 404 missing or unreferenced, 503
+            integrity/storage failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   schemas:
     SystemInfo:
@@ -1072,6 +1193,155 @@ components:
           type: integer
           minimum: 1
           maximum: 9007199254740991
+    JournalEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - event_id
+        - space_id
+        - session_id
+        - sequence
+        - event_type
+        - schema_version
+        - actor
+        - occurred_at
+        - recorded_at
+        - data
+        - content_refs
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        space_id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        run_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        sequence:
+          type: string
+          pattern: ^[1-9][0-9]{0,18}$
+        event_type:
+          type: string
+          pattern: ^[a-z]+(\.[a-z_]+)+$
+        schema_version:
+          type: integer
+          minimum: 1
+        operation_id:
+          type:
+            - string
+            - 'null'
+        causation_event_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        correlation_id:
+          type:
+            - string
+            - 'null'
+        actor:
+          type: object
+          required:
+            - kind
+            - id
+          properties:
+            kind:
+              type: string
+            id:
+              type: string
+          additionalProperties: false
+        occurred_at:
+          type: string
+          format: date-time
+        recorded_at:
+          type: string
+          format: date-time
+        data:
+          type: object
+        content_refs:
+          type: array
+          items:
+            type: object
+            required:
+              - role
+              - ordinal
+              - object_id
+              - sha256
+            properties:
+              role:
+                type: string
+              ordinal:
+                type: integer
+                minimum: 0
+              object_id:
+                type: string
+                format: uuid
+              sha256:
+                type: string
+                pattern: ^[0-9a-f]{64}$
+            additionalProperties: false
+    JournalPage:
+      type: object
+      additionalProperties: false
+      required:
+        - events
+        - through_sequence
+        - next_after
+        - has_more
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/JournalEvent'
+        through_sequence:
+          $ref: '#/components/schemas/Sequence'
+        next_after:
+          $ref: '#/components/schemas/Sequence'
+        has_more:
+          type: boolean
+    WorkspaceSnapshot:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - space_id
+        - session_id
+        - source_run_id
+        - object_id
+        - manifest_ref
+        - tos_uri
+        - archive_sha256
+        - format_version
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceID'
+        space_id:
+          $ref: '#/components/schemas/ResourceID'
+        session_id:
+          $ref: '#/components/schemas/ResourceID'
+        source_run_id:
+          $ref: '#/components/schemas/ResourceID'
+        base_snapshot_id:
+          $ref: '#/components/schemas/ResourceID'
+        object_id:
+          $ref: '#/components/schemas/ResourceID'
+        manifest_ref:
+          $ref: '#/components/schemas/ResourceID'
+        tos_uri:
+          type: string
+          pattern: ^tos://
+        archive_sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+        format_version:
+          type: integer
+          const: 1
   parameters:
     IdempotencyKey:
       name: Idempotency-Key

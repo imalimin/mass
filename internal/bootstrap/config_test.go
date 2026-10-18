@@ -46,3 +46,24 @@ func TestConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestD02ConfigurationDefaults(t *testing.T) {
+	data, err := os.ReadFile("../../configs/mass.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(data)
+	start := strings.Index(source, "storage:")
+	end := strings.Index(source[start:], "auth:") + start
+	source = source[:start] + source[end:]
+	config, err := ParseConfig([]byte(source), fixtureEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Storage.MaxObjectBytes != 256<<20 || config.Storage.MaxWorkspaceBytes != 128<<20 || config.Storage.MaxFileBytes != 32<<20 || config.Storage.MaxEntries != 10000 {
+		t.Fatal("incompatible legacy defaults")
+	}
+	if _, err = ParseConfig([]byte(strings.Replace(string(data), "max_object_bytes: 268435456", "max_object_bytes: -1", 1)), fixtureEnv); err == nil {
+		t.Fatal("negative storage limit accepted")
+	}
+}

@@ -15,7 +15,7 @@ try {
       assert.ok(asset, 'embedded script is present')
       assert.equal((await fetch(server.url + asset)).status, 200)
     }
-    if (path === '/health/ready') assert.equal((await response.json()).code, 'dependencies_not_initialized')
+    if (path === '/health/ready') assert.equal((await response.json()).code, 'storage_unavailable')
   }
 } finally { await server.stop() }
 const missing = spawnSync(resolve('bin/mass'), ['check-config', '--config', 'configs/mass.example.yaml'], { env: { PATH: '' }, encoding: 'utf8' })

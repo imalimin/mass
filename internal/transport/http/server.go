@@ -17,8 +17,7 @@ type ErrorBody struct {
 	RequestID string `json:"request_id"`
 }
 
-// NewHandler optionally installs D02 management endpoints. Full readiness stays
-// unavailable until the remaining D01 object storage checks are implemented.
+// NewHandler retains D02 management routes and optionally installs D01 storage.
 func NewHandler(assets fs.FS, version string, logger *slog.Logger, options ...IdentityOptions) http.Handler {
 	mux := http.NewServeMux()
 	stage := "D00"
@@ -28,7 +27,15 @@ func NewHandler(assets fs.FS, version string, logger *slog.Logger, options ...Id
 	}
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status": "alive"}) })
 	mux.HandleFunc("GET /health/ready", func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, 503, "dependencies_not_initialized", "TOS and complete D01 storage readiness are not yet implemented")
+		if len(options) == 0 || options[0].Storage == nil {
+			writeError(w, 503, "dependencies_not_initialized", "Storage services are unavailable")
+			return
+		}
+		if err := options[0].Storage.Check(r.Context()); err != nil {
+			writeError(w, 503, "storage_unavailable", "Database schema or TOS is unavailable")
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "ready"})
 	})
 	mux.HandleFunc("GET /api/v1/system", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{"name": "MASS", "version": version, "stage": stage, "protocol_profile": "mass-agui-v1"})

@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/imalimin/mass/internal/app/identity"
+	"github.com/imalimin/mass/internal/domain/storage"
 )
 
 type IdentityOptions struct {
+	Storage *StorageOptions
 	Service *identity.Service
 	Origin  string
 	Secure  bool
@@ -78,6 +80,7 @@ func apiError(w http.ResponseWriter, err error, logger *slog.Logger) {
 		status  int
 		message string
 	}{
+		{storage.ErrConflict, 409, "Storage fact conflict"}, {storage.ErrSchema, 400, "Unsupported event schema"}, {storage.ErrInvalid, 400, "Invalid storage request"}, {storage.ErrIntegrity, 503, "Content unavailable"}, {storage.ErrWorkspace, 409, "Workspace unavailable"}, {storage.ErrActive, 409, "Session has an active run"},
 		{identity.ErrUnauthenticated, 401, "Please sign in"}, {identity.ErrForbidden, 403, "Access denied"}, {identity.ErrNotFound, 404, "Resource not found"}, {identity.ErrConflict, 409, "Resource changed or already exists"}, {identity.ErrInvalid, 400, "Invalid request"}, {identity.ErrCapability, 400, "Unsupported model capability or endpoint"},
 	} {
 		if errors.Is(err, v.err) {
@@ -347,4 +350,55 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 		writeJSON(w, 200, map[string]any{"provider": "ark", "endpoint": identity.ArkEndpoint, "input_types": []string{"text"}, "streaming": true, "tool_calling": true})
 		return nil
 	})
+	if options.Storage != nil {
+		storageOptions := options.Storage
+		register("GET /api/v1/spaces/{space_id}/sessions/{session_id}/journal", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+			after, through, limit, err := journalQuery(r)
+			if err != nil {
+				return err
+			}
+			page, err := storageOptions.Journal.Read(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("session_id"), after, through, limit)
+			if err != nil {
+				return err
+			}
+			writeJSON(w, 200, page)
+			return nil
+		})
+		register("GET /api/v1/spaces/{space_id}/workspace-snapshots/{id}", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+			snapshot, err := storageOptions.Snapshots.Repo.Snapshot(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("id"))
+			if err != nil {
+				return err
+			}
+			writeJSON(w, 200, snapshot)
+			return nil
+		})
+		register("GET /api/v1/spaces/{space_id}/payloads/{id}", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+			ctx, release, err := svc.WatchAccess(r.Context(), u.ID, r.PathValue("space_id"))
+			if err != nil {
+				return err
+			}
+			defer release()
+			object, file, err := storageOptions.Content.Read(ctx, u.ID, r.PathValue("space_id"), r.PathValue("id"))
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+			check := func(ctx context.Context) error {
+				if _, err := svc.Me(ctx, token(r)); err != nil {
+					return err
+				}
+				return svc.CheckAccess(ctx, u.ID, r.PathValue("space_id"))
+			}
+			if err = check(ctx); err != nil {
+				return err
+			}
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Content-Disposition", `attachment; filename="`+object.ID+`"`)
+			w.Header().Set("Content-Length", strconv.FormatInt(object.Size, 10))
+			w.WriteHeader(200)
+			_ = copyAuthorized(ctx, w, file, check)
+			return nil
+		})
+	}
+
 }

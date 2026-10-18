@@ -60,7 +60,7 @@ func (s *Store) CheckSchema(ctx context.Context) error {
 	if err := s.DB.QueryRowContext(ctx, "SELECT MAX(version_id) FROM goose_db_version WHERE is_applied=1").Scan(&version); err != nil {
 		return errors.New("database schema unavailable; run mass migrate")
 	}
-	if version != 2 {
+	if version != 3 {
 		return errors.New("database schema mismatch; run mass migrate with the matching binary")
 	}
 	return nil
