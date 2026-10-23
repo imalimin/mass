@@ -8,6 +8,9 @@ import (
 )
 
 func fixtureEnv(name string) string {
+	if name == "MASS_LLM_MODEL_BASE_URL" {
+		return "https://ark.cn-beijing.volces.com/api/v3"
+	}
 	if name == "MASS_MASTER_KEY" {
 		return base64.StdEncoding.EncodeToString(make([]byte, 32))
 	}
@@ -53,6 +56,14 @@ func TestD02ConfigurationDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := string(data)
+	lines := strings.Split(source, "\n")
+	var legacy []string
+	for _, line := range lines {
+		if !strings.Contains(line, "base_url_env:") {
+			legacy = append(legacy, line)
+		}
+	}
+	source = strings.Join(legacy, "\n")
 	start := strings.Index(source, "storage:")
 	end := strings.Index(source[start:], "auth:") + start
 	source = source[:start] + source[end:]

@@ -124,3 +124,12 @@ func (s *Store) ResolveCredential(ctx context.Context, actor, space, modelID str
 	})
 	return
 }
+
+// The run fixes a credential ID; rotation may replace that credential's secret,
+// while later edits to model configuration never redirect an existing run.
+func (s *Store) ResolveRuntimeCredential(ctx context.Context, actor, space, model, credential string) (c identity.Credential, err error) {
+	err = s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, "SELECT c.id,c.name,c.key_id,c.ciphertext,c.enabled,c.revision FROM credentials c JOIN model_configs m ON m.space_id=c.space_id WHERE m.space_id=? AND m.id=? AND c.id=? AND m.enabled=TRUE AND c.enabled=TRUE", space, model, credential).Scan(&c.ID, &c.Name, &c.KeyID, &c.Ciphertext, &c.Enabled, &c.Revision)
+	})
+	return
+}

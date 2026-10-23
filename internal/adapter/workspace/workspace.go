@@ -362,3 +362,11 @@ func (d *directory) Clear() error {
 	}
 	return nil
 }
+
+func (m *Manager) Exists(space, session string) bool {
+	if !storage.ValidID(space) || !storage.ValidID(session) {
+		return false
+	}
+	info, err := m.root.Lstat(space + "_" + session)
+	return err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0
+}

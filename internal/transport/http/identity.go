@@ -15,12 +15,14 @@ import (
 
 	"github.com/imalimin/mass/internal/app/catalog"
 	"github.com/imalimin/mass/internal/app/identity"
+	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 )
 
 type endpoint func(http.ResponseWriter, *http.Request, identity.User) error
 type IdentityOptions struct {
 	Catalog *catalog.Service
+	Runtime *RuntimeOptions
 	Storage *StorageOptions
 	Service *identity.Service
 	Origin  string
@@ -84,6 +86,7 @@ func apiError(w http.ResponseWriter, err error, logger *slog.Logger) {
 		message string
 	}{
 		{catalog.ErrDraft, 409, "Draft changed; compare and reload before saving"}, {catalog.ErrVersion, 409, "Version label already published"}, {catalog.ErrReferenced, 409, "Version is referenced"}, {catalog.ErrConfig, 400, "Invalid definition or operation"},
+		{run.ErrState, 409, "Run state conflict"}, {run.ErrCancelled, 409, "Run cancelled"}, {run.ErrBudget, 400, "Run budget exceeded"}, {run.ErrOverflow, 400, "Context capacity exceeded"}, {run.ErrUnavailable, 503, "Runtime unavailable"}, {run.ErrTool, 400, "Tool not available in this stage"}, {run.ErrProtocol, 502, "Model response incomplete or invalid"}, {run.ErrCursor, 400, "Invalid stream cursor"},
 		{storage.ErrConflict, 409, "Storage fact conflict"}, {storage.ErrSchema, 400, "Unsupported event schema"}, {storage.ErrInvalid, 400, "Invalid storage request"}, {storage.ErrIntegrity, 503, "Content unavailable"}, {storage.ErrWorkspace, 409, "Workspace unavailable"}, {storage.ErrActive, 409, "Session has an active run"},
 		{identity.ErrUnauthenticated, 401, "Please sign in"}, {identity.ErrForbidden, 403, "Access denied"}, {identity.ErrNotFound, 404, "Resource not found"}, {identity.ErrConflict, 409, "Resource changed or already exists"}, {identity.ErrInvalid, 400, "Invalid request"}, {identity.ErrCapability, 400, "Unsupported model capability or endpoint"},
 	} {
@@ -215,6 +218,7 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 		return q, limit, scope, err
 	}
 	registerCatalog(register, options, query)
+	registerRuntime(mux, register, options, query, token, logger)
 	register("GET /api/v1/spaces", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		q, n, scope, err := query(r, u)
 		if err != nil {
@@ -351,7 +355,7 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 		if err := svc.CheckAccess(r.Context(), u.ID, r.PathValue("space_id")); err != nil {
 			return err
 		}
-		writeJSON(w, 200, map[string]any{"provider": "ark", "endpoint": identity.ArkEndpoint, "input_types": []string{"text"}, "streaming": true, "tool_calling": true})
+		writeJSON(w, 200, map[string]any{"provider": "ark", "endpoint": svc.Endpoint, "input_types": []string{"text"}, "streaming": true, "tool_calling": true})
 		return nil
 	})
 	if options.Storage != nil {

@@ -42,6 +42,9 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 	if err != nil {
 		return err
 	}
+	if c.LLM.BaseURLEnv != "" {
+		service.Endpoint = strings.TrimSuffix(os.Getenv(c.LLM.BaseURLEnv), "/")
+	}
 	blobs, err := tos.New(os.Getenv(c.TOS.EndpointEnv), os.Getenv(c.TOS.RegionEnv), os.Getenv(c.TOS.BucketEnv), os.Getenv(c.TOS.AccessKeyEnv), os.Getenv(c.TOS.SecretKeyEnv))
 	if err != nil {
 		return err
@@ -61,14 +64,26 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 		}
 		return blobs.Check(ctx)
 	})}
+	catalogue := &catalog.Service{Repo: store, Content: content}
+	runtimeOptions, lifecycle, err := StartRuntime(ctx, c, store, service, catalogue, content, workspaces, snapshots, version, logger, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdown, cancel := context.WithTimeout(context.Background(), c.HTTP.ShutdownTimeout)
+		defer cancel()
+		if err := lifecycle.Close(shutdown); err != nil {
+			logger.Error("runtime shutdown incomplete", "code", "interrupted")
+		}
+	}()
 	listener, err := net.Listen("tcp", c.HTTP.Listen)
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Handler: httptransport.NewHandler(ui.Assets(), version, logger, httptransport.IdentityOptions{Service: service, Origin: strings.TrimSuffix(c.HTTP.PublicURL, "/"), Secure: c.Auth.CookieSecure, Storage: storageOptions, Catalog: &catalog.Service{Repo: store, Content: content}}), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
+	server := &http.Server{Handler: httptransport.NewHandler(ui.Assets(), version, logger, httptransport.IdentityOptions{Service: service, Origin: strings.TrimSuffix(c.HTTP.PublicURL, "/"), Secure: c.Auth.CookieSecure, Storage: storageOptions, Catalog: catalogue, Runtime: runtimeOptions}), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	result := make(chan error, 1)
 	go func() { result <- server.Serve(listener) }()
-	logger.Info("MASS listening", "address", listener.Addr().String(), "stage", "D03")
+	logger.Info("MASS listening", "address", listener.Addr().String(), "stage", "D04")
 	select {
 	case err := <-result:
 		if errors.Is(err, http.ErrServerClosed) {

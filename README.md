@@ -1,8 +1,8 @@
 # mass
 
-Multi-use Agent Systems：支持空间协作、Agent/Skill 定义与版本管理的单服务应用。
+Multi-use Agent Systems：支持空间协作、Agent/Skill 定义、版本管理与连续任务执行的单服务应用。
 
-当前已完成 D00—D03，可体验登录、空间/成员、模型凭证、Agent/Skill 编辑、资源上传、版本发布与差异、默认版本和调试快照。模型调用、Agent 对话、工具执行及后台 Run 将在 D04 接入；当前调试快照只固定定义，不执行任务。
+当前已完成 D00—D04：可配置模型、发布 Agent/Skill、创建连续对话，并使用 read_file、write_file、publish_artifact 执行文件任务。页面支持流式回复、工具状态、产物下载、Trace、取消和快照恢复。其余工具及自动摘要待后续阶段实现。
 
 > 本文件提供项目简介、Quickstart 和建设文档入口。系统方案及工程验收继续由文末四份建设文档维护，不新增专题主文档。
 
@@ -86,6 +86,9 @@ MASS_TOS_ACCESS_KEY='REPLACE_ACCESS_KEY'
 MASS_TOS_SECRET_KEY='REPLACE_SECRET_KEY'
 
 MASS_MASTER_KEY='REPLACE_WITH_GENERATED_MASTER_KEY'
+
+# 服务端批准的模型兼容地址；使用 Ark 时保持此值。
+MASS_LLM_MODEL_BASE_URL='https://ark.cn-beijing.volces.com/api/v3'
 ```
 
 `.env` 和 `mass.yaml` 已被 Git 忽略。程序**不会自动读取 `.env`**，在执行后续命令的终端中手动加载：
@@ -98,7 +101,7 @@ set +a
 
 也可以通过部署平台直接注入同名环境变量。若现有 TOS 变量名是 `TOS_ACCESS_KEY` / `TOS_SECRET_KEY`，可修改 `mass.yaml` 中对应的 `access_key_env` / `secret_key_env` 来复用。
 
-当前 `check-config`、`migrate` 和 `user create` 共用完整配置校验，因此也需要提供应用 DSN、TOS 和主密钥变量；`migrate` 本身只连接 MariaDB。此阶段无需设置 `MASS_LLM_MODEL` 或 `MASS_LLM_API_KEY`，模型与凭证在页面内配置。
+当前 `check-config`、`migrate` 和 `user create` 共用完整配置校验，因此也需要提供应用 DSN、TOS 和主密钥变量；`migrate` 本身只连接 MariaDB。新模板的 `llm.base_url_env` 引用 `MASS_LLM_MODEL_BASE_URL`，填写兼容模型服务的 Base URL；该地址须使用 HTTPS。旧配置未设置 `base_url_env` 时继续使用默认 Ark 地址。模型 ID 与 API key 在每个空间的页面中配置并加密保存，运行不会自动导入环境凭证。`MASS_LLM_MODEL_ID` / `MASS_LLM_MODEL_KEY` 仅供显式真实模型冒烟使用。
 
 ### 4. 初始化表结构
 
@@ -107,7 +110,7 @@ bin/mass check-config --config mass.yaml
 bin/mass migrate --config mass.yaml
 ```
 
-依次看到 `configuration valid` 和 `migrations applied` 即表示配置格式有效、迁移已完成。`check-config` 不验证外部服务连通性。当前 schema 版本为 **4**；迁移文件已嵌入二进制，无需手工执行 SQL 文件。
+依次看到 `configuration valid` 和 `migrations applied` 即表示配置格式有效、迁移已完成。`check-config` 不验证外部服务连通性。当前 schema 版本为 **5**；迁移文件已嵌入二进制，无需手工执行 SQL 文件。
 
 ### 5. 创建登录账号
 
@@ -140,7 +143,11 @@ bin/mass serve --config mass.yaml
 3. 创建 Agent，编辑 `AGENTS.md`，选择模型和准确的 Skill 版本，应用配置、保存草稿并发布 v1。
 4. 修改 Skill 并发布 v2；旧 Agent v1 继续引用原 Skill v1。
 5. 编辑 Agent，选择 Skill v2 后发布 Agent v2，查看旧内容、版本差异并切换默认版本。
-6. 创建调试快照，查看固定的定义与依赖；实际运行将在 D04 开放。
+6. Agent 的工具先只选择 `read_file`、`write_file`、`publish_artifact`；尚未实现的工具会拒绝提交运行。发布版本，或创建不可变调试快照。
+7. 进入「会话与运行」，选择 Agent 及发布/调试版本，新建会话。发送“写入 notes.txt，内容为 hello；读取确认后发布成产物”。可观察输出、工具状态，下载产物并展开「Trace 与上下文」。
+8. 在同一会话发送“读取 notes.txt 的内容”验证跨轮文件延续。每轮停止后保存快照；关闭页面不取消后台任务，取消按钮会等待实际执行停止。
+
+会话固定创建时的 Agent/Skill 定义，后续修改默认版本不会改变已有会话。容量不足会明确报错，D04 不自动压缩或截断上下文。当前文件工具限每文件 1 MiB UTF-8；`write_file` 使用 `expected_sha256` 防止覆盖冲突，产物保存不可变副本。完整工具集和摘要分别在 D05/D06 扩展。
 
 `GET /health/live` 检查进程存活；`GET /health/ready` 检查数据库 schema 与 TOS HeadBucket，就绪结果有短时缓存。对象写入权限可通过页面上传资源验证。
 
@@ -165,6 +172,9 @@ unset MASS_INITIAL_PASSWORD
 
 - 日常启动：加载原来的环境变量，执行 `bin/mass serve --config mass.yaml`；迁移环境变量可以不提供。重开终端后需要重新加载环境变量。
 - 升级：保留数据库、TOS 对象、配置和原主密钥；停止旧服务，提供迁移 DSN 后用新二进制执行 `mass migrate`，再启动新服务。无需重复创建已有账号。
+- 同一数据库只运行一个 MASS 执行实例；第二个实例无法取得运行锁。反向代理需允许长连接 SSE。
+- 进程异常结束后，遗留运行会标记 `interrupted`，不会自动重跑模型或工具。未保存文件可能丢失；页面可恢复最近已提交快照，或在目录仍完整且无活跃运行时「仅重试保存文件」。快照失败会阻止下一轮。
+- 离线重建：停止服务后执行 `bin/mass rebuild-views --config mass.yaml`。命令校验日志及 TOS 内容并重建运行/UI 派生视图，不调用模型或工具；先保留数据库与 TOS 备份。
 - `serve` 不自动迁移；数据库版本不匹配会拒绝启动。首次启动也必须先执行迁移。
 - 对外部署：将 `http.listen` 设为部署所需的监听地址，`http.public_url` 设为浏览器实际使用的 HTTPS origin，设置 `auth.cookie_secure: true`，由 HTTPS 反向代理转发到 Go 服务。写请求会校验 Origin，地址和端口需与配置一致。
 

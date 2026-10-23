@@ -35,7 +35,7 @@ try {
   await page.getByRole('button', { name: '应用配置选择', exact: true }).click(); await save(); const agent1 = await publish('v1')
   assert.deepEqual(agent1.bundle.bindings.map(b => b.version_id).sort(), [skill1.id, skill2.id].sort())
   const snapshotResponse = page.waitForResponse(r => r.url().endsWith('/debug-snapshots') && r.request().method() === 'POST'); await page.getByRole('button', { name: '创建调试快照', exact: true }).click(); assert.equal((await snapshotResponse).status(), 201)
-  await page.getByText('调试快照已固定，运行功能将在 D04 开放。', { exact: true }).waitFor()
+  await page.getByText('调试快照已固定，可在会话与运行中选择它。', { exact: true }).waitFor()
   await page.getByRole('button', { name: 'Skills', exact: true }).click(); await page.getByRole('button', { name: 'extract', exact: true }).click(); await edit('SKILL.md', '# Extract v2\nUse the upgraded method.'); await save(); const skillV2 = await publish('v2')
   await page.getByLabel('查看版本').selectOption(skill1.id); await expect(page.getByTestId('version-markdown')).toContainText('Extract v1'); await page.getByText('assistant · v1', { exact: true }).waitFor()
   const download = await context.request.get(new URL(await page.locator('.version-detail a').first().getAttribute('href'), server.url).href)

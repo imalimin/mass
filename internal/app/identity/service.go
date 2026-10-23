@@ -25,6 +25,7 @@ var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,63}$`)
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 
 type Service struct {
+	Endpoint  string
 	Repo      Repository
 	Cipher    Cipher
 	TTL       time.Duration
@@ -41,7 +42,7 @@ func New(repo Repository, cipher Cipher, ttl time.Duration, key []byte) (*Servic
 		return nil, err
 	}
 	sum := sha256.Sum256(append([]byte("mass.cursor.v1:"), key...))
-	return &Service{Repo: repo, Cipher: cipher, TTL: ttl, cursorKey: sum[:], dummyHash: dummy, watchers: map[string]map[*watch]struct{}{}}, nil
+	return &Service{Endpoint: ArkEndpoint, Repo: repo, Cipher: cipher, TTL: ttl, cursorKey: sum[:], dummyHash: dummy, watchers: map[string]map[*watch]struct{}{}}, nil
 }
 func validName(v string) bool {
 	return strings.TrimSpace(v) == v && utf8.ValidString(v) && len([]rune(v)) >= 1 && len([]rune(v)) <= 100 && !strings.ContainsAny(v, "\x00\r\n")
@@ -205,7 +206,7 @@ func (s *Service) SaveCredential(ctx context.Context, actor, space, id string, i
 }
 func (s *Service) SaveModel(ctx context.Context, actor, space, id string, m Model) (Model, error) {
 	create := id == ""
-	if m.Provider != "ark" || m.Endpoint != ArkEndpoint {
+	if m.Provider != "ark" || m.Endpoint != s.Endpoint {
 		return Model{}, ErrCapability
 	}
 	if !validName(m.Name) || !modelPattern.MatchString(m.ModelID) || !validID(m.CredentialID) || m.ContextWindow <= m.MaxOutputTokens || m.ContextWindow > 2000000 || m.MaxOutputTokens < 1 || m.MaxOutputTokens > 1000000 || math.IsNaN(m.Temperature) || math.IsInf(m.Temperature, 0) || m.Temperature < 0 || m.Temperature > 2 || (!create && (!validID(id) || m.Revision < 1)) {

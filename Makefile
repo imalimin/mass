@@ -7,7 +7,7 @@ VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
 export NPM_CONFIG_CACHE := $(CURDIR)/.cache/npm
 export PLAYWRIGHT_BROWSERS_PATH := $(CURDIR)/.cache/playwright
 
-.PHONY: setup setup-browser generate generate-check fmt lint typecheck test-unit test-race test-e2e build-frontend dev build verify-d00 verify-d01 verify-d02 verify-d03 smoke-tos test-catalog-e2e test-integration verify
+.PHONY: setup setup-browser generate generate-check fmt lint typecheck test-unit test-race test-e2e build-frontend dev build verify-d00 verify-d01 verify-d02 verify-d03 verify-d04 smoke-real smoke-tos test-runtime-e2e test-catalog-e2e test-integration verify
 setup:
 	node scripts/check-toolchain.mjs
 	$(GO) mod download
@@ -66,6 +66,16 @@ smoke-tos: build-frontend
 test-catalog-e2e: build
 	node scripts/catalog-browser-smoke.mjs
 
+test-runtime-e2e: build
+	node scripts/runtime-browser-smoke.mjs
+
+verify-d04: verify-d03 test-runtime-e2e
+	git diff --check
+
+smoke-real: build-frontend
+	@test -n "$$MASS_TEST_ADMIN_DSN" || (echo 'Set MASS_TEST_ADMIN_DSN to an isolated MariaDB server' >&2; exit 1)
+	MASS_TEST_TOS=1 MASS_TEST_REAL_MODEL=1 $(GO) test -count=1 -run '^TestRealTOSStorage$$' -v ./tests/integration
+
 verify-d03: verify-d02 test-catalog-e2e
 	git diff --check
 
@@ -79,5 +89,5 @@ verify-d00: generate-check typecheck lint test-unit
 
 # Full MVP verification must not claim success while later stages are absent.
 verify:
-	@echo 'Full MVP verify is unavailable before D10; use make verify-d03 for definition/version management.' >&2
+	@echo 'Full MVP verify is unavailable before D10; use make verify-d04 for current execution functionality.' >&2
 	@exit 1

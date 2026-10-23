@@ -5,7 +5,7 @@
 > - 包含：建设阶段、前置条件、具体任务、交付物、测试门槛、验收清单、运行交付步骤和进度证据。
 > - 不包含：替代用户目标或维护另一套技术方案；发现缺失细节应先补入技术方案再实施。
 > - 输入依次为[系统设计指引](design-guide.md)、[系统架构设计](architecture.md)、[技术方案](technical-design.md)。所有开发计划、验收和操作说明集中在本文，不再拆计划、测试或操作主文档。
-> - 状态：D00—D03 已完成；D01/D02 兼容回归通过，D04—D10 未开始；更新：2026-10-18。当前实现与验证证据见 E15.1—E15.4，后续阶段的命令和路径仍为待建立约定。
+> - 状态：D00—D04 已完成；D01—D03 兼容回归通过，D05—D10 未开始；更新：2026-10-23。当前实现与验证证据见 E15.1—E15.5，后续阶段的命令和路径仍为待建立约定。
 
 ## E00 四份文档与 AI 执行规则
 
@@ -48,7 +48,7 @@
 | D01 数据、文件与事件基础 | M10/M11/M13 | D00 | MariaDB/TOS、会话目录与快照、会话日志、基础迁移 | 已完成，2026-10-18，见 E15.3 |
 | D02 身份、空间与模型配置 | M01/M03/M12 | D01 | 登录、空间/成员页面与 API、最小模型/凭证配置及隔离 | 已完成；D01 补齐后兼容回归通过，见 E15.2/E15.3 |
 | D03 定义与版本闭环 | M02/M12 | D02 | Agent/Skill 编辑、发布、引用与版本查看 | 已完成，2026-10-18，见 E15.4 |
-| D04 最小运行纵向闭环 | M04—M11 | D03 | Eino 接入、原文 Trace、最小投影、读写文件/产物、取消和快照恢复 | 未开始 |
+| D04 最小运行纵向闭环 | M04—M11 | D03 | Eino 接入、原文 Trace、最小投影、读写文件/产物、取消和快照恢复 | 已完成，2026-10-23，见 E15.5 |
 | D05 内置工具闭环 | M09/M11 | D04 | 补齐 14 个工具、代码文件/网络能力、计划/交付与 I/O 记录 | 未开始 |
 | D06 上下文完整能力 | M07 | D05 | 确定性投影、阶段摘要、稳定前缀、大结果和来源检查 | 未开始 |
 | D07 模型能力完善与真实验证 | M03/M08 | D06 | 多工具/摘要、凭证撤销/轮换、异常协议与真实缓存观测 | 未开始 |
@@ -520,3 +520,38 @@ make test-race
 执行结果：`make verify-d03 smoke-tos test-race` 全部通过，包含 D01/D02 升级兼容、两个浏览器闭环、真实 MariaDB/TOS 和 Go race 检查。Monaco 按需加载，构建仍提示其压缩前约 2.7 MB 的独立编辑器包较大；普通管理页不加载该包。
 
 部署时使用新二进制执行 mass migrate，再启动 mass serve；保留已有配置、主密钥和数据。前端入口为选择空间→Agent 与 Skill；定义名使用小写标识，配置引用实际模型/Skill ID。首次发布自动设置 Agent 默认版本；后续发布须显式切换。更新 CI 默认门槛为 verify-d03/race，远端 CI 未触发。D04 的 Session 固定定义、后台 Run、模型调用、工具执行与完整 reducer 尚未实现。
+
+
+### E15.5 D04 最小运行纵向闭环（2026-10-23）
+
+基于 863ff25 新增 00005_runtime，schema 推进到 5，保留前三阶段迁移不变。D04a—d 已按同一契约落地，生产 bootstrap 只注入实际 Eino 适配器，FakeChatModel 仅由测试显式注入。
+
+| 小步 | 代码与可体验结果 | 验证证据 |
+| --- | --- | --- |
+| D04a | domain/run、app/session、Journal/reducer、control、context/projector/planner：固定准确发布/调试定义、幂等提交、占用、容量拒绝、唯一 ReAct 循环 | FakeChatModel 与真实 MariaDB；相同请求只产生一个 Run、内容变化拒绝、同会话占用拒绝；固定 through_sequence 重算与已提交投影一致；超容量时零模型 attempt |
+| D04b | adapter/eino、runtime/modelgateway：实际 SDK 序列化、原文先保存后消费、完整响应/usage、参数聚合、失败事件 | 本地 HTTP 供应商经生产 Eino/HTTP 捕获链路完成四次文件工具循环；授权真实模型单次文本调用返回指定标记，保存 wire/usage/快照；未知与明确零分开 |
+| D04c | resource.FileService/RunWorkspaces/Finisher：三个真实文件工具、不可变产物、统一快照、下一轮恢复、新会话独立复制 | 真实 MariaDB/TOS 完成输入→写入→读取→产物→快照→删除本地目录→下一轮读取；新会话复制文件；快照故障阻止下一轮，重试仅保存文件且不改旧终态 |
+| D04d | runtime/scheduler/supervisor、AG-UI projector/持久帧、HTTP/SSE、会话页面、rebuild-views | 运行实例锁互斥；queued/running 取消、撤权、panic、实际退出后收尾/释放；浏览器关闭重载不调用模型；SIGKILL 后 interrupted/快照恢复；连续 UI 游标及离线重建 |
+
+新 HTTP 响应实际通过 OpenAPI Schema 校验，202 幂等响应也参与校验。工具结果只接受同 Run 完成响应中的 call_id/名称/参数摘要；普通 Repository 不能伪造 system 收尾身份。SQL 触发器注入语义日志失败时无最终成功回复；终结事务失败时快照、终态与占用一起回滚，执行入口停止接单，去除故障后复用原收尾计划核实提交。取消未退出的 fake runner 不提前收尾或释放名额；最终回复已完成但归档保存被阻塞时发起取消，验证只产生一个 cancelled 终态并保存快照；panic 只产生一次失败收尾。
+
+离线重建测试先清空消息、attempt/call、工具、产物、活跃占用、AG-UI 流与帧，再校验全部源对象并重建，Run 业务结果及逐帧输出与原状态一致。不可变 Run 身份和快照索引保留作外键锚点；心跳属于协调状态，不要求重放为原时间。在线执行锁存在时拒绝重建，重建入口没有模型/工具依赖。
+
+浏览器经页面完成模型配置→发布三个工具的 Agent→会话任务→流式回复/工具状态→产物下载→Trace/投影载荷→第二轮读取→页面刷新→取消→SIGKILL 重启→恢复已提交快照→继续读取。1440px 与 390px 布局无横向溢出、无 pageerror；截图位于忽略的 .cache/d04-desktop.png / d04-mobile.png。本地协议夹具使用官方 TOS SDK 与实际 Eino Ark 组件，与真实云验收分别执行。
+
+真实云配置由已授权的终端环境读取：source ~/.zshrc 后可获得 MASS_LLM_MODEL_BASE_URL、MASS_LLM_MODEL_KEY、MASS_LLM_MODEL_ID。未将密钥写入仓库或日志。TOS 每轮在授权 tmp/ 下生成独立 mass-d01-UUID/，只使用合成内容；最后一轮共清理 104 个对象，清理仅针对本轮精确 key/版本并逐个 GET 确认删除，不按 Bucket/前缀批量删除。测试数据库使用独立临时 MariaDB 11.8.9 Unix socket，随机创建/清理本轮库及 DML 账号，不使用部署 DSN。
+
+```sh
+# 固定 Go/Node/npm 工具链；MASS_TEST_ADMIN_DSN 必须指向专用测试 MariaDB。
+make verify-d04
+make test-race
+# 另行提供 E15.3 的 TOS 测试变量，以及三个 MASS_LLM_MODEL_* 变量。
+# 此命令显式授权一次受限真实文本调用；云测试清理自己的对象。
+make smoke-real
+```
+
+执行结果：make verify-d04、make test-race 及真实 TOS/模型冒烟通过；普通检查包含 D01/D02/D03 回归、配置兼容、迁移重复执行、生成物一致性、TypeScript/Go 检查、依赖方向、API 和三个浏览器流程。额外从 schema 4 写入真实发布定义及加密模型后升级两次，并继续以原定义执行任务。CI 默认门槛更新为 verify-d04/race，不注入用户云凭证；远端 CI 未触发。Vite 仍提示较大的主应用/Monaco 独立包，功能构建成功。
+
+部署：停止旧服务并备份，保留原数据库/TOS/主密钥，使用迁移账号执行新二进制 mass migrate，再以 DML 应用账号 serve。旧 mass.yaml 无 base_url_env 时仍默认 Ark；使用自定义兼容模型地址需配置 llm.base_url_env: MASS_LLM_MODEL_BASE_URL，并在页面保存对应模型/凭证。环境模型密钥不会自动导入空间。完整体验步骤已同步 README Quickstart。
+
+当前限制：仅 read_file/write_file/publish_artifact 三个 v1 工具，单文件 1 MiB UTF-8，其余工具提交时拒绝；没有附件/代码执行/自动摘要，保守计数器容量不足明确拒绝。单数据库单执行实例；中断不自动重放，未保存目录修改可能丢失；界面提供显式快照恢复/只重试保存。D05—D10 与完整 MVP 验收尚未完成，make verify 继续明确失败。

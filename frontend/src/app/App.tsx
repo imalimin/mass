@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { APIError, list, request, type Schema } from '../lib/api'
+import { Sessions } from '../features/sessions/Sessions'
 import { Catalog } from '../features/catalog/Catalog'
 import { SpaceDetail } from '../features/spaces/SpaceDetail'
 
@@ -31,9 +32,9 @@ export function App() {
   return <div className="layout"><aside><a className="brand" href="/">M<span className="brand-dot">A</span>SS<span className="brand-sub">AGENT WORKSPACE</span></a><div className="nav-caption">工作台</div><nav><NavLink to="/spaces" onClick={() => setSelected(null)}>◈ <span>空间</span></NavLink></nav><div className="sidebar-footer">{me.data.username}<button onClick={() => logout.mutate()} disabled={logout.isPending}>退出登录</button></div></aside>
     <main><header><div><div className="eyebrow">WORKSPACE</div><h1>{selected?.name ?? '空间'}</h1></div><span className="service-status">已连接 MASS 服务</span></header><p className="intro">管理协作成员、模型与 Agent / Skill 定义。</p>
       {notice && <div role="alert" className="error">{notice}<button onClick={() => setNotice('')}>关闭</button></div>}{logout.error && <p role="alert">{logout.error.message}</p>}
-      <Spaces selected={selected} onSelect={async space => { await client.cancelQueries({ queryKey: ['private'] }); client.removeQueries({ queryKey: ['private'] }); setSelected(space); setNotice('') }} />
+      <Spaces selected={selected} onSelect={async space => { await client.cancelQueries({ queryKey: ['private'] }); client.removeQueries({ queryKey: ['private'] }); setSelected(space); setNotice(''); const url = new URL(location.href); if (url.searchParams.get('space') !== space.id) { url.search = ''; url.searchParams.set('space', space.id); history.replaceState(null, '', url) } }} />
       {selected && <SpaceWorkspace key={selected.id} space={selected} user={me.data} onLeave={() => setSelected(null)} />}
-      <footer>Agent 与 Skill 定义已开放；运行与调试将在 D04 接入。</footer>
+      <footer>会话固定定义版本，运行记录与文件快照持续保存。</footer>
     </main></div>
 }
 function Login({ onSuccess }: { onSuccess: () => void }) {
@@ -44,11 +45,12 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
 function Spaces({ selected, onSelect }: { selected: Schema['Space'] | null; onSelect: (s: Schema['Space']) => void }) {
   const client = useQueryClient(), [name, setName] = useState('')
   const spaces = useQuery({ queryKey: ['spaces'], queryFn: ({ signal }) => list<Schema['Space']>('/spaces', signal) })
+  useEffect(() => { const id = new URLSearchParams(location.search).get('space'); if (!selected && id) { const found = spaces.data?.find(s => s.id === id); if (found) onSelect(found) } }, [spaces.data, selected, onSelect])
   const create = useMutation({ mutationFn: () => request<Schema['Space']>('/spaces', 'POST', { name }), onSuccess: space => { setName(''); void client.invalidateQueries({ queryKey: ['spaces'] }); onSelect(space) } })
   return <section className="panel"><h2>我的空间</h2><div className="space-list">{spaces.data?.map(s => <button key={s.id} className={s.id === selected?.id ? 'selected' : 'secondary'} onClick={() => onSelect(s)}>{s.name}<small>{s.is_owner ? '管理员' : '成员'}</small></button>)}</div>{spaces.isPending && <p>正在读取空间…</p>}{spaces.data?.length === 0 && <p className="muted">还没有空间。创建一个空间开始协作。</p>}{spaces.error && <p role="alert">{spaces.error.message}</p>}<form className="inline-form" onSubmit={e => { e.preventDefault(); create.mutate() }}><label>新空间名称<input value={name} onChange={e => setName(e.target.value)} maxLength={100} required /></label><button disabled={create.isPending}>创建空间</button></form>{create.error && <p role="alert">{create.error.message}</p>}</section>
 }
 
 function SpaceWorkspace({ space, user, onLeave }: { space: Schema['Space']; user: Schema['User']; onLeave: () => void }) {
-  const [tab, setTab] = useState('manage')
-  return <><div className="actions workspace-tabs"><button className={tab === 'manage' ? 'selected' : 'secondary'} onClick={() => setTab('manage')}>成员与模型</button><button className={tab === 'catalog' ? 'selected' : 'secondary'} onClick={() => setTab('catalog')}>Agent 与 Skill</button></div>{tab === 'manage' ? <SpaceDetail space={space} user={user} onLeave={onLeave} /> : <Catalog space={space} />}</>
+  const [tab, setTab] = useState(new URLSearchParams(location.search).get('session') ? 'runs' : 'manage')
+  return <><div className="actions workspace-tabs"><button className={tab === 'manage' ? 'selected' : 'secondary'} onClick={() => setTab('manage')}>成员与模型</button><button className={tab === 'catalog' ? 'selected' : 'secondary'} onClick={() => setTab('catalog')}>Agent 与 Skill</button><button className={tab === 'runs' ? 'selected' : 'secondary'} onClick={() => setTab('runs')}>会话与运行</button></div>{tab === 'manage' ? <SpaceDetail space={space} user={user} onLeave={onLeave} /> : tab === 'catalog' ? <Catalog space={space} /> : <Sessions space={space.id} />}</>
 }

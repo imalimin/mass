@@ -26,6 +26,9 @@ func NewHandler(assets fs.FS, version string, logger *slog.Logger, options ...Id
 		stage = "D02"
 		if options[0].Catalog != nil {
 			stage = "D03"
+			if options[0].Runtime != nil {
+				stage = "D04"
+			}
 		}
 	}
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status": "alive"}) })

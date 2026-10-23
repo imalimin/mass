@@ -644,6 +644,246 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/spaces/{space_id}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listSessions"];
+        put?: never;
+        post: operations["createSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/sessions/{session_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listSessionRuns"];
+        put?: never;
+        post: operations["submitRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/runs/{run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cancelRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/sessions/{session_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getMessages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/runs/{run_id}/trace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRuntrace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/runs/{run_id}/contexts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRuncontexts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/runs/{run_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRunArtifacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/sessions/{session_id}/workspace-snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getSessionSnapshots"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/sessions/{session_id}/workspace-snapshots/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["retryWorkspaceSave"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/sessions/{session_id}/workspace/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["restoreWorkspace"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/runs/{run_id}/ui-snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getUISnapshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/artifacts/{id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["downloadArtifact"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/runs/{run_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["streamRunEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -795,7 +1035,7 @@ export interface components {
             name: "MASS";
             version: string;
             /** @enum {string} */
-            stage: "D00" | "D02" | "D03";
+            stage: "D00" | "D02" | "D03" | "D04";
             /** @constant */
             protocol_profile: "mass-agui-v1";
         };
@@ -865,8 +1105,11 @@ export interface components {
             /** @constant */
             provider: "ark";
             model_id: string;
-            /** @constant */
-            endpoint: "https://ark.cn-beijing.volces.com/api/v3";
+            /**
+             * Format: uri
+             * @description 服务端批准的兼容模型 Base URL，默认 Ark 地址。
+             */
+            endpoint: string;
             credential_id: components["schemas"]["ResourceID"];
             context_window: number;
             max_output_tokens: number;
@@ -880,8 +1123,11 @@ export interface components {
         ModelCapabilities: {
             /** @constant */
             provider: "ark";
-            /** @constant */
-            endpoint: "https://ark.cn-beijing.volces.com/api/v3";
+            /**
+             * Format: uri
+             * @description 服务端批准的兼容模型 Base URL，默认 Ark 地址。
+             */
+            endpoint: string;
             input_types: "text"[];
             /** @constant */
             streaming: true;
@@ -893,8 +1139,11 @@ export interface components {
             /** @constant */
             provider: "ark";
             model_id: string;
-            /** @constant */
-            endpoint: "https://ark.cn-beijing.volces.com/api/v3";
+            /**
+             * Format: uri
+             * @description 服务端批准的兼容模型 Base URL，默认 Ark 地址。
+             */
+            endpoint: string;
             credential_id: components["schemas"]["ResourceID"];
             context_window: number;
             max_output_tokens: number;
@@ -937,8 +1186,11 @@ export interface components {
             /** @constant */
             provider: "ark";
             model_id: string;
-            /** @constant */
-            endpoint: "https://ark.cn-beijing.volces.com/api/v3";
+            /**
+             * Format: uri
+             * @description 服务端批准的兼容模型 Base URL，默认 Ark 地址。
+             */
+            endpoint: string;
             credential_id: components["schemas"]["ResourceID"];
             context_window: number;
             max_output_tokens: number;
@@ -997,6 +1249,246 @@ export interface components {
             archive_sha256: string;
             /** @constant */
             format_version: 1;
+        };
+        RuntimeRef: {
+            role: string;
+            ordinal: number;
+            /** Format: uuid */
+            object_id: string;
+            sha256: string;
+        };
+        RuntimeTool: {
+            name: string;
+            version: string;
+            description: string;
+            schema: Record<string, never> | null;
+        };
+        RuntimeModel: {
+            /** Format: uuid */
+            id: string;
+            provider: string;
+            model_id: string;
+            endpoint: string;
+            /** Format: uuid */
+            credential_id: string;
+            revision: number;
+            context_window: number;
+            max_output_tokens: number;
+            temperature: number;
+        };
+        RuntimeSkill: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            version_id: string;
+            version: string;
+            sha256: string;
+            markdown: string;
+        };
+        RuntimeDefinition: {
+            /** Format: uuid */
+            version_id: string;
+            /** Format: uuid */
+            agent_id: string;
+            debug: boolean;
+            platform_version: string;
+            platform: string;
+            instructions: string;
+            skills: components["schemas"]["RuntimeSkill"][];
+            model: components["schemas"]["RuntimeModel"];
+            tools: components["schemas"]["RuntimeTool"][];
+            max_input_tokens: number;
+            output_tokens: number;
+            max_steps: number;
+            timeout_seconds: number;
+        };
+        RuntimeSnapshot: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            space_id: string;
+            /** Format: uuid */
+            session_id: string;
+            /** Format: uuid */
+            actor_id: string;
+            definition_ref: components["schemas"]["RuntimeRef"];
+            /** Format: uuid */
+            user_event_id: string;
+            base_workspace_snapshot_id: string;
+            definition: components["schemas"]["RuntimeDefinition"];
+            build: string;
+            /** @constant */
+            protocol_profile: "mass-agui-v1";
+            /** @constant */
+            mapper_version: 1;
+            /** @constant */
+            parser_version: 1;
+            /** Format: date-time */
+            created_at: string;
+        };
+        RuntimeUsage: {
+            input_tokens: number | null;
+            output_tokens: number | null;
+            cache_read_tokens: number | null;
+            cache_write_tokens: number | null;
+        };
+        RuntimeRun: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            space_id: string;
+            /** Format: uuid */
+            session_id: string;
+            /** Format: uuid */
+            actor_id: string;
+            definition_ref: components["schemas"]["RuntimeRef"];
+            /** Format: uuid */
+            user_event_id: string;
+            base_workspace_snapshot_id: string;
+            definition: components["schemas"]["RuntimeDefinition"];
+            build: string;
+            /** @constant */
+            protocol_profile: "mass-agui-v1";
+            /** @constant */
+            mapper_version: 1;
+            /** @constant */
+            parser_version: 1;
+            /** Format: date-time */
+            created_at: string;
+            /** @enum {string} */
+            status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+            cancel_requested: boolean;
+            final_response_event_id: string;
+            error: string;
+            snapshot_error: string;
+            workspace_snapshot_id: string;
+            started_at: string | null;
+            finished_at: string | null;
+            heartbeat_at: string | null;
+            usage: components["schemas"]["RuntimeUsage"];
+        };
+        RuntimeSession: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            space_id: string;
+            /** Format: uuid */
+            actor_id: string;
+            title: string;
+            /** Format: uuid */
+            definition_id: string;
+            /** Format: uuid */
+            version_id: string;
+            definition_ref: components["schemas"]["RuntimeRef"];
+            latest_workspace_snapshot_id: string;
+            workspace_error: string;
+            last_sequence: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        RuntimeMessage: {
+            /** Format: uuid */
+            id: string;
+            run_id: string;
+            /** @enum {string} */
+            role: "user" | "assistant";
+            /** Format: uuid */
+            content_id: string;
+            /** Format: uuid */
+            source_event_id: string;
+            sequence: string;
+            complete: boolean;
+            content: string;
+            truncated: boolean;
+        };
+        RuntimeMessages: {
+            items: components["schemas"]["RuntimeMessage"][];
+            next_after: string;
+            has_more: boolean;
+        };
+        RuntimeArtifact: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            space_id: string;
+            /** Format: uuid */
+            session_id: string;
+            /** Format: uuid */
+            run_id: string;
+            call_id: string;
+            /** Format: uuid */
+            object_id: string;
+            sha256: string;
+            name: string;
+            media_type: string;
+            path: string;
+            download_url: string;
+        };
+        RuntimeArtifacts: {
+            items: components["schemas"]["RuntimeArtifact"][];
+        };
+        RuntimeSnapshots: {
+            items: components["schemas"]["WorkspaceSnapshot"][];
+        };
+        RuntimeRestored: {
+            restored: boolean;
+        };
+        UIMessage: {
+            id: string;
+            text: string;
+            closed: boolean;
+            incomplete: boolean;
+        };
+        UITool: {
+            id: string;
+            name: string;
+            arguments: string;
+            result: string;
+            status: string;
+            standard: boolean;
+        };
+        UIState: {
+            status: string;
+            cancel_requested: boolean;
+            messages: components["schemas"]["UIMessage"][];
+            tools: components["schemas"]["UITool"][];
+            artifacts: components["schemas"]["RuntimeArtifact"][];
+            usage: components["schemas"]["RuntimeUsage"];
+            error: string;
+        };
+        UICheckpoint: {
+            /** Format: uuid */
+            session_id: string;
+            source_sequence: string;
+            cursor: string;
+            /** @constant */
+            protocol_profile: "mass-agui-v1";
+            /** @constant */
+            mapper_version: 1;
+            /** @constant */
+            parser_version: 1;
+            closed: boolean;
+            state: components["schemas"]["UIState"];
+        };
+        RuntimeSessionPage: {
+            items: components["schemas"]["RuntimeSession"][];
+            next_cursor: string | null;
+        };
+        RuntimeRunPage: {
+            items: components["schemas"]["RuntimeRun"][];
+            next_cursor: string | null;
+        };
+        SessionCreateInput: {
+            idempotency_key: string;
+            /** Format: uuid */
+            agent_id: string;
+            version_id?: string;
+            source_workspace_snapshot_id?: string;
+            title?: string;
+        };
+        RunSubmitInput: {
+            idempotency_key: string;
+            text: string;
         };
     };
     responses: never;
@@ -4303,6 +4795,578 @@ export interface operations {
             };
             /** @description Rejected or unavailable. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listSessions: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                space_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeSessionPage"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionCreateInput"];
+            };
+        };
+        responses: {
+            /** @description Successful operation. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeSession"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeSession"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listSessionRuns: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                space_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeRunPage"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    submitRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunSubmitInput"];
+            };
+        };
+        responses: {
+            /** @description Successful operation. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeRun"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeRun"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    cancelRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeRun"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getMessages: {
+        parameters: {
+            query?: {
+                after_sequence?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                space_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeMessages"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getRuntrace: {
+        parameters: {
+            query?: {
+                after_sequence?: string;
+                through_sequence?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                space_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalPage"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getRuncontexts: {
+        parameters: {
+            query?: {
+                after_sequence?: string;
+                through_sequence?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                space_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalPage"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getRunArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeArtifacts"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getSessionSnapshots: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeSnapshots"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    retryWorkspaceSave: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSnapshot"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    restoreWorkspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeRestored"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getUISnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UICheckpoint"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    downloadArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Verified immutable artifact bytes. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    streamRunEvents: {
+        parameters: {
+            query?: {
+                after?: string;
+            };
+            header?: {
+                "Last-Event-ID"?: string;
+            };
+            path: {
+                space_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Persisted AG-UI events with a continuous Run UI sequence. after and Last-Event-ID must agree. Heartbeats are comments; terminal closes stream. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
                 headers: {
                     [name: string]: unknown;
                 };

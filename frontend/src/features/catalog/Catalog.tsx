@@ -16,7 +16,7 @@ export function Catalog({ space }: { space: Schema['Space'] }) {
   const refresh = () => { void client.invalidateQueries({ queryKey: ['private', space.id] }) }
   const create = useMutation({ mutationFn: () => request<Draft>(base, 'POST', { name }), onSuccess: d => { setSelected(d.id); setName(''); refresh() } })
   return <section className="panel catalog"><div className="actions"><button className={kind === 'skill' ? 'selected' : 'secondary'} onClick={() => { setKind('skill'); setSelected('') }}>Skills</button><button className={kind === 'agent' ? 'selected' : 'secondary'} onClick={() => { setKind('agent'); setSelected('') }}>Agents</button></div>
-    <h2>{kind === 'skill' ? 'Skill 方法库' : 'Agent 定义'}</h2><p className="muted">保存草稿后发布独立版本。Agent 始终绑定指定的 Skill 版本。</p>
+    <h2>{kind === 'skill' ? 'Skill 方法库' : 'Agent 定义'}</h2><p className="muted">保存草稿后发布独立版本。Agent 始终绑定指定的 Skill 版本。当前运行支持 read_file、write_file、publish_artifact。</p>
     <form className="inline-form" onSubmit={e => { e.preventDefault(); create.mutate() }}><label>定义名称<input value={name} onChange={e => setName(e.target.value)} pattern="[a-z][a-z0-9-]{0,63}" placeholder="例如 report-writer" required /></label><button disabled={create.isPending}>创建 {kind === 'skill' ? 'Skill' : 'Agent'}</button></form>
     {[query.error, create.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}
     <div className="definition-list">{query.data?.map(d => <button className={d.id === selected ? 'selected' : 'secondary'} key={d.id} onClick={() => setSelected(d.id)}>{d.name}{d.archived ? '（已归档）' : ''}</button>)}</div>
@@ -46,7 +46,7 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
   const accept = (d: Draft) => { setDraft(d); setDoc(d.document); setConflict(null); refresh() }
   const failed = async (e: Error) => { if (e instanceof APIError && e.code === 'draft_conflict') { try { setConflict(await request<Draft>(`${base}/draft`)) } catch { /* request handles revoked access */ } } }
   const save = useMutation({ mutationFn: () => request<Draft>(`${base}/draft`, 'PUT', { expected_revision: draft.revision, document: doc }), onSuccess: d => { accept(d); setNotice('草稿已保存') }, onError: failed })
-  const publish = useMutation({ mutationFn: (debug: boolean) => request<Version>(`${base}/${debug ? 'debug-snapshots' : 'versions'}`, 'POST', { expected_revision: draft.revision, label: debug ? '' : label }), onSuccess: v => { refresh(); setVersionID(v.id); setNotice(v.debug ? '调试快照已固定，运行功能将在 D04 开放。' : `已发布 ${v.label}`) }, onError: failed })
+  const publish = useMutation({ mutationFn: (debug: boolean) => request<Version>(`${base}/${debug ? 'debug-snapshots' : 'versions'}`, 'POST', { expected_revision: draft.revision, label: debug ? '' : label }), onSuccess: v => { refresh(); setVersionID(v.id); setNotice(v.debug ? '调试快照已固定，可在会话与运行中选择它。' : `已发布 ${v.label}`) }, onError: failed })
   const mutateState = useMutation({ mutationFn: ({ suffix, body }: { suffix: string; body: unknown }) => request(`${base}/${suffix}`, 'PUT', body), onSuccess: async () => { accept(await request<Draft>(`${base}/draft`)); setNotice('状态已更新') } })
   const copy = useMutation({ mutationFn: () => request<Draft>(`${base}/copy`, 'POST', { name: copyName }), onSuccess: d => { refresh(); onCopied(d.id) } })
   const upload = useMutation({ mutationFn: async () => {
@@ -82,7 +82,7 @@ function ConfigBuilder({ space, name, initial, onApply }: { space: string; name:
     return Promise.all(definitions.filter(d => !d.archived).map(async d => ({ ...d, versions: (await list<Version>(`/spaces/${space}/skills/${d.id}/versions`, signal)).filter(v => !v.archived) })))
   } })
   const [state, setState] = useState<{ model: string; skills: Record<string, string>; tools: string[] }>(() => {
-    try { const c = JSON.parse(initial) as Schema['DefinitionConfig']; return { model: c.model, skills: Object.fromEntries((c.skills ?? []).map(s => [s.id, s.version])), tools: c.tools ?? [] } } catch { return { model: '', skills: {}, tools: ['read_file', 'write_file', 'read_skill_resource'] } }
+    try { const c = JSON.parse(initial) as Schema['DefinitionConfig']; return { model: c.model, skills: Object.fromEntries((c.skills ?? []).map(s => [s.id, s.version])), tools: c.tools ?? [] } } catch { return { model: '', skills: {}, tools: ['read_file', 'write_file', 'publish_artifact'] } }
   })
   const apply = () => {
     const m = models.data?.find(m => m.id === state.model); if (!m) return

@@ -59,7 +59,7 @@ func TestRealTOSStorage(t *testing.T) {
 	defer client.Client.Close()
 	tracked := &trackedTOS{Store: client, prefix: prefix, keys: map[string]string{}}
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		for key, version := range tracked.keys {
 			if !strings.HasPrefix(key, prefix) {
@@ -110,4 +110,13 @@ func TestRealTOSStorage(t *testing.T) {
 	}
 	exerciseStorage(t, tracked, prefix)
 	exerciseCatalog(t, tracked, prefix+"catalog/")
+	exerciseRuntime(t, tracked, prefix+"runtime/", true)
+	if os.Getenv("MASS_TEST_REAL_MODEL") == "1" {
+		for _, key := range []string{"MASS_LLM_MODEL_BASE_URL", "MASS_LLM_MODEL_KEY", "MASS_LLM_MODEL_ID"} {
+			if os.Getenv(key) == "" {
+				t.Fatalf("missing %s", key)
+			}
+		}
+		exerciseRuntime(t, tracked, prefix+"real-model/", false, true)
+	}
 }

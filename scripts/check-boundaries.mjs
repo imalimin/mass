@@ -9,6 +9,12 @@ for (const line of lines) {
   const core = /^(domain|runtime|journal|resource)(\/|$)/.test(local)
   if (core && imports.some(value => /internal\/(adapter|transport|bootstrap)(\/|$)/.test(value))) throw new Error(`Core imports an outer adapter: ${name}`)
   if (local.startsWith('domain') && imports.some(value => value.startsWith(prefix) && !value.startsWith(`${prefix}domain`))) throw new Error(`Domain imports application packages: ${name}`)
+  if (local.startsWith('runtime/')) {
+    const allowed = local === 'runtime/context/planner' ? ['runtime/context/projector'] : []
+    if (imports.some(value => value.startsWith(`${prefix}runtime/`) && !allowed.includes(value.slice(prefix.length)))) throw new Error(`Runtime dependency violates consumer boundaries: ${name}`)
+    if (imports.some(value => /github.com\/(cloudwego|volcengine)\//.test(value))) throw new Error(`Runtime imports provider SDK: ${name}`)
+  }
+  if (/^(journal|resource|app)(\/|$)/.test(local) && imports.some(value => value.startsWith(`${prefix}runtime/`))) throw new Error(`Management/shared service imports execution implementation: ${name}`)
   if (local === 'runtime') throw new Error('runtime is an organization directory, not a monolithic package')
 }
 

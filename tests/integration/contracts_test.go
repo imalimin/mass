@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -63,11 +64,7 @@ func contractValidator(t *testing.T) func(string, string, *httptest.ResponseReco
 			}
 			responses := operation["responses"].(map[string]any)
 			var response map[string]any
-			if w.Code == 201 {
-				response = responses["201"].(map[string]any)
-			} else {
-				response = responses["200"].(map[string]any)
-			}
+			response = responses[strconv.Itoa(w.Code)].(map[string]any)
 			ref := response["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)["$ref"].(string)
 			name = strings.TrimPrefix(ref, "#/components/schemas/")
 		}

@@ -5,7 +5,7 @@
 > - 包含：技术选型、模块算法、存储与接口设计、核心代码、运行配置、兼容性和实现限制。
 > - 不包含：重新定义产品目标，或维护开发进度、测试执行报告和交付步骤。
 > - 依据：[系统设计指引](design-guide.md)和[系统架构设计](architecture.md)；编码、测试与交付按[工程开发文档](engineering.md)执行。以后各模块细节继续补充在本文，不拆专题文档。
-> - 状态：技术方案基线，D00 已收敛契约见 T00.6，D02 管理能力见 T01.1/T03.1，D01 持久化实现在 T10.2.1/T11.5，D03 定义管理见 T02.1；更新：2026-10-18。实际实现与验证范围见工程开发文档；片段中未定义的工程类型需在对应阶段补齐。
+> - 状态：技术方案基线，D00 已收敛契约见 T00.6，D02 管理能力见 T01.1/T03.1，D01 持久化实现在 T10.2.1/T11.5，D03 定义管理见 T02.1，D04 运行实现在 T04.1/T05.1/T07.7/T08.5/T10.7/T11.6；更新：2026-10-23。实际实现与验证范围见工程开发文档；片段中未定义的工程类型需在对应阶段补齐。
 
 ## T00 技术基线与依赖
 
@@ -289,9 +289,9 @@ func (s *CatalogService) PublishAgent(ctx context.Context, in PublishInput) (Ver
 
 ### T02.1 D03 已实现的定义契约
 
-新增迁移 00004_definitions，不改动已发布的前三份迁移；serve 要求 schema 4。Agent 与 Skill 的元数据、草稿和版本复用 definitions / definition_drafts / definition_versions，以 kind 区分，外部 API 仍为 /agents 和 /skills。全部关联含 space_id；definition_dependencies 保存有序、准确的 Skill 内部版本 ID，数据库外键限制删除被引用版本。版本 label 在单一定义内区分大小写且唯一；latest（不区分大小写）及范围表达式不被接受。debug=true 的不可变快照无发布 label，不改变默认版本。
+新增迁移 00004_definitions，不改动已发布的前三份迁移；D03 使用 schema 4；当前 serve 要求 schema 5。Agent 与 Skill 的元数据、草稿和版本复用 definitions / definition_drafts / definition_versions，以 kind 区分，外部 API 仍为 /agents 和 /skills。全部关联含 space_id；definition_dependencies 保存有序、准确的 Skill 内部版本 ID，数据库外键限制删除被引用版本。版本 label 在单一定义内区分大小写且唯一；latest（不区分大小写）及范围表达式不被接受。debug=true 的不可变快照无发布 label，不改变默认版本。
 
-定义名称为 1—64 字节的小写字母/数字/连字符标识，首字符为字母。agent.yaml 的 model 和 skills[].id 分别使用本空间模型配置 ID 与 Skill ID，version 是准确显示版本；name 必须与定义名称一致。严格拒绝未知字段、重复键、多 YAML 文档、alias/anchor、合并键、非法类型、未知工具、重复 Skill/工具及越界限额。草稿允许空正文和空配置便于新建；非空配置保存时校验结构，发布和调试快照进一步要求非空正文、完整配置、可用模型/凭证和未归档的准确依赖。输入/输出预留总量不得超过模型上下文容量，输出预留不超过模型上限。平台上限为 1000 步、3600 秒；这里是配置校验，运行时执行仍由 D04/D05 实现。
+定义名称为 1—64 字节的小写字母/数字/连字符标识，首字符为字母。agent.yaml 的 model 和 skills[].id 分别使用本空间模型配置 ID 与 Skill ID，version 是准确显示版本；name 必须与定义名称一致。严格拒绝未知字段、重复键、多 YAML 文档、alias/anchor、合并键、非法类型、未知工具、重复 Skill/工具及越界限额。草稿允许空正文和空配置便于新建；非空配置保存时校验结构，发布和调试快照进一步要求非空正文、完整配置、可用模型/凭证和未归档的准确依赖。输入/输出预留总量不得超过模型上下文容量，输出预留不超过模型上限。平台上限为 1000 步、3600 秒；这里是配置校验，D04 已接入运行限额，D05 继续扩展工具。
 
 Document 包含 Markdown 原文、配置原文和资源清单；正文上限 256 KiB、配置 64 KiB、资源最多 100 个、单资源 8 MiB。资源路径只允许 assets/ 下的规范相对路径，拒绝穿越、绝对路径、大小写冲突及文件/目录前缀冲突。JSON 上传接口使用 data_base64，HTTP 请求上限 12 MiB；资源上传自动推进草稿 revision。上传先经 ContentStore 写 TOS 并验证 ready，再在普通管理事务中提交草稿与引用；失败的未引用对象不能下载。草稿移除资源只移除当前引用，历史版本引用仍有效。
 
@@ -299,7 +299,7 @@ Document 包含 Markdown 原文、配置原文和资源清单；正文上限 256
 
 调试快照走相同准备/发布链，读取版本时验证 TOS 完整摘要并在远端读取后复核成员。默认版本切换只改指针；当前默认版本必须先切换后才能归档。归档阻止新的发布/依赖选择，已发布依赖与历史内容可继续读取。DELETE 版本不会物理删除；被引用返回 version_referenced，其他返回 invalid_definition，生命周期通过归档管理。复制定义创建独立新草稿，重写 Agent 配置 name，资源复用不可变对象。资源下载复用 D01 payloads 鉴权读取。
 
-前端使用延迟加载的 Monaco 编辑器和只读差异视图；支持模型/Skill 准确版本选择、工具选择、Markdown 预览、上传/移除资源、发布、默认版本、归档、复制、反向引用和调试快照。409 保留本地内容，读取服务器草稿展示差异，仅在显式点击后载入服务器内容。Markdown 不执行原始 HTML、不显示外部图片，只开放 http/https 链接。run_code 选择项说明文件与网络权限范围。调试快照只表明定义已固定，页面明确运行尚待 D04。
+前端使用延迟加载的 Monaco 编辑器和只读差异视图；支持模型/Skill 准确版本选择、工具选择、Markdown 预览、上传/移除资源、发布、默认版本、归档、复制、反向引用和调试快照。409 保留本地内容，读取服务器草稿展示差异，仅在显式点击后载入服务器内容。Markdown 不执行原始 HTML、不显示外部图片，只开放 http/https 链接。run_code 选择项说明文件与网络权限范围。调试快照固定定义；D04 会话创建可选择该快照执行任务。
 
 ## T03 M03 模型配置与凭证
 
@@ -315,11 +315,11 @@ Run 固定非秘密有效配置和凭证引用；每次实际调用重新验证�
 
 ### T03.1 D02 最小模型配置
 
-批准端点固定 https://ark.cn-beijing.volces.com/api/v3，组件固定 D00 已验证的 Ark；model-capabilities 查询给出 text、streaming、tool_calling 支持范围。owner 填写已开通的模型 ID、context_window、max_output_tokens 和 temperature，后端检查模型 ID 格式、端点、容量和参数边界，不允许任意 URL。可用模型列表只返回模型和凭证均启用的配置。供应商的实际模型能力仍需 D04/D07 真实调用验证；D02 的配置保存不发起收费调用，也不声称测试用 ep-test 真实存在。
+批准端点默认 https://ark.cn-beijing.volces.com/api/v3，可通过 llm.base_url_env 指向部署批准的兼容 Base URL；旧配置缺省保留默认值。自定义地址要求 HTTPS，仅回环测试允许 HTTP，拒绝 userinfo/query/fragment。组件固定 D00 已验证的 Ark；model-capabilities 查询给出 text、streaming、tool_calling 支持范围。owner 填写已开通的模型 ID、context_window、max_output_tokens 和 temperature，后端检查模型 ID 格式、端点、容量和参数边界，不允许任意 URL。可用模型列表只返回模型和凭证均启用的配置。D04 已接入实际模型文本调用，多工具/缓存等能力继续在 D07 验证；D02 的配置保存不发起收费调用，也不声称测试用 ep-test 真实存在。
 
 模型支持创建、列表、详情、修改、停用；DELETE 是保留引用的软停用。凭证支持创建、修改/替换/禁用；修改必须携带 revision，旧 revision 返回 409。响应和审计不包含秘密、密文或主密钥。AES-256-GCM 使用 Go 随机 nonce AEAD，AAD 为版本化的 space_id/credential_id/key_id 元组；key_id 为主密钥 SHA-256 的前 16 字节标识。主密钥由已有 base64 32 字节配置来源加载，缺失或不匹配不能解密。
 
-当前只有一个有效主密钥；不得直接更换主密钥后丢弃旧值。主密钥迁移/密钥环未实现，备份恢复须保留与密文对应的旧主密钥；D07 再扩展完整轮换流程。供应商 API 密钥替换已支持，使用新随机 nonce 并增加 revision。服务端 ModelSecret 重新检查成员、模型/凭证启用状态后才能解密，HTTP 不暴露此方法；D04 必须在每次调用前使用并配合撤权通知/心跳，而不能缓存授权结果。llm.model_env/api_key_env 保留为后续接入字段，D02 不再要求它们非空，也不会从这些变量自动向所有空间导入凭证。
+当前只有一个有效主密钥；不得直接更换主密钥后丢弃旧值。主密钥迁移/密钥环未实现，备份恢复须保留与密文对应的旧主密钥；D07 再扩展完整轮换流程。供应商 API 密钥替换已支持，使用新随机 nonce 并增加 revision。服务端 ModelSecret 重新检查成员、模型/凭证启用状态后才能解密，HTTP 不暴露此方法；D04 每次调用重新解析 Run 固定的 credential_id，并检查当前模型及该凭证启用状态；凭证替换使用当前 revision，模型改绑不会悄悄改用其他凭证。通知与心跳配合停止检查，不缓存授权结果。llm.model_env/api_key_env 只用于显式真实冒烟，不自动向空间导入凭证。
 
 ## T04 M04 会话、消息与 Run
 
@@ -340,6 +340,14 @@ Run 固定非秘密有效配置和凭证引用；每次实际调用重新验证�
 MVP 不原地修改已接受的消息。补充或纠错追加新用户消息；历史分支和消息编辑重算不属于首版范围。视图重建只读取事件和内容，不调用模型或工具；离线重建验证通过后才切换视图，不直接驱动生产调度。
 
 接口组：POST /sessions、GET /sessions/{id}/messages、POST /sessions/{id}/runs、GET /runs/{id}、POST /runs/{id}/cancel。提交返回 202 和 Run ID；消息接口查询视图，同时提供来源事件标识。投影不以页面消息视图替代原始日志。
+
+### T04.1 D04 实现与当前入口
+
+新增 00005_runtime，保持 00001—00004 不变。sessions 扩展固定定义引用和恢复状态；runs 保存不可变 Run snapshot、取消标记及收尾计划；runtime_requests、messages、model_attempts/model_calls、tool_executions、artifacts 与运行事件同事务维护。`internal/domain/run.CheckTransition` 统一 Claim/Cancel/Finish 规则。成功必须来自同 Run 的无工具调用 `model.response.completed`，并有已提交的工作目录快照。
+
+`internal/app/session` 只接受并持久化请求，不执行任务。创建会话解析准确发布/调试版本，保存平台/Agent/Skill 指令原文；提交时固定当前模型非秘密参数及实际工具 Schema/版本。幂等键作用域包含主体、空间、操作；先查原结果再判断占用。单 Session 只能有一个活跃 Run，全局 queued 上限 100。附件接收待 D05。
+
+HTTP 在 `/api/v1/spaces/{space_id}` 下提供 sessions 列表/创建/详情、会话 runs 提交/列表、messages、workspace-snapshots，以及 runs 详情/cancel/trace/contexts/artifacts/ui-snapshot/events。提交返回 202，读取/断开 SSE 均不触发执行；准确请求及返回结构以 api/openapi.yaml 为准。
 
 ## T05 M05 单进程调度、认领与停止
 
@@ -371,6 +379,16 @@ Run context 派生自服务执行生命周期，不使用提交请求的 context
 确认旧进程退出后，重启将遗留 running 标记为 interrupted 失败，保存未完成调用并释放占用；queued 继续调度。会话文件从 MariaDB 指向的最近已提交 TOS 快照恢复到新临时目录，不信任遗留脏目录，也不自动重做未知副作用。中断 Run 尚未保存的文件修改可能丢失，恢复结果明确注明快照来源与中断原因；无已提交快照只可恢复创建时的空目录或指定起始快照。
 
 停机先停止接单和认领，有界等待或取消已有执行，刷写 Trace；无法停止的工具由进程退出终止，重启时标记中断，而不是提前报告成功取消。
+
+### T05.1 D04 调度和收尾实现
+
+bootstrap.StartRuntime 组装串行 Scheduler、Supervisor、Executor、Planner、Gateway 与工具 Dispatcher。Scheduler 每 300ms 轮询并接受内存通知，先获取全局名额，再按空间最多 min(全局, 2) 准入，事务追加 run.started 后交接。数据库写入沿用空间授权锁 → Session → Run 顺序。GET_LOCK 独占连接保留至所有执行实际退出，普通请求取消不会关闭该连接。
+
+Supervisor 以服务生命周期创建有界 Run context，每 500ms 复核主体、固定凭证和模型启用状态并更新心跳。取消、撤权、超时、panic 均等待实际执行退出，再调用 resource.Finisher。运行通知不承担权限授予，撤权后的普通查询/动作仍被 Repository 拒绝。
+
+Finisher 的系统身份是一个绑定已认领 Run、主体、空间/Session 和 owner 的窄 Repository 能力，仅允许收尾/核实事实及该 Run 的归档/Manifest；调用方伪造 actor.kind=system 不能绕过鉴权。成功提交再次检查成员资格和取消标记；竞态发生时复用相同归档改为失败/取消收尾。收尾计划和稳定 UUID/时间写入数据库，以便核实未知提交；SQL 失败保留占用并停止接单，快照上传失败则提交明确失败和文件阻塞状态。
+
+启动取得单实例锁后，将遗留 running 认领为 interrupted 收尾，未结束的模型 attempt 记失败、工具操作记 operation.reconciled/unknown；丢弃遗留脏目录，保留最近已提交快照指针，不重做动作。queued 继续正常调度。锁不提供分布式恰好一次或外部副作用 fencing。
 
 ## T06 Runtime 子模块与 M06 执行循环
 
@@ -634,6 +652,14 @@ MVP 先实现固定前缀、阶段压缩与真实命中观测；不把显式缓�
 
 检查界面提供原始事件 → 投影 Manifest → 实际请求的导航；展示选取/省略原因、epoch、前缀变化以及真实缓存数据。稳定性测试可以有确定通过标准，真实云缓存收益只能基于测量报告，不能伪造“每次必命中”的验收要求。
 
+### T07.7 D04 的最小投影实现范围
+
+Projector 只读固定 through_sequence 的统一日志及引用对象，不读草稿/页面视图，不依赖 Gateway。保留原生 Eino 消息协议字段，按有序指令及准确工具定义重建完整交互；失败/取消回复不当成功历史复用，已确认效果和未知操作保留显式提示。缺失工具结果配对直接拒绝。
+
+计数器暂为 `utf8-byte-upper-bound-v1`：对完整消息和工具的序列化字节加固定协议余量做保守容量检查，renderer=mass-context-v1、parser=1、epoch=1。指纹包含定义摘要、当前有效模型参数摘要、工具、版本和准确来源事件。不是供应商精确 tokenizer；因此可能提前拒绝容量，绝不静默截断或隐式摘要。Planner 保存完整投影再登记 context.projected，D06 扩展摘要与缓存策略。
+
+control 每次模型 attempt 和工具调用只预留一次；已知 input/output 按实际值结算，未知仍保留上界，统计显示 null 而非 0。同一结算重复不累加、不同内容拒绝；当前调用/工具/Token 总额由 max_steps 及输入/输出限额推导，实际用量超预算明确停止。
+
 ## T08 M08 基于 Eino 的 LLM 接入与完整 Trace
 
 ### T08.1 框架与模块边界
@@ -711,6 +737,12 @@ chatModel, err := ark.NewChatModel(ctx, &ark.ChatModelConfig{
 `tracedHTTPClient` 同时负责批准端点/重定向检查和请求记录，必须传递调用 context；不因使用 SDK 而启用看不见的重试。非成功响应、流中断及部分输出后的失败分别记录，不拼接新尝试为同一个成功响应。[Ark 官方组件源码](https://github.com/cloudwego/eino-ext/blob/main/components/model/ark/chatmodel.go)
 
 FakeChatModel 实现同一个 Eino 模型接口；本地假 HTTP 供应商验证真实 Eino 扩展组件的序列化和原文捕获。完整 Trace 验证通过前不将该组件标记为接入完成。
+
+### T08.5 D04 Gateway 与真实传输
+
+生产采用 adapter/eino.ModelTransport，测试可注入实现 Eino ToolCallingChatModel 的 FakeChatModel，并明确 source。实际 SDK 配置 RetryTimes=0、120s HTTP 上限、禁止重定向；请求最多 4 MiB、响应最多 8 MiB。HTTP 捕获在正文消费前将实际请求/响应字节写入 TOS 并登记 wire 事实，不记录授权头或密钥；无法保存原文或语义事件立即停止消费。
+
+Gateway 统一接受显式 purpose=task/summary 的 Prepared 输入，summary 必须禁用工具；D04 仅编排 task。每个 attempt 先记录固定 projection、message、purpose、来源及 credential revision。完整聚合必须包含 SSE 结束标记和合法 finish_reason；工具参数必须为完整 JSON、单次至多 16 个调用，部分输出/截断不升级为 completed。最终完整回复对象保存 Eino Native 字段、原始 usage 和准确 response_event_id；工具只接受该完成事件中的调用 ID、名称及参数摘要。用量缺失与明确 0 分开处理，缓存字段不可用时为未知。本阶段没有自动模型重试、摘要调用或缓存命中推断。
 
 ## T09 M09 内置工具、计算与产物交付
 
@@ -943,11 +975,11 @@ usage 按 attempt 记录并汇总，摘要和失败尝试均计入；缺失用�
 
 新增迁移 00003_storage_journal，保留 D02 前两份迁移不变。空间授权锁继续使用 D02 的空间行；其后统一按 Session → Run → 对象/索引顺序操作。授权和查询都经现有 MariaDB Repository，成员撤销后不复用旧权限。所有外部对象 I/O 均在 SQL 事务之外完成。
 
-D01 注册 schema_version=1 的最小事件子集：session.created、run.created、run.started、run.finished、workspace.snapshot.created/failed、workspace.restored、operation.reconciled。未知类型/版本在追加和读取时明确拒绝；其他 T10.1 事件随所属阶段增加。事件由内部可信 Go 调用产生，HTTP 不提供任意 Append 或视图写入接口。目前只允许通过当前成员鉴权的 user actor；D04 接入 Supervisor 时再提供限定范围的系统收尾身份，不把任意字符串 system 当作绕过授权的入口。
+D01 注册 schema_version=1 的最小事件子集：session.created、run.created、run.started、run.finished、workspace.snapshot.created/failed、workspace.restored、operation.reconciled。未知类型/版本在追加和读取时明确拒绝；其他 T10.1 事件随所属阶段增加。事件由内部可信 Go 调用产生，HTTP 不提供任意 Append 或视图写入接口。D01 入口只接受当前成员鉴权的 user actor；D04 新增绑定已认领 Run 的窄系统收尾能力（T05.1），普通 Journal Repository 仍拒绝 system actor。
 
 一次最多 100 个事件、每个 data 最多 64 KiB、每个事件最多 100 个对象引用；data 规范化保留 JSON 数字精度，引用按 role/ordinal 排序，occurred_at 统一 UTC 微秒。摘要排除服务器序号与记录时间，包含事件 ID、类型、版本、因果/操作/关联、actor、发生时间、data 和有序引用。调用者须保留事件 ID、发生时间及 append_key 重试；幂等核实先于 expected_sequence，部分重复批次拒绝，不把新事件拼到已存在批次。对来自已执行动作的结果使用不带 expected_sequence 的稳定追加，避免期间别的事件造成结果丢失。
 
-基础 reducer 同事务创建 Session、排队/开始/终结 Run 视图和唯一占用；成功终结必须已有该 Run 的已提交快照，运行中无快照的失败终结留下 workspace_error 并阻止新 Run。快照索引和终结可置于同一 Append 批次，释放占用失败时所有视图和事件共同回滚。这里没有调度器、执行器或完整业务 reducer，D04 继续完成 Claim/Finish、取消、用量、快照失败收尾和离线重建。
+基础 reducer 同事务创建 Session、排队/开始/终结 Run 视图和唯一占用；成功终结必须已有该 Run 的已提交快照，运行中无快照的失败终结留下 workspace_error 并阻止新 Run。快照索引和终结可置于同一 Append 批次，释放占用失败时所有视图和事件共同回滚。D04 在同一事务基础上补齐 Claim/Finish、取消、用量、模型/工具来源校验、快照失败收尾及离线重建。
 
 读取返回 events、through_sequence、next_after、has_more；after_sequence 和 through_sequence 是 Session 日志十进制字符串，不复用 AG-UI 游标。首次分页固定已提交水位，随后带回同一个 through_sequence。日志、快照元数据和载荷的 HTTP 读接口继续复用 D02 Cookie/成员检查；载荷只对已被提交事件引用的 ready 对象开放，下载用 attachment/octet-stream，开始前验证完整摘要、传输期间分块复核身份与成员。
 
@@ -1065,6 +1097,14 @@ func WriteAGUIEvent(w http.ResponseWriter, cursor string, body json.RawMessage) 
 
 管理审计另外记录成员、发布、默认版本及凭证变更；不包含凭证原值。
 
+### T10.7 D04 AG-UI 与离线视图重建
+
+transport/agui.Projector 使用已锁定 SDK 的构造/验证方法，以 mapper/parser=1 映射 journal。agui_events 使用每 Run 连续 ui_sequence，源事件和 ordinal 唯一；与 agui_streams 的来源水位、UI 状态及游标同事务 CAS 提交。单条事实可生成多条 UI 帧，原始 Session 序号不作为 SSE ID。终态之后不生成新的该 Run 帧。
+
+SSE 从持久化帧发送，支持 canonical 十进制 after/Last-Event-ID，拒绝未来游标及互相冲突的参数；每批/发送期间检查 Cookie 与成员。流不套用普通接口 15s 超时，使用 3s 心跳和每次写入 5s deadline。后台投影不依赖浏览器存活，撤权后仍可通过受限派生视图能力完成终态；这项能力不能追加动作事实。前端从 ui-snapshot 原子状态/游标起步，事件通过 SDK Schema 和纯 reducer 后才推进游标，协议错误或 401/403 停止重连。
+
+`mass rebuild-views` 必须离线取得同一运行锁。先校验事件版本/摘要及全部被引用的 TOS 对象大小/摘要，再在单事务清空并重建消息、attempt、工具、产物、占用和 AG-UI 派生视图，以及 Run 可变状态/Session 快照指针。为保留不可变日志和跨会话快照外键，Run 身份行和不可变快照索引作为锚点保留；心跳等协调数据不当业务事实重放。过程不注入 Gateway/工具，任意损坏导致失败，不接受半份重建结果。
+
 ## T11 M11 TOS 持久化、工作区与产物
 
 ### T11.1 统一对象存储
@@ -1149,11 +1189,17 @@ ContentStore 将输入流写到权限受限的临时文件，边写边计数和�
 
 生产只使用 TOS 适配器；tests/fakes 是测试专用内存替身。对象元数据、事件引用和快照均使用带 space_id 的联合外键。下载必须同时满足当前授权、ready 和已提交 event_objects 引用；未引用的成功上传不会因猜到 UUID 而可见。主数据没有自动 TTL、删除或 GC。新增 ready 探针使用 MariaDB schema 校验和 TOS HeadBucket，单次最多 3 秒、缓存 5 秒；HeadBucket 证明连接/桶级授权，对象读写/不可变性必须由独立真实 smoke 验收，不夸大探针结果。
 
-storage 配置是向后兼容的可选段：max_object_bytes 默认 256 MiB（配置上限 1 GiB）、max_file_bytes 32 MiB、max_workspace_bytes 128 MiB、max_entries 10000；文件/目录上限不超过对象上限，Manifest 上限 4 MiB。SnapshotStore 使用已有 runtime.snapshot_timeout；临时根沿用 workspace_temp_root。生成的 Session 目录名只含经过规范 UUID 校验的 space/session ID，使用 os.Root 与可取消的 Session 目录锁。快照要求调用者先停止所有工作目录写入；D04 Supervisor 会统一持有占用并使用相同目录入口。
+storage 配置是向后兼容的可选段：max_object_bytes 默认 256 MiB（配置上限 1 GiB）、max_file_bytes 32 MiB、max_workspace_bytes 128 MiB、max_entries 10000；文件/目录上限不超过对象上限，Manifest 上限 4 MiB。SnapshotStore 使用已有 runtime.snapshot_timeout；临时根沿用 workspace_temp_root。生成的 Session 目录名只含经过规范 UUID 校验的 space/session ID，使用 os.Root 与可取消的 Session 目录锁。快照要求调用者先停止所有工作目录写入；D04 Supervisor 统一持有占用并使用相同目录入口。
 
 全量 tar.gz 的 Manifest 包含文件/空目录、规范相对路径、大小和 SHA-256；不保留执行权限、软/硬链接或设备项。恢复先验证格式、数量、总解压量、单文件容量、父目录清单、重复路径和大小写冲突，再解压到未绑定的临时目录；逐文件核验摘要并读完 gzip 校验尾部，全部成功才替换空目标目录。已有非空目录不自动覆盖；恢复失败删除 staging，恢复日志提交失败清理本次新副本。路径与文件接口是应用隔离，不声称对宿主所有者提供 OS 沙箱。
 
-SnapshotStore.Save 接收稳定的快照/归档/Manifest/事件 ID、append_key 和发生时间，可将 run.finished 一同提交。未知提交先按已提交事件核实，成功重试返回原快照，不重新打包已变化的目录；若无提交则用原对象 ID 核实内容。SnapshotBase 防止旧 Run 的重试覆盖较新 Run 或其他活跃占用。Restore 只读取目标 Session 的已提交最新指针，初始 source_snapshot_id 由 session.created 固定；跨 Session 只复制文件，不复制源日志。完整终结失败记录、系统收尾权限与后台恢复协调仍由 D04 承担。
+SnapshotStore.Save 接收稳定的快照/归档/Manifest/事件 ID、append_key 和发生时间，可将 run.finished 一同提交。未知提交先按已提交事件核实，成功重试返回原快照，不重新打包已变化的目录；若无提交则用原对象 ID 核实内容。SnapshotBase 防止旧 Run 的重试覆盖较新 Run 或其他活跃占用。Restore 只读取目标 Session 的已提交最新指针，初始 source_snapshot_id 由 session.created 固定；跨 Session 只复制文件，不复制源日志。D04 已补齐终结失败记录、系统收尾权限与后台恢复协调，见 T05.1/T11.6。
+
+### T11.6 D04 文件工具与快照操作
+
+resource.FileService 通过 Session 目录锁和 os.Root 提供 read_file/write_file/publish_artifact 三个 v1 工具。路径必须是合法相对路径，拒绝软链接及非普通文件；本阶段单文件至多 1 MiB UTF-8，写前检查目录总字节/条目上限。写操作要求 missing 或当前 SHA-256，使用同目录临时文件、Sync/rename 后记录实际效果。publish_artifact 校验摘要，将准确字节保存为独立不可变对象，产物登记与工具结果同事务提交；下载验证完整字节后以 attachment 提供并持续复核权限。未实现工具在提交阶段拒绝。
+
+下一轮优先复用当前完整目录，目录丢失或服务重启则从提交快照恢复。恢复失败不能以空目录继续。快照失败状态阻止新 Run，`POST /sessions/{id}/workspace-snapshots/retry` 只重试保存，不改旧 Run 终态、不重跑动作；`POST /sessions/{id}/workspace/restore` 显式丢弃未保存目录后恢复已提交状态。两者都要求无活跃 Run，数据库维护锁防止与新提交竞态；新 Session 的 source_snapshot_id 仅复制文件到独立目录。
 
 ## T12 M12 前端管理与调试
 
@@ -1305,7 +1351,7 @@ mass/
 
 不建立持久化的 `data/blobs` 或前端独立服务配置；允许通过 workspace_temp_root 创建会话临时工作目录。持久资源仍只使用 MariaDB/TOS，本地目录可由快照重建。
 
-D00 已固定工具链、MariaDB 目标版本、Go/前端依赖和首个 Ark 组件。待收敛项包括实际 TOS 配置与权限、实际模型与端点、计数器、默认限额与快照容量上限；已指定的单服务、MariaDB、TOS、Eino、frontend、简单登录及 AG-UI over SSE 不再作为待选方案。AG-UI Go/TS SDK 精确版本与兼容子集见 api/events/agui-profile.json；验证证据见工程开发文档。
+D00 已固定工具链、MariaDB 目标版本、Go/前端依赖和首个 Ark 组件。D01/D04 已接入实际 TOS/模型、部署批准端点、保守计数器和快照容量上限；精确 tokenizer、模型缓存及完整工具策略待后续阶段收敛。已指定的单服务、MariaDB、TOS、Eino、frontend、简单登录及 AG-UI over SSE 不再作为待选方案。AG-UI Go/TS SDK 精确版本与兼容子集见 api/events/agui-profile.json；验证证据见工程开发文档。
 
 模型缓存能力、默认压缩阈值/目标余量和投影策略版本在对应实现阶段收敛；未知缓存命中不能用假数据补齐。
 

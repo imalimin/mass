@@ -12,7 +12,11 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-type Store struct{ DB *sql.DB }
+type Store struct {
+	DB            *sql.DB
+	scopeOverride func(context.Context, *sql.Tx, string, string, bool) error
+	systemScope   bool
+}
 
 func Open(ctx context.Context, dsn string) (*Store, error) {
 	cfg, err := mysql.ParseDSN(dsn)
@@ -45,7 +49,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 		db.Close()
 		return nil, errors.New("database connection failed")
 	}
-	return &Store{db}, nil
+	return &Store{DB: db}, nil
 }
 func (s *Store) Migrate(ctx context.Context) error {
 	p, err := goose.NewProvider(goose.DialectMySQL, s.DB, migrations.Files)
@@ -60,7 +64,7 @@ func (s *Store) CheckSchema(ctx context.Context) error {
 	if err := s.DB.QueryRowContext(ctx, "SELECT MAX(version_id) FROM goose_db_version WHERE is_applied=1").Scan(&version); err != nil {
 		return errors.New("database schema unavailable; run mass migrate")
 	}
-	if version != 4 {
+	if version != 5 {
 		return errors.New("database schema mismatch; run mass migrate with the matching binary")
 	}
 	return nil
@@ -111,7 +115,11 @@ func authorize(ctx context.Context, tx *sql.Tx, actor, space string, owner bool)
 }
 func (s *Store) scoped(ctx context.Context, actor, space string, owner bool, fn func(*sql.Tx) error) error {
 	return s.transaction(ctx, func(tx *sql.Tx) error {
-		if err := authorize(ctx, tx, actor, space, owner); err != nil {
+		check := authorize
+		if s.scopeOverride != nil {
+			check = s.scopeOverride
+		}
+		if err := check(ctx, tx, actor, space, owner); err != nil {
 			return err
 		}
 		return fn(tx)

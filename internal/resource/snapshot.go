@@ -34,6 +34,7 @@ type SnapshotStore struct {
 	Journal    *journal.Journal
 	Workspaces Workspaces
 	Timeout    time.Duration
+	ActorKind  string
 }
 
 // SaveRequest IDs and timestamp must be retained across unknown-commit retries.
@@ -107,7 +108,11 @@ func (s *SnapshotStore) commit(ctx context.Context, actor string, r SaveRequest,
 		return v, err
 	}
 	raw, _ := json.Marshal(v)
-	events := []journal.Proposed{{EventID: r.EventID, RunID: r.RunID, Type: "workspace.snapshot.created", SchemaVersion: 1, Actor: journal.Actor{Kind: "user", ID: actor}, OccurredAt: r.OccurredAt, Data: raw, Refs: []storage.Ref{{Role: "archive", ObjectID: a.ID, SHA256: a.SHA256}, {Role: "manifest", ObjectID: m.ID, SHA256: m.SHA256}}}}
+	kind := s.ActorKind
+	if kind == "" {
+		kind = "user"
+	}
+	events := []journal.Proposed{{EventID: r.EventID, RunID: r.RunID, Type: "workspace.snapshot.created", SchemaVersion: 1, Actor: journal.Actor{Kind: kind, ID: actor}, OccurredAt: r.OccurredAt, Data: raw, Refs: []storage.Ref{{Role: "archive", ObjectID: a.ID, SHA256: a.SHA256}, {Role: "manifest", ObjectID: m.ID, SHA256: m.SHA256}}}}
 	if r.Finish != nil {
 		if r.Finish.Type != "run.finished" || r.Finish.RunID != r.RunID {
 			return v, storage.ErrInvalid

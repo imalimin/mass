@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: MASS API
-  version: 0.3.0
-  description: D03 immutable Agent and Skill definitions, version publishing and debug snapshots over D01/D02 foundations.
+  version: 0.4.0
+  description: D04 durable Agent execution, Eino wire capture, file tools, snapshots, cancellation and AG-UI over SSE.
 servers:
   - url: /
 paths:
@@ -2835,6 +2835,605 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/DefinitionArchiveInput'
+  /api/v1/spaces/{space_id}/sessions:
+    post:
+      operationId: createSession
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '201':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSession'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionCreateInput'
+    get:
+      operationId: listSessions
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSessionPage'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/sessions/{session_id}:
+    get:
+      operationId: getSession
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSession'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/sessions/{session_id}/runs:
+    post:
+      operationId: submitRun
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '202':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeRun'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunSubmitInput'
+    get:
+      operationId: listSessionRuns
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeRunPage'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/runs/{run_id}:
+    get:
+      operationId: getRun
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeRun'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/runs/{run_id}/cancel:
+    post:
+      operationId: cancelRun
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeRun'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/sessions/{session_id}/messages:
+    get:
+      operationId: getMessages
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: after_sequence
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeMessages'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/runs/{run_id}/trace:
+    get:
+      operationId: getRuntrace
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: after_sequence
+          in: query
+          schema:
+            type: string
+        - name: through_sequence
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JournalPage'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/runs/{run_id}/contexts:
+    get:
+      operationId: getRuncontexts
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: after_sequence
+          in: query
+          schema:
+            type: string
+        - name: through_sequence
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JournalPage'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/runs/{run_id}/artifacts:
+    get:
+      operationId: getRunArtifacts
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeArtifacts'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/sessions/{session_id}/workspace-snapshots:
+    get:
+      operationId: getSessionSnapshots
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSnapshots'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/sessions/{session_id}/workspace-snapshots/retry:
+    post:
+      operationId: retryWorkspaceSave
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceSnapshot'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/sessions/{session_id}/workspace/restore:
+    post:
+      operationId: restoreWorkspace
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeRestored'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/runs/{run_id}/ui-snapshot:
+    get:
+      operationId: getUISnapshot
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UICheckpoint'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/artifacts/{id}/download:
+    get:
+      operationId: downloadArtifact
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Verified immutable artifact bytes.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/runs/{run_id}/events:
+    get:
+      operationId: streamRunEvents
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: after
+          in: query
+          schema:
+            type: string
+        - name: Last-Event-ID
+          in: header
+          schema:
+            type: string
+            pattern: ^(0|[1-9][0-9]{0,18})$
+      responses:
+        '200':
+          description: >-
+            Persisted AG-UI events with a continuous Run UI sequence. after and Last-Event-ID must agree. Heartbeats are
+            comments; terminal closes stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   schemas:
     Definition:
@@ -3271,6 +3870,7 @@ components:
             - D00
             - D02
             - D03
+            - D04
         protocol_profile:
           type: string
           const: mass-agui-v1
@@ -3472,7 +4072,8 @@ components:
           pattern: ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$
         endpoint:
           type: string
-          const: https://ark.cn-beijing.volces.com/api/v3
+          format: uri
+          description: 服务端批准的兼容模型 Base URL，默认 Ark 地址。
         credential_id:
           $ref: '#/components/schemas/ResourceID'
         context_window:
@@ -3518,7 +4119,8 @@ components:
           const: ark
         endpoint:
           type: string
-          const: https://ark.cn-beijing.volces.com/api/v3
+          format: uri
+          description: 服务端批准的兼容模型 Base URL，默认 Ark 地址。
         input_types:
           type: array
           items:
@@ -3556,7 +4158,8 @@ components:
           pattern: ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$
         endpoint:
           type: string
-          const: https://ark.cn-beijing.volces.com/api/v3
+          format: uri
+          description: 服务端批准的兼容模型 Base URL，默认 Ark 地址。
         credential_id:
           $ref: '#/components/schemas/ResourceID'
         context_window:
@@ -3710,7 +4313,8 @@ components:
           pattern: ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$
         endpoint:
           type: string
-          const: https://ark.cn-beijing.volces.com/api/v3
+          format: uri
+          description: 服务端批准的兼容模型 Base URL，默认 Ark 地址。
         credential_id:
           $ref: '#/components/schemas/ResourceID'
         context_window:
@@ -3880,6 +4484,668 @@ components:
         format_version:
           type: integer
           const: 1
+    RuntimeRef:
+      type: object
+      additionalProperties: false
+      required:
+        - role
+        - ordinal
+        - object_id
+        - sha256
+      properties:
+        role:
+          type: string
+        ordinal:
+          type: integer
+        object_id:
+          type: string
+          format: uuid
+        sha256:
+          type: string
+    RuntimeTool:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - version
+        - description
+        - schema
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        schema:
+          type:
+            - object
+            - 'null'
+    RuntimeModel:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - provider
+        - model_id
+        - endpoint
+        - credential_id
+        - revision
+        - context_window
+        - max_output_tokens
+        - temperature
+      properties:
+        id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+        model_id:
+          type: string
+        endpoint:
+          type: string
+        credential_id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+        context_window:
+          type: integer
+        max_output_tokens:
+          type: integer
+        temperature:
+          type: number
+    RuntimeSkill:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version_id
+        - version
+        - sha256
+        - markdown
+      properties:
+        id:
+          type: string
+          format: uuid
+        version_id:
+          type: string
+          format: uuid
+        version:
+          type: string
+        sha256:
+          type: string
+        markdown:
+          type: string
+    RuntimeDefinition:
+      type: object
+      additionalProperties: false
+      required:
+        - version_id
+        - agent_id
+        - debug
+        - platform_version
+        - platform
+        - instructions
+        - skills
+        - model
+        - tools
+        - max_input_tokens
+        - output_tokens
+        - max_steps
+        - timeout_seconds
+      properties:
+        version_id:
+          type: string
+          format: uuid
+        agent_id:
+          type: string
+          format: uuid
+        debug:
+          type: boolean
+        platform_version:
+          type: string
+        platform:
+          type: string
+        instructions:
+          type: string
+        skills:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuntimeSkill'
+        model:
+          $ref: '#/components/schemas/RuntimeModel'
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuntimeTool'
+        max_input_tokens:
+          type: integer
+        output_tokens:
+          type: integer
+        max_steps:
+          type: integer
+        timeout_seconds:
+          type: integer
+    RuntimeSnapshot:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - space_id
+        - session_id
+        - actor_id
+        - definition_ref
+        - user_event_id
+        - base_workspace_snapshot_id
+        - definition
+        - build
+        - protocol_profile
+        - mapper_version
+        - parser_version
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        space_id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        actor_id:
+          type: string
+          format: uuid
+        definition_ref:
+          $ref: '#/components/schemas/RuntimeRef'
+        user_event_id:
+          type: string
+          format: uuid
+        base_workspace_snapshot_id:
+          type: string
+        definition:
+          $ref: '#/components/schemas/RuntimeDefinition'
+        build:
+          type: string
+        protocol_profile:
+          type: string
+          const: mass-agui-v1
+        mapper_version:
+          const: 1
+          type: integer
+        parser_version:
+          const: 1
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+    RuntimeUsage:
+      type: object
+      additionalProperties: false
+      required:
+        - input_tokens
+        - output_tokens
+        - cache_read_tokens
+        - cache_write_tokens
+      properties:
+        input_tokens:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        output_tokens:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        cache_read_tokens:
+          anyOf:
+            - type: integer
+            - type: 'null'
+        cache_write_tokens:
+          anyOf:
+            - type: integer
+            - type: 'null'
+    RuntimeRun:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - space_id
+        - session_id
+        - actor_id
+        - definition_ref
+        - user_event_id
+        - base_workspace_snapshot_id
+        - definition
+        - build
+        - protocol_profile
+        - mapper_version
+        - parser_version
+        - created_at
+        - status
+        - cancel_requested
+        - final_response_event_id
+        - error
+        - snapshot_error
+        - workspace_snapshot_id
+        - started_at
+        - finished_at
+        - heartbeat_at
+        - usage
+      properties:
+        id:
+          type: string
+          format: uuid
+        space_id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        actor_id:
+          type: string
+          format: uuid
+        definition_ref:
+          $ref: '#/components/schemas/RuntimeRef'
+        user_event_id:
+          type: string
+          format: uuid
+        base_workspace_snapshot_id:
+          type: string
+        definition:
+          $ref: '#/components/schemas/RuntimeDefinition'
+        build:
+          type: string
+        protocol_profile:
+          type: string
+          const: mass-agui-v1
+        mapper_version:
+          const: 1
+          type: integer
+        parser_version:
+          const: 1
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+            - queued
+            - running
+            - succeeded
+            - failed
+            - cancelled
+        cancel_requested:
+          type: boolean
+        final_response_event_id:
+          type: string
+        error:
+          type: string
+        snapshot_error:
+          type: string
+        workspace_snapshot_id:
+          type: string
+        started_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        finished_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        heartbeat_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        usage:
+          $ref: '#/components/schemas/RuntimeUsage'
+    RuntimeSession:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - space_id
+        - actor_id
+        - title
+        - definition_id
+        - version_id
+        - definition_ref
+        - latest_workspace_snapshot_id
+        - workspace_error
+        - last_sequence
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        space_id:
+          type: string
+          format: uuid
+        actor_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        definition_id:
+          type: string
+          format: uuid
+        version_id:
+          type: string
+          format: uuid
+        definition_ref:
+          $ref: '#/components/schemas/RuntimeRef'
+        latest_workspace_snapshot_id:
+          type: string
+        workspace_error:
+          type: string
+        last_sequence:
+          type: string
+          pattern: ^(0|[1-9][0-9]{0,18})$
+        created_at:
+          type: string
+          format: date-time
+    RuntimeMessage:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - run_id
+        - role
+        - content_id
+        - source_event_id
+        - sequence
+        - complete
+        - content
+        - truncated
+      properties:
+        id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+        role:
+          type: string
+          enum:
+            - user
+            - assistant
+        content_id:
+          type: string
+          format: uuid
+        source_event_id:
+          type: string
+          format: uuid
+        sequence:
+          type: string
+          pattern: ^(0|[1-9][0-9]{0,18})$
+        complete:
+          type: boolean
+        content:
+          type: string
+        truncated:
+          type: boolean
+    RuntimeMessages:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_after
+        - has_more
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuntimeMessage'
+        next_after:
+          type: string
+          pattern: ^(0|[1-9][0-9]{0,18})$
+        has_more:
+          type: boolean
+    RuntimeArtifact:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - space_id
+        - session_id
+        - run_id
+        - call_id
+        - object_id
+        - sha256
+        - name
+        - media_type
+        - path
+        - download_url
+      properties:
+        id:
+          type: string
+          format: uuid
+        space_id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        call_id:
+          type: string
+        object_id:
+          type: string
+          format: uuid
+        sha256:
+          type: string
+        name:
+          type: string
+        media_type:
+          type: string
+        path:
+          type: string
+        download_url:
+          type: string
+    RuntimeArtifacts:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuntimeArtifact'
+    RuntimeSnapshots:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceSnapshot'
+    RuntimeRestored:
+      type: object
+      additionalProperties: false
+      required:
+        - restored
+      properties:
+        restored:
+          type: boolean
+    UIMessage:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - text
+        - closed
+        - incomplete
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        closed:
+          type: boolean
+        incomplete:
+          type: boolean
+    UITool:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - arguments
+        - result
+        - status
+        - standard
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        arguments:
+          type: string
+        result:
+          type: string
+        status:
+          type: string
+        standard:
+          type: boolean
+    UIState:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - cancel_requested
+        - messages
+        - tools
+        - artifacts
+        - usage
+        - error
+      properties:
+        status:
+          type: string
+        cancel_requested:
+          type: boolean
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/UIMessage'
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/UITool'
+        artifacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuntimeArtifact'
+        usage:
+          $ref: '#/components/schemas/RuntimeUsage'
+        error:
+          type: string
+    UICheckpoint:
+      type: object
+      additionalProperties: false
+      required:
+        - session_id
+        - source_sequence
+        - cursor
+        - protocol_profile
+        - mapper_version
+        - parser_version
+        - closed
+        - state
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        source_sequence:
+          type: string
+          pattern: ^(0|[1-9][0-9]{0,18})$
+        cursor:
+          type: string
+          pattern: ^(0|[1-9][0-9]{0,18})$
+        protocol_profile:
+          type: string
+          const: mass-agui-v1
+        mapper_version:
+          type: integer
+          const: 1
+        parser_version:
+          type: integer
+          const: 1
+        closed:
+          type: boolean
+        state:
+          $ref: '#/components/schemas/UIState'
+    RuntimeSessionPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuntimeSession'
+        next_cursor:
+          anyOf:
+            - type: string
+            - type: 'null'
+    RuntimeRunPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuntimeRun'
+        next_cursor:
+          anyOf:
+            - type: string
+            - type: 'null'
+    SessionCreateInput:
+      type: object
+      additionalProperties: false
+      required:
+        - idempotency_key
+        - agent_id
+      properties:
+        idempotency_key:
+          type: string
+          pattern: ^[A-Za-z0-9._:-]{1,128}$
+        agent_id:
+          type: string
+          format: uuid
+        version_id:
+          type: string
+        source_workspace_snapshot_id:
+          type: string
+        title:
+          type: string
+          maxLength: 200
+    RunSubmitInput:
+      type: object
+      additionalProperties: false
+      required:
+        - idempotency_key
+        - text
+      properties:
+        idempotency_key:
+          type: string
+          pattern: ^[A-Za-z0-9._:-]{1,128}$
+        text:
+          type: string
+          minLength: 1
+          maxLength: 262144
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
