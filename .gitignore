@@ -32,6 +32,9 @@ go.work.sum
 # .idea/
 # .vscode/
 
+# macOS metadata
+.DS_Store
+
 .cache/
 frontend/node_modules/
 frontend/dist/
