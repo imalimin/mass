@@ -25,6 +25,7 @@ type ToolState struct {
 	Standard  bool   `json:"standard"`
 }
 type State struct {
+	Plan            *run.Plan      `json:"plan,omitempty"`
 	Status          string         `json:"status"`
 	CancelRequested bool           `json:"cancel_requested"`
 	Messages        []MessageState `json:"messages"`
@@ -185,7 +186,7 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 				}
 			}
 			for _, call := range d.Calls {
-				t := ToolState{ID: call.ID, Name: call.Name, Status: "parameters_complete", Arguments: call.Arguments, Standard: len(call.Arguments) <= 8192}
+				t := ToolState{ID: call.ID, Name: call.Name, Status: "parameters_complete", Arguments: call.Arguments, Standard: call.Arguments != "" && len(call.Arguments) <= 8192}
 				if t.Standard {
 					emit(events.NewToolCallStartEvent(call.ID, call.Name, events.WithParentMessageID(d.MessageID)))
 					emit(events.NewToolCallArgsEvent(call.ID, call.Arguments))
@@ -237,6 +238,11 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 				}
 			}
 			custom("mass.tool.status.v1", map[string]any{"toolCallId": d.CallID, "status": d.Status, "sideEffect": d.SideEffect, "payloadRef": d.ContentID})
+		case "plan.updated":
+			var plan run.Plan
+			journal.Decode(source.Data, &plan)
+			cp.State.Plan = &plan
+			custom("mass.plan.v1", map[string]any{"plan": plan})
 		case "artifact.published":
 			var d run.Artifact
 			journal.Decode(source.Data, &d)

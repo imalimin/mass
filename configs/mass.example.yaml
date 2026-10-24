@@ -1,4 +1,4 @@
-# Copy to mass.yaml; provide the named environment values. D04 needs MariaDB/TOS; runtime uses space model credentials.
+# Copy to mass.yaml; provide the named environment values. D05 needs MariaDB/TOS; runtime uses space model credentials.
 # /health/ready checks the schema and TOS bucket with bounded caching.
 http:
   listen: "127.0.0.1:8080"

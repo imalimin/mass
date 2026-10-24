@@ -21,6 +21,8 @@ import (
 )
 
 type Repository interface {
+	RegisterAttachment(context.Context, string, string, run.Attachment) error
+	RuntimeAttachment(context.Context, string, string, string, string) (run.Attachment, error)
 	FindRuntimeRequest(context.Context, string, string, string, string, string) (string, string, bool, error)
 	AcceptRuntimeRequest(context.Context, string, string, string, string, string, journal.Batch) (string, string, error)
 	RuntimeSession(context.Context, string, string, string) (run.Session, error)
@@ -32,6 +34,7 @@ type Repository interface {
 	RuntimeArtifact(context.Context, string, string, string) (run.Artifact, error)
 }
 type Service struct {
+	ToolPolicy   run.ToolPolicy
 	ResolveTools func([]run.ToolSpec) ([]run.ToolSpec, error)
 	Repo         Repository
 	Catalog      *catalog.Service
@@ -49,8 +52,9 @@ type CreateInput struct {
 	Title            string `json:"title"`
 }
 type SubmitInput struct {
-	Key  string `json:"idempotency_key"`
-	Text string `json:"text"`
+	Key         string   `json:"idempotency_key"`
+	Text        string   `json:"text"`
+	Attachments []string `json:"attachment_ids,omitempty"`
 }
 
 var keyPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
@@ -113,7 +117,11 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 		if skill.SHA256 != binding.SHA256 {
 			return run.Session{}, storage.ErrIntegrity
 		}
-		d.Skills = append(d.Skills, run.Skill{ID: binding.SkillID, VersionID: binding.VersionID, Version: binding.Version, SHA256: binding.SHA256, Markdown: skill.Bundle.Document.Markdown})
+		resources := []run.SkillResource{}
+		for _, a := range skill.Bundle.Document.Assets {
+			resources = append(resources, run.SkillResource{Path: a.Path, ObjectID: a.ObjectID, SHA256: a.SHA256, Size: a.Size, MediaType: a.MediaType})
+		}
+		d.Skills = append(d.Skills, run.Skill{Resources: resources, ID: binding.SkillID, VersionID: binding.VersionID, Version: binding.Version, SHA256: binding.SHA256, Markdown: skill.Bundle.Document.Markdown})
 		refs = append(refs, storage.Ref{Role: "skill_version", Ordinal: i, ObjectID: skill.ContentID, SHA256: skill.SHA256})
 	}
 	for _, name := range c.Tools {
@@ -164,6 +172,16 @@ func (s *Service) Submit(ctx context.Context, actor, space, sessionID string, in
 	if !keyPattern.MatchString(in.Key) || len(in.Text) > 256<<10 || !utf8.ValidString(in.Text) || strings.TrimSpace(in.Text) == "" {
 		return run.View{}, identity.ErrInvalid
 	}
+	if len(in.Attachments) > 16 {
+		return run.View{}, identity.ErrInvalid
+	}
+	seen := map[string]bool{}
+	for _, id := range in.Attachments {
+		if !storage.ValidID(id) || seen[id] {
+			return run.View{}, identity.ErrInvalid
+		}
+		seen[id] = true
+	}
 	digest := journal.Digest(struct {
 		Session string
 		Input   SubmitInput
@@ -207,12 +225,28 @@ func (s *Service) Submit(ctx context.Context, actor, space, sessionID string, in
 	if err != nil {
 		return run.View{}, err
 	}
-	message := journal.New(actor, "user.message.accepted", "", journal.UserMessageData{ID: uuid.NewString(), ContentID: o.ID}, Ref(o, "content"))
+	attachments := []run.Attachment{}
+	refs := []storage.Ref{Ref(o, "content")}
+	for i, id := range in.Attachments {
+		a, e := s.Repo.RuntimeAttachment(ctx, actor, space, sessionID, id)
+		if e != nil {
+			return run.View{}, e
+		}
+		attachments = append(attachments, a)
+		ref := a.Ref
+		ref.Ordinal = i
+		refs = append(refs, ref)
+	}
+	message := journal.New(actor, "user.message.accepted", "", journal.UserMessageData{ID: uuid.NewString(), ContentID: o.ID, Attachments: attachments}, refs...)
+	definition.ToolPolicy = s.ToolPolicy
 	id = uuid.NewString()
 	definition.Instructions = ""
 	definition.Platform = ""
 	for i := range definition.Skills {
 		definition.Skills[i].Markdown = ""
+		// The fixed version inventory is retained in the immutable definition and
+		// session.created references, rather than duplicated in the bounded event.
+		definition.Skills[i].Resources = nil
 	}
 	snapshot := run.Snapshot{ID: id, SpaceID: space, SessionID: sessionID, ActorID: actor, DefinitionRef: session.DefinitionRef, UserEventID: message.EventID, BaseSnapshotID: session.LatestSnapshotID, Definition: definition, Build: s.Build, Profile: "mass-agui-v1", MapperVersion: 1, ParserVersion: 1, CreatedAt: time.Now().UTC().Truncate(time.Microsecond)}
 	created := journal.New(actor, "run.created", id, journal.RunData{Snapshot: &snapshot})

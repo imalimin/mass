@@ -57,7 +57,12 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 			out.Content = m.Content
 			out.ToolCallID = m.ToolCallID
 			for _, call := range m.ToolCalls {
-				out.ToolCalls = append(out.ToolCalls, schema.ToolCall{ID: call.ID, Type: "function", Function: schema.FunctionCall{Name: call.Name, Arguments: call.Arguments}})
+				out.ToolCalls = append(out.ToolCalls, schema.ToolCall{ID: func() string {
+					if call.NativeID != "" {
+						return call.NativeID
+					}
+					return call.ID
+				}(), Type: "function", Function: schema.FunctionCall{Name: call.Name, Arguments: call.Arguments}})
 			}
 		}
 		messages = append(messages, &out)

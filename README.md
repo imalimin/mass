@@ -2,7 +2,7 @@
 
 Multi-use Agent Systems：支持空间协作、Agent/Skill 定义、版本管理与连续任务执行的单服务应用。
 
-当前已完成 D00—D04：可配置模型、发布 Agent/Skill、创建连续对话，并使用 read_file、write_file、publish_artifact 执行文件任务。页面支持流式回复、工具状态、产物下载、Trace、取消和快照恢复。其余工具及自动摘要待后续阶段实现。
+当前已完成 D00—D05：可配置模型、发布 Agent/Skill、创建连续对话，使用全部十四个内置工具处理文件、已接受附件和固定版本 Skill 资源。支持 JavaScript 文件/HTTP/CSV 操作、计划展示、产物下载、Trace、取消和快照恢复；自动摘要待 D06 实现。
 
 > 本文件提供项目简介、Quickstart 和建设文档入口。系统方案及工程验收继续由文末四份建设文档维护，不新增专题主文档。
 
@@ -110,7 +110,7 @@ bin/mass check-config --config mass.yaml
 bin/mass migrate --config mass.yaml
 ```
 
-依次看到 `configuration valid` 和 `migrations applied` 即表示配置格式有效、迁移已完成。`check-config` 不验证外部服务连通性。当前 schema 版本为 **5**；迁移文件已嵌入二进制，无需手工执行 SQL 文件。
+依次看到 `configuration valid` 和 `migrations applied` 即表示配置格式有效、迁移已完成。`check-config` 不验证外部服务连通性。当前 schema 版本为 **6**；迁移文件已嵌入二进制，无需手工执行 SQL 文件。
 
 ### 5. 创建登录账号
 
@@ -143,11 +143,14 @@ bin/mass serve --config mass.yaml
 3. 创建 Agent，编辑 `AGENTS.md`，选择模型和准确的 Skill 版本，应用配置、保存草稿并发布 v1。
 4. 修改 Skill 并发布 v2；旧 Agent v1 继续引用原 Skill v1。
 5. 编辑 Agent，选择 Skill v2 后发布 Agent v2，查看旧内容、版本差异并切换默认版本。
-6. Agent 的工具先只选择 `read_file`、`write_file`、`publish_artifact`；尚未实现的工具会拒绝提交运行。发布版本，或创建不可变调试快照。
+6. 按任务选择工具，支持全部十四个选项。先体验文件任务可选 `read_file`、`write_file`、`publish_artifact`；组合任务再选附件、资源、搜索、计划及 `run_code`。输入 Token 上限须符合实际模型容量；长工具流程可在配置选择中调高，然后发布新版本或创建调试快照。
 7. 进入「会话与运行」，选择 Agent 及发布/调试版本，新建会话。发送“写入 notes.txt，内容为 hello；读取确认后发布成产物”。可观察输出、工具状态，下载产物并展开「Trace 与上下文」。
 8. 在同一会话发送“读取 notes.txt 的内容”验证跨轮文件延续。每轮停止后保存快照；关闭页面不取消后台任务，取消按钮会等待实际执行停止。
+9. 使用启用了 `read_attachment`、`run_code`、`update_plan`、`publish_artifact` 的 Agent 新建会话，添加 UTF-8 JSON/CSV 附件后发送：“先更新计划，读取附件，用 JavaScript 汇总 amount，保存 summary.json 并发布产物，最后完成计划。”上传后须发送任务才接受附件；页面可查看计划、附件原文、工具结果及代码 I/O Trace。
 
-会话固定创建时的 Agent/Skill 定义，后续修改默认版本不会改变已有会话。容量不足会明确报错，D04 不自动压缩或截断上下文。当前文件工具限每文件 1 MiB UTF-8；`write_file` 使用 `expected_sha256` 防止覆盖冲突，产物保存不可变副本。完整工具集和摘要分别在 D05/D06 扩展。
+会话固定创建时的 Agent/Skill 定义，后续修改默认版本不会改变已有会话。容量不足会明确报错，当前不自动压缩或截断上下文。文件写入/编辑限每文件 1 MiB UTF-8，读取返回至多 64 KiB 范围及摘要；附件每个最多 8 MiB，工具解析支持 UTF-8 文本、JSON、CSV。写入、编辑、移动、删除通过 `expected_sha256` 防止冲突；发布的产物保持原版本，即使源文件被删除也可下载。
+
+启用 `run_code` 会授权代码读取/修改当前会话文件及发送 HTTP(S) 请求，无需逐项启用同名文件工具。代码为同步 JavaScript 函数体，支持 `fs`、`net.request`、`CSV`、`JSON`、`log`；不提供 Shell、Python、Node 或 OS 沙箱。默认每次 5 秒、源码 64 KiB、累计输入/文件读取 2 MiB、宿主输出 2 MiB、返回值 2 MiB、日志 64 KiB、100 次文件和 10 次网络操作；可通过 `tools.code` 配置限额。代码异常/取消保留已经确认的文件修改和请求效果，审计不完整明确报告未知，不自动重做。
 
 `GET /health/live` 检查进程存活；`GET /health/ready` 检查数据库 schema 与 TOS HeadBucket，就绪结果有短时缓存。对象写入权限可通过页面上传资源验证。
 
@@ -174,7 +177,7 @@ unset MASS_INITIAL_PASSWORD
 - 升级：保留数据库、TOS 对象、配置和原主密钥；停止旧服务，提供迁移 DSN 后用新二进制执行 `mass migrate`，再启动新服务。无需重复创建已有账号。
 - 同一数据库只运行一个 MASS 执行实例；第二个实例无法取得运行锁。反向代理需允许长连接 SSE。
 - 进程异常结束后，遗留运行会标记 `interrupted`，不会自动重跑模型或工具。未保存文件可能丢失；页面可恢复最近已提交快照，或在目录仍完整且无活跃运行时「仅重试保存文件」。快照失败会阻止下一轮。
-- 离线重建：停止服务后执行 `bin/mass rebuild-views --config mass.yaml`。命令校验日志及 TOS 内容并重建运行/UI 派生视图，不调用模型或工具；先保留数据库与 TOS 备份。
+- 离线重建：停止服务后执行 `bin/mass rebuild-views --config mass.yaml`。命令校验日志及 TOS 内容并重建运行、计划、产物及 UI 派生视图，不调用模型或工具；先保留数据库与 TOS 备份。
 - `serve` 不自动迁移；数据库版本不匹配会拒绝启动。首次启动也必须先执行迁移。
 - 对外部署：将 `http.listen` 设为部署所需的监听地址，`http.public_url` 设为浏览器实际使用的 HTTPS origin，设置 `auth.cookie_secure: true`，由 HTTPS 反向代理转发到 Go 服务。写请求会校验 Origin，地址和端口需与配置一致。
 

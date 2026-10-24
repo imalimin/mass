@@ -8,6 +8,7 @@ import (
 	"time"
 
 	einoadapter "github.com/imalimin/mass/internal/adapter/eino"
+	"github.com/imalimin/mass/internal/adapter/javascript"
 	"github.com/imalimin/mass/internal/adapter/mariadb"
 	"github.com/imalimin/mass/internal/app/catalog"
 	"github.com/imalimin/mass/internal/app/identity"
@@ -80,6 +81,32 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	if transport == nil {
 		transport = &einoadapter.ModelTransport{}
 	}
+	policy := run.ToolPolicy{Version: "mass-tools-v1", MaxCodeBytes: c.Tools.Code.MaxSourceBytes, TimeoutMS: c.Tools.Code.Timeout.Milliseconds(), MaxInputBytes: int64(c.Tools.Code.MaxInputBytes), MaxOutputBytes: int64(c.Tools.Code.MaxOutputBytes), MaxFileOperations: c.Tools.Code.MaxFileOperations, MaxNetworkRequests: c.Tools.Code.MaxNetworkRequests, MaxNetworkBodyBytes: int64(c.Tools.Code.MaxNetworkBodyBytes), MaxLogBytes: c.Tools.Code.MaxLogBytes}
+	if policy.MaxCodeBytes == 0 {
+		policy.MaxCodeBytes = 65536
+	}
+	if policy.TimeoutMS == 0 {
+		policy.TimeoutMS = 5000
+	}
+	if policy.MaxInputBytes == 0 {
+		policy.MaxInputBytes = 2 << 20
+	}
+	if policy.MaxOutputBytes == 0 {
+		policy.MaxOutputBytes = 2 << 20
+	}
+	if policy.MaxFileOperations == 0 {
+		policy.MaxFileOperations = 100
+	}
+	if policy.MaxNetworkRequests == 0 {
+		policy.MaxNetworkRequests = 10
+	}
+	if policy.MaxNetworkBodyBytes == 0 {
+		policy.MaxNetworkBodyBytes = 2 << 20
+	}
+	if policy.MaxLogBytes == 0 {
+		policy.MaxLogBytes = 65536
+	}
+	codeEngine := &javascript.Runner{MaxConcurrent: max(1, c.Tools.Code.MaxConcurrent)}
 	supervisorService.NewRunner = func(ctx context.Context, s run.Snapshot, started time.Time) (supervisor.Runner, error) {
 		history, _, err := resource.History(ctx, journalService, s.ActorID, s.SpaceID, s.SessionID)
 		if err != nil {
@@ -88,8 +115,9 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		budget := control.New(s, started, history, func(ctx context.Context) error { return lease.CheckRun(ctx, s) })
 		contextPlanner := &planner.Planner{Journal: journalService, Content: content, Projector: &projector.Projector{Content: content}, Tools: registryService}
 		gateway := &modelgateway.Gateway{Journal: journalService, Content: content, Transport: transport, Credentials: auth, Control: budget}
-		fileService := &resource.FileService{Workspaces: workspaces, Content: content, MaxBytes: min(c.Storage.MaxFileBytes, 1<<20), Limits: storage.Limits{MaxFileBytes: c.Storage.MaxFileBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes, MaxEntries: c.Storage.MaxEntries}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
-		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService}, Control: budget, Journal: journalService, Content: content}
+		fileService := &resource.FileService{Workspaces: workspaces, Content: content, Cursors: auth, MaxBytes: min(c.Storage.MaxFileBytes, 1<<20), Limits: storage.Limits{MaxFileBytes: c.Storage.MaxFileBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes, MaxEntries: c.Storage.MaxEntries}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
+		code := &resource.CodeService{Engine: codeEngine, Files: fileService, Network: &resource.Network{}, Journal: journalService, Content: content}
+		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: &resource.Sources{Files: fileService, Journal: journalService}, Code: code, Journal: journalService}, Control: budget, Journal: journalService, Content: content}
 		return &executor.Executor{Planner: contextPlanner, Model: gateway, Tools: tools, Control: budget}, nil
 	}
 	// The connection-scoped lock proves the old dispatcher is gone before recovery.
@@ -124,7 +152,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		cancel()
 		return nil, nil, err
 	}
-	service := &sessionapp.Service{Repo: store, Catalog: catalogue, Identity: auth, Content: content, Build: build, Ready: schedulerService.Ready, Notify: schedulerService.Notify, ResolveTools: registryService.Describe}
+	service := &sessionapp.Service{ToolPolicy: policy, Repo: store, Catalog: catalogue, Identity: auth, Content: content, Build: build, Ready: schedulerService.Ready, Notify: schedulerService.Notify, ResolveTools: registryService.Describe}
 	options = &httptransport.RuntimeOptions{Service: service, Repo: store, UI: &agui.Projector{Repo: store}, Workspaces: workspaceService, Snapshots: snapshots, Finisher: finisher, Cancel: supervisorService.Cancel}
 	lifecycle = &runtimeLifecycle{lease: lease, supervisor: supervisorService, cancel: cancel}
 	lifecycle.wg.Add(2)

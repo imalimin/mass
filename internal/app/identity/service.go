@@ -283,3 +283,23 @@ func Paginate[T any](s *Service, scope string, items []T, limit int, id func(T) 
 	}
 	return page
 }
+
+// Tool pages carry opaque, authenticated snapshot positions, separate from keyset IDs.
+func (s *Service) SealPage(scope, payload string) string {
+	mac := hmac.New(sha256.New, s.cursorKey)
+	mac.Write([]byte("tool-page:" + scope + ":" + payload))
+	return base64.RawURLEncoding.EncodeToString(append([]byte(payload), mac.Sum(nil)...))
+}
+func (s *Service) OpenPage(scope, token string) (string, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil || len(raw) <= 32 || len(raw) > 4096 {
+		return "", ErrInvalid
+	}
+	payload := raw[:len(raw)-32]
+	mac := hmac.New(sha256.New, s.cursorKey)
+	mac.Write([]byte("tool-page:" + scope + ":" + string(payload)))
+	if !hmac.Equal(raw[len(raw)-32:], mac.Sum(nil)) {
+		return "", ErrInvalid
+	}
+	return string(payload), nil
+}

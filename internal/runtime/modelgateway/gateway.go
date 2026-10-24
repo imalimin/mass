@@ -150,10 +150,12 @@ func (g *Gateway) Call(ctx context.Context, s run.Snapshot, p run.Prepared) (rep
 	reply.ResponseEventID = uuid.NewString()
 	seen := map[string]bool{}
 	for i, c := range reply.Message.ToolCalls {
-		if c.ID == "" || seen[c.ID] || !json.Valid([]byte(c.Arguments)) || len(c.Arguments) > 32768 {
+		if c.ID == "" || len(c.ID) > 128 || !utf8.ValidString(c.ID) || seen[c.ID] || !json.Valid([]byte(c.Arguments)) || len(c.Arguments) > 2<<20 {
 			return reply, run.ErrProtocol
 		}
 		seen[c.ID] = true
+		reply.Message.ToolCalls[i].NativeID = c.ID
+		reply.Message.ToolCalls[i].ID = uuid.NewString()
 		reply.Message.ToolCalls[i].ResponseEventID = reply.ResponseEventID
 	}
 	raw, _ := json.Marshal(reply)
@@ -168,7 +170,20 @@ func (g *Gateway) Call(ctx context.Context, s run.Snapshot, p run.Prepared) (rep
 			preview = preview[:len(preview)-1]
 		}
 	}
-	e := journal.New(s.ActorID, "model.response.completed", s.ID, journal.ResponseData{AttemptID: attempt, MessageID: message, ContentID: o.ID, FinishReason: reply.FinishReason, Usage: reply.Usage, Calls: reply.Message.ToolCalls, Preview: preview}, storage.Ref{Role: "response", ObjectID: o.ID, SHA256: o.SHA256})
+	// Raw arguments stay in the immutable response. The Journal carries bounded
+	// display arguments and their digest, so a valid large code body fits its envelope.
+	calls := append([]run.Call(nil), reply.Message.ToolCalls...)
+	inlineBytes := 16 << 10
+	for i := range calls {
+		calls[i].ArgumentsSHA256 = journal.Digest(calls[i].Arguments)
+		encoded, _ := json.Marshal(calls[i])
+		if len(calls[i].Arguments) > 8192 || len(encoded) > inlineBytes {
+			calls[i].Arguments = ""
+		} else {
+			inlineBytes -= len(encoded)
+		}
+	}
+	e := journal.New(s.ActorID, "model.response.completed", s.ID, journal.ResponseData{AttemptID: attempt, MessageID: message, ContentID: o.ID, FinishReason: reply.FinishReason, Usage: reply.Usage, Calls: calls, Preview: preview}, storage.Ref{Role: "response", ObjectID: o.ID, SHA256: o.SHA256})
 	e.EventID = reply.ResponseEventID
 	e.OperationID = attempt
 	e.CausationID = started.EventID

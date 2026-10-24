@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
 )
@@ -77,6 +78,37 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 			return e
 		}
 		defer archive.Close()
+		if s.Journal != nil {
+			history, _, err := History(ctx, s.Journal, actor, r.SpaceID, r.SessionID)
+			if err != nil {
+				return err
+			}
+			var plan *run.Plan
+			artifacts := []run.Artifact{}
+			through := int64(0)
+			for _, event := range history {
+				if event.RunID != r.RunID {
+					continue
+				}
+				switch event.Type {
+				case "plan.updated":
+					var p run.Plan
+					journal.Decode(event.Data, &p)
+					plan = &p
+					through = event.Sequence
+				case "artifact.published":
+					var a run.Artifact
+					journal.Decode(event.Data, &a)
+					artifacts = append(artifacts, a)
+					through = event.Sequence
+				case "tool.execution.completed":
+					through = event.Sequence
+				}
+			}
+			if through > 0 {
+				manifest.State, _ = json.Marshal(map[string]any{"run_id": r.RunID, "through_sequence": through, "plan": plan, "artifacts": artifacts})
+			}
+		}
 		a, e := s.Content.Put(ctx, actor, r.SpaceID, r.ArchiveID, "workspace.archive", "application/gzip", archive)
 		if e != nil {
 			return e

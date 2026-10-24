@@ -5,7 +5,7 @@
 > - 包含：建设阶段、前置条件、具体任务、交付物、测试门槛、验收清单、运行交付步骤和进度证据。
 > - 不包含：替代用户目标或维护另一套技术方案；发现缺失细节应先补入技术方案再实施。
 > - 输入依次为[系统设计指引](design-guide.md)、[系统架构设计](architecture.md)、[技术方案](technical-design.md)。所有开发计划、验收和操作说明集中在本文，不再拆计划、测试或操作主文档。
-> - 状态：D00—D04 已完成；D01—D03 兼容回归通过，D05—D10 未开始；更新：2026-10-23。当前实现与验证证据见 E15.1—E15.5，后续阶段的命令和路径仍为待建立约定。
+> - 状态：D00—D05 已完成；既有阶段兼容回归通过，D06—D10 未开始；更新：2026-10-24。当前实现与验证证据见 E15.1—E15.6，后续阶段的命令和路径仍为待建立约定。
 
 ## E00 四份文档与 AI 执行规则
 
@@ -366,6 +366,8 @@ P1 审查整改文档更新完成：按用户确认将 run_code 文件范围限�
 | D02 / 2026-10-18 | 基于 8d7a615；identity/mariadb/secrets、迁移、HTTP、空间页面与集成测试 | 同上；真实 MariaDB 11.8.9 | verify-d02、race、双账号浏览器闭环通过，见 E15.2 | D01 TOS/快照/Journal 与 D04 Supervisor 接入 |
 | D01 补齐 / 2026-10-18 | 基于 3d40695；新增迁移 00003、TOS、Journal、快照、读取 API 与集成测试 | 同上；真实 MariaDB 11.8.9 与 TOS | verify-d01、race、旧库升级与 D02 浏览器回归通过，见 E15.3 | D03 定义管理；D04 完整 reducer 与 Supervisor 接入 |
 | D03 / 2026-10-18 | 基于 69e7eeb；迁移 00004、app/catalog、MariaDB/HTTP、Monaco 页面与集成测试 | 固定工具链、真实 MariaDB/TOS、Chromium | verify-d03、smoke-tos、race 与 D01/D02 升级回归，见 E15.4 | D04 最小运行纵向闭环 |
+| D04 / 2026-10-23 | 8459a09；迁移 00005、Session/Run、Eino/Gateway、三工具、Supervisor/AG-UI | 固定工具链、真实 MariaDB/TOS、授权真实模型、Chromium | verify-d04、race、真实模型及 TOS 冒烟，见 E15.5 | D05 完整工具 |
+| D05 / 2026-10-24 | 基于 8459a09；迁移 00006、全部工具、真实 goja、附件/计划/UI 与测试 | 固定工具链、真实 MariaDB/TOS、实际 Eino/HTTP 协议夹具、Chromium | verify-d05、race、smoke-tos，见 E15.6 | D06 上下文完整能力 |
 
 每次交接应说明当前阶段、已完成小步、实际文件、通过的检查、未通过/未运行的检查及下一步。不得把设计片段写入仓库后即标记功能完成，也不得跳过真实模型验证而宣称完整交付。
 
@@ -554,4 +556,37 @@ make smoke-real
 
 部署：停止旧服务并备份，保留原数据库/TOS/主密钥，使用迁移账号执行新二进制 mass migrate，再以 DML 应用账号 serve。旧 mass.yaml 无 base_url_env 时仍默认 Ark；使用自定义兼容模型地址需配置 llm.base_url_env: MASS_LLM_MODEL_BASE_URL，并在页面保存对应模型/凭证。环境模型密钥不会自动导入空间。完整体验步骤已同步 README Quickstart。
 
-当前限制：仅 read_file/write_file/publish_artifact 三个 v1 工具，单文件 1 MiB UTF-8，其余工具提交时拒绝；没有附件/代码执行/自动摘要，保守计数器容量不足明确拒绝。单数据库单执行实例；中断不自动重放，未保存目录修改可能丢失；界面提供显式快照恢复/只重试保存。D05—D10 与完整 MVP 验收尚未完成，make verify 继续明确失败。
+D04 交付时的限制（D05 扩展见 E15.6）：仅 read_file/write_file/publish_artifact 三个 v1 工具，单文件 1 MiB UTF-8，其余工具提交时拒绝；没有附件/代码执行/自动摘要，保守计数器容量不足明确拒绝。单数据库单执行实例；中断不自动重放，未保存目录修改可能丢失；界面提供显式快照恢复/只重试保存。D05—D10 与完整 MVP 验收尚未完成，make verify 继续明确失败。
+
+### E15.6 D05 全部内置工具（2026-10-24）
+
+基于 8459a09，按 D05a→b→c 补齐全部十四个 v1 工具。新增 00006_tools，schema 推进到 6；已有 00001—00005 不改写，真实 schema 5 定义先发布、迁移两次再运行的兼容用例通过。
+
+| 小步 | 实际实现 | 验证证据 |
+| --- | --- | --- |
+| D05a | resource 文件发现、精确编辑、移动/删除、不可变查询分页；Sources 固定 Skill 资源、已接受附件；附件上传与输入绑定 | 摘要冲突、歧义/重叠拒绝、CRLF 保留、硬链接/目录拒绝、范围读取、跨页修改仍稳定、扫描上限与撤权拒绝；Skill v2 发布后会话继续使用 v1；未接受、跨 Session、未绑定资源、非法 JSON/二进制明确拒绝 |
+| D05b | adapter/javascript 的真实 goja、resource.CodeService/Network、input_resolved 与递增 I/O 审计 | 所有 fs 方法、连续读取、CSV 转换、HTTP 状态/跨源认证头清理/脱敏/超时；文件/网络次数及实际读取总量超限；写文件和请求后异常保留确认效果；取消无限循环及等待未退出宿主不释放 VM 名额；无 source map 隐式读取、跨 VM 状态或 Go 对象导出 |
+| D05c | update_plan 与工具终结同事务、不可变产物、Manifest 同水位状态、AG-UI 和附件/计划页面 | FakeChatModel 串联 15 次调用覆盖十四工具；summary.json 删除后仍下载原始 total=10/final 版本；计划修订 2、快照状态、I/O 引用、在线禁止/离线视图重建及模型/请求次数不增长 |
+
+生产 bootstrap 仅注入实际适配器；确定性 FakeChatModel 和本地 HTTP 供应商由测试显式提供。浏览器使用实际 Eino/HTTP 与 TOS 协议夹具，从页面创建 Skill/Agent、选择十四工具及输入容量、上传 JSON 附件，再完成计算、编辑/整理、计划、发布与删除源文件；附件原文和产物下载、刷新后恢复计划/结果且不执行新调用、390px 布局与浏览器错误检查通过。截图位于忽略的 .cache/d05-desktop.png / d05-mobile.png。
+
+真实 TOS/MariaDB 验收使用隔离数据库及 tmp/mass-d01-UUID/ 下合成数据，D01—D04 回归与 D05 十四工具组合、代码异常/取消、来源校验、计划/产物状态和离线重建通过。最终完整 smoke-tos 复验用时约 178 秒，清理 284 个精确对象/版本并逐项 GET 确认 404；不扫描或删除其他前缀。D05 本次未新增收费模型调用；真实文本模型接入证据保留在 E15.5。
+
+故障注入额外验证：文件已经写入、终结 I/O 日志被 SQL 触发器拒绝时，工具效果标记 unknown、Run 以 tool_effect_unknown 结束，不发起下一次模型调用或重复文件操作；plan.updated 与对应工具完成任意一个不能提交时，视图和计划事实共同回滚。离线删除派生表后，校验 TOS 对象摘要并重建 Run/计划/产物/UI，与原状态和帧一致，没有模型或网络调用。
+
+参数与兼容修复：供应商原生调用 ID 仅在对应响应范围内使用，平台独立生成调用 ID，回归刻意复用同一个 native_id 仍正确配对。源码支持 64 KiB，模型参数最大 2 MiB；大参数保存在 TOS 完整响应，Journal 记录摘要并限制内联总量，前端通过 Trace 查看，不把空参数当作完整标准事件。保留旧 D04 内联参数格式及已有工具 Schema；100 项长路径 Skill 资源清单通过不可变版本引用读取，不重复塞入有界 Run 事件，迁移后提交/运行/重建通过。新的容量计数器显式使用 utf8-byte-upper-bound-v2，排除未发送给模型的结果 Schema，完整契约仍固定在 Run 中。
+
+本地通过的工程命令（MASS_TEST_ADMIN_DSN 指向独立 MariaDB 11.8.9；不使用实际应用 DSN）：
+
+```sh
+make verify-d05
+make test-race
+# 另行注入专用 TOS 配置、访问凭证与测试前缀；不会调用真实模型。
+make smoke-tos
+```
+
+verify-d05 包含生成契约检查、TypeScript/ESLint/go vet/依赖方向和 gofmt、Go/Vitest、MariaDB 集成、进程烟测及 D02—D05 浏览器流程。CI 门槛更新到 verify-d05/race，本地通过不代表远端 CI 已触发。完整 make verify 仍明确拒绝提前宣称 MVP 完成。
+
+部署：保留原数据库、TOS、配置和主密钥，停止旧服务，用新二进制及迁移账号执行 mass migrate 到 schema 6，再用应用 DML 账号启动 serve；已有会话继续绑定原定义，体验新增工具需给 Agent 启用工具、发布新版本并创建对应会话。README 已同步附件、输入容量、代码限额和操作示例。
+
+当前限制：附件解析仅 UTF-8 文本/JSON/CSV，8 MiB 上限；文件写入/编辑 1 MiB，读取返回 64 KiB 范围；默认同步 JS 每次 5 秒、源码 64 KiB、累计输入/文件读取 2 MiB、宿主输出和返回值各 2 MiB、日志 64 KiB、100 次文件与 10 次网络操作，限制由 tools.code 固定到每个新 Run。无 OS 沙箱或 VM 硬内存隔离，无 Shell/Python/任意系统脚本；异常和取消不回滚确认效果。保守容量不足明确拒绝，没有自动摘要、模型自动重试或缓存命中推断；这些及 D06—D10 的剩余验收继续按后续阶段实现。

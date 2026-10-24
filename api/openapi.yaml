@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: MASS API
-  version: 0.4.0
-  description: D04 durable Agent execution, Eino wire capture, file tools, snapshots, cancellation and AG-UI over SSE.
+  version: 0.5.0
+  description: D05 complete built-in tools, attachments, JavaScript file/network I/O audit, plans and immutable artifacts.
 servers:
   - url: /
 paths:
@@ -3434,6 +3434,74 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/sessions/{session_id}/attachments:
+    post:
+      operationId: uploadAttachment
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '201':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeAttachment'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttachmentUploadInput'
+  /api/v1/spaces/{space_id}/runs/{run_id}/plan:
+    get:
+      operationId: getRunPlan
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimePlan'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   schemas:
     Definition:
@@ -3871,6 +3939,7 @@ components:
             - D02
             - D03
             - D04
+            - D05
         protocol_profile:
           type: string
           const: mass-agui-v1
@@ -4521,6 +4590,8 @@ components:
           type:
             - object
             - 'null'
+        result_schema:
+          type: object
     RuntimeModel:
       type: object
       additionalProperties: false
@@ -4577,6 +4648,10 @@ components:
           type: string
         markdown:
           type: string
+        resources:
+          type: array
+          items:
+            $ref: '#/components/schemas/SkillResource'
     RuntimeDefinition:
       type: object
       additionalProperties: false
@@ -4627,6 +4702,8 @@ components:
           type: integer
         timeout_seconds:
           type: integer
+        tool_policy:
+          $ref: '#/components/schemas/RuntimeToolPolicy'
     RuntimeSnapshot:
       type: object
       additionalProperties: false
@@ -4887,6 +4964,10 @@ components:
           type: string
         truncated:
           type: boolean
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuntimeAttachment'
     RuntimeMessages:
       type: object
       additionalProperties: false
@@ -5047,6 +5128,8 @@ components:
           $ref: '#/components/schemas/RuntimeUsage'
         error:
           type: string
+        plan:
+          $ref: '#/components/schemas/RuntimePlan'
     UICheckpoint:
       type: object
       additionalProperties: false
@@ -5146,6 +5229,140 @@ components:
           type: string
           minLength: 1
           maxLength: 262144
+        attachment_ids:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+    SkillResource:
+      type: object
+      additionalProperties: false
+      required:
+        - path
+        - object_id
+        - sha256
+        - size
+        - media_type
+      properties:
+        path:
+          type: string
+        object_id:
+          type: string
+          format: uuid
+        sha256:
+          type: string
+        size:
+          type: integer
+        media_type:
+          type: string
+    RuntimeToolPolicy:
+      type: object
+      additionalProperties: false
+      required:
+        - version
+        - max_code_bytes
+        - timeout_ms
+        - max_input_bytes
+        - max_output_bytes
+        - max_file_operations
+        - max_network_requests
+        - max_network_body_bytes
+        - max_log_bytes
+      properties:
+        version:
+          type: string
+        max_code_bytes:
+          type: integer
+        timeout_ms:
+          type: integer
+        max_input_bytes:
+          type: integer
+        max_output_bytes:
+          type: integer
+        max_file_operations:
+          type: integer
+        max_network_requests:
+          type: integer
+        max_network_body_bytes:
+          type: integer
+        max_log_bytes:
+          type: integer
+    RuntimeAttachment:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - session_id
+        - name
+        - media_type
+        - size
+        - ref
+      properties:
+        id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        media_type:
+          type: string
+        size:
+          type: integer
+        ref:
+          $ref: '#/components/schemas/RuntimeRef'
+    AttachmentUploadInput:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - media_type
+        - content_base64
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        media_type:
+          type: string
+          maxLength: 128
+        content_base64:
+          type: string
+          maxLength: 11184812
+    RuntimePlanStep:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - status
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        status:
+          enum:
+            - pending
+            - in_progress
+            - completed
+            - skipped
+    RuntimePlan:
+      type: object
+      additionalProperties: false
+      required:
+        - revision
+        - steps
+      properties:
+        revision:
+          type: integer
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuntimePlanStep'
   parameters:
     IdempotencyKey:
       name: Idempotency-Key

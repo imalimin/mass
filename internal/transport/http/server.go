@@ -27,7 +27,7 @@ func NewHandler(assets fs.FS, version string, logger *slog.Logger, options ...Id
 		if options[0].Catalog != nil {
 			stage = "D03"
 			if options[0].Runtime != nil {
-				stage = "D04"
+				stage = "D05"
 			}
 		}
 	}

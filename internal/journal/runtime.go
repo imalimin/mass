@@ -10,8 +10,9 @@ import (
 )
 
 type UserMessageData struct {
-	ID        string `json:"id"`
-	ContentID string `json:"content_id"`
+	ID          string           `json:"id"`
+	ContentID   string           `json:"content_id"`
+	Attachments []run.Attachment `json:"attachments,omitempty"`
 }
 type RunData struct {
 	Snapshot *run.Snapshot `json:"snapshot,omitempty"`
@@ -78,6 +79,9 @@ func New(actor, kind, runID string, data any, refs ...storage.Ref) Proposed {
 	return Proposed{EventID: uuid.NewString(), RunID: runID, Type: kind, SchemaVersion: 1, Actor: Actor{Kind: "user", ID: actor}, OccurredAt: time.Now().UTC(), Data: raw, Refs: refs}
 }
 func validateRuntime(e Proposed) (bool, error) {
+	if known, err := validateTools(e); known {
+		return true, err
+	}
 	bad := func() (bool, error) { return true, storage.ErrSchema }
 	requiredRun := true
 	switch e.Type {
@@ -85,6 +89,16 @@ func validateRuntime(e Proposed) (bool, error) {
 		var d UserMessageData
 		if Decode(e.Data, &d) != nil || !storage.ValidID(d.ID) || !storage.ValidID(d.ContentID) || e.RunID != "" {
 			return bad()
+		}
+		if len(d.Attachments) > 16 {
+			return bad()
+		}
+		seen := map[string]bool{}
+		for _, a := range d.Attachments {
+			if !storage.ValidID(a.ID) || !storage.ValidID(a.Ref.ObjectID) || !hashPattern.MatchString(a.Ref.SHA256) || seen[a.ID] {
+				return bad()
+			}
+			seen[a.ID] = true
 		}
 		requiredRun = false
 	case "run.cancel.requested":
@@ -121,7 +135,14 @@ func validateRuntime(e Proposed) (bool, error) {
 		}
 		seen := map[string]bool{}
 		for _, c := range d.Calls {
-			if !keyPattern.MatchString(c.ID) || seen[c.ID] || !rolePattern.MatchString(c.Name) || !json.Valid([]byte(c.Arguments)) || len(c.Arguments) > 32768 {
+			if !keyPattern.MatchString(c.ID) || seen[c.ID] || !rolePattern.MatchString(c.Name) || len(c.Arguments) > 2<<20 {
+				return bad()
+			}
+			if c.Arguments == "" {
+				if !hashPattern.MatchString(c.ArgumentsSHA256) {
+					return bad()
+				}
+			} else if !json.Valid([]byte(c.Arguments)) || c.ArgumentsSHA256 != "" && c.ArgumentsSHA256 != Digest(c.Arguments) {
 				return bad()
 			}
 			seen[c.ID] = true

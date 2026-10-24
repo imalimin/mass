@@ -111,6 +111,7 @@ func TestRealTOSStorage(t *testing.T) {
 	exerciseStorage(t, tracked, prefix)
 	exerciseCatalog(t, tracked, prefix+"catalog/")
 	exerciseRuntime(t, tracked, prefix+"runtime/", true)
+	exerciseTools(t, tracked, prefix+"tools/")
 	if os.Getenv("MASS_TEST_REAL_MODEL") == "1" {
 		for _, key := range []string{"MASS_LLM_MODEL_BASE_URL", "MASS_LLM_MODEL_KEY", "MASS_LLM_MODEL_ID"} {
 			if os.Getenv(key) == "" {

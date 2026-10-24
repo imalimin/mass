@@ -100,7 +100,7 @@ func (s *Store) RebuildViews(ctx context.Context, verify func(context.Context, s
 	}
 	return s.transaction(ctx, func(tx *sql.Tx) error {
 		// The runtime lock is already held; no application service runs concurrently.
-		for _, table := range []string{"agui_events", "agui_streams", "artifacts", "tool_executions", "model_calls", "model_attempts", "messages", "session_active_runs"} {
+		for _, table := range []string{"agui_events", "agui_streams", "run_plans", "artifacts", "tool_executions", "model_calls", "model_attempts", "messages", "session_active_runs"} {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 				return err
 			}

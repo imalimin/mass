@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"time"
@@ -53,8 +54,9 @@ type Entry struct {
 	SHA256 string `json:"sha256,omitempty"`
 }
 type Manifest struct {
-	FormatVersion int     `json:"format_version"`
-	Entries       []Entry `json:"entries"`
+	State         json.RawMessage `json:"runtime_state,omitempty"`
+	FormatVersion int             `json:"format_version"`
+	Entries       []Entry         `json:"entries"`
 }
 type Snapshot struct {
 	ID             string `json:"id"`

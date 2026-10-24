@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/imalimin/mass/internal/domain/run"
@@ -75,7 +76,7 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 		return err
 	}
 	result, artifact, actionErr := d.Handler.Execute(ctx, s, call, args.(map[string]any))
-	if actionErr != nil {
+	if actionErr != nil && result.Status == "" {
 		code := "tool_failed"
 		effect := "unknown"
 		if errors.Is(actionErr, fs.ErrNotExist) {
@@ -90,11 +91,50 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 			code = "invalid_tool_input"
 			effect = "none"
 		}
+		var detail *run.ToolError
+		if errors.As(actionErr, &detail) {
+			code = detail.Code
+			effect = detail.Effect
+		}
+		if errors.Is(actionErr, run.ErrOverflow) {
+			code = "tool_limit_exceeded"
+			effect = "none"
+		}
 		result = run.ToolResult{CallID: call.ID, Status: "failed", Error: code, SideEffect: effect, Complete: true, SourceRefs: []storage.Ref{}, Data: json.RawMessage(`{}`)}
 	}
 	result.CallID = call.ID
+	result.DataRef = uuid.NewString()
 	raw, _ := json.Marshal(result)
-	o, err := d.Content.Put(ctx, s.ActorID, s.SpaceID, uuid.NewString(), "tool.result", "application/json", bytes.NewReader(raw))
+	if len(raw) > 2<<20 {
+		return run.ErrOverflow
+	}
+	if len(spec.ResultSchema) > 0 {
+		var doc any
+		if json.Unmarshal(spec.ResultSchema, &doc) != nil {
+			return run.ErrProtocol
+		}
+		validator := jsonschema.NewCompiler()
+		validator.AssertFormat()
+		if err = validator.AddResource("https://mass.local/result", doc); err != nil {
+			return err
+		}
+		compiled, err := validator.Compile("https://mass.local/result")
+		if err != nil {
+			return err
+		}
+		var value any
+		json.Unmarshal(raw, &value)
+		if err = compiled.Validate(value); err != nil {
+			return run.ErrProtocol
+		}
+	}
+	recordCtx := ctx
+	if ctx.Err() != nil {
+		var cancel context.CancelFunc
+		recordCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+	}
+	o, err := d.Content.Put(recordCtx, s.ActorID, s.SpaceID, result.DataRef, "tool.result", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
@@ -115,18 +155,28 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 	completed.CausationID = started.EventID
 	completed.OperationID = call.ID
 	events := []journal.Proposed{}
+	if result.Plan != nil {
+		event := journal.New(s.ActorID, "plan.updated", s.ID, *result.Plan)
+		event.OperationID = call.ID
+		event.CausationID = started.EventID
+		events = append(events, event)
+	}
 	if artifact != nil {
 		e := journal.New(s.ActorID, "artifact.published", s.ID, artifact, storage.Ref{Role: "artifact", ObjectID: artifact.ObjectID, SHA256: artifact.SHA256})
 		e.OperationID = call.ID
+		e.CausationID = started.EventID
 		events = append(events, e)
 	}
 	events = append(events, completed)
-	_, err = resource.AppendRun(ctx, d.Journal, s, events...)
+	_, err = resource.AppendRun(recordCtx, d.Journal, s, events...)
 	if err != nil {
 		return err
 	}
 	if result.SideEffect == "unknown" {
-		return errors.New("tool_effect_unknown")
+		return run.ErrUnknownEffect
+	}
+	if actionErr != nil && ctx.Err() != nil {
+		return actionErr
 	}
 	return nil
 }

@@ -134,15 +134,23 @@ func (s *Store) RuntimeMessages(ctx context.Context, actor, space, session strin
 		if e := tx.QueryRowContext(ctx, "SELECT id FROM sessions WHERE space_id=? AND id=?", space, session).Scan(&exists); e != nil {
 			return e
 		}
-		rows, e := tx.QueryContext(ctx, "SELECT id,COALESCE(run_id,''),role,content_id,source_event_id,sequence,complete FROM messages WHERE space_id=? AND session_id=? AND sequence>? ORDER BY sequence LIMIT ?", space, session, after, limit)
+		rows, e := tx.QueryContext(ctx, "SELECT m.id,COALESCE(m.run_id,''),m.role,m.content_id,m.source_event_id,m.sequence,m.complete,e.data FROM messages m JOIN runtime_events e ON e.space_id=m.space_id AND e.event_id=m.source_event_id WHERE m.space_id=? AND m.session_id=? AND m.sequence>? ORDER BY m.sequence LIMIT ?", space, session, after, limit)
 		if e != nil {
 			return e
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var m run.MessageView
-			if e = rows.Scan(&m.ID, &m.RunID, &m.Role, &m.ContentID, &m.SourceEventID, &m.Sequence, &m.Complete); e != nil {
+			var raw []byte
+			if e = rows.Scan(&m.ID, &m.RunID, &m.Role, &m.ContentID, &m.SourceEventID, &m.Sequence, &m.Complete, &raw); e != nil {
 				return e
+			}
+			if m.Role == "user" {
+				var accepted journal.UserMessageData
+				if e = json.Unmarshal(raw, &accepted); e != nil {
+					return storage.ErrIntegrity
+				}
+				m.Attachments = accepted.Attachments
 			}
 			items = append(items, m)
 		}

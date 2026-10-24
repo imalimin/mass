@@ -884,6 +884,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/spaces/{space_id}/sessions/{session_id}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["uploadAttachment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/runs/{run_id}/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRunPlan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1035,7 +1067,7 @@ export interface components {
             name: "MASS";
             version: string;
             /** @enum {string} */
-            stage: "D00" | "D02" | "D03" | "D04";
+            stage: "D00" | "D02" | "D03" | "D04" | "D05";
             /** @constant */
             protocol_profile: "mass-agui-v1";
         };
@@ -1262,6 +1294,7 @@ export interface components {
             version: string;
             description: string;
             schema: Record<string, never> | null;
+            result_schema?: Record<string, never>;
         };
         RuntimeModel: {
             /** Format: uuid */
@@ -1284,6 +1317,7 @@ export interface components {
             version: string;
             sha256: string;
             markdown: string;
+            resources?: components["schemas"]["SkillResource"][];
         };
         RuntimeDefinition: {
             /** Format: uuid */
@@ -1301,6 +1335,7 @@ export interface components {
             output_tokens: number;
             max_steps: number;
             timeout_seconds: number;
+            tool_policy?: components["schemas"]["RuntimeToolPolicy"];
         };
         RuntimeSnapshot: {
             /** Format: uuid */
@@ -1400,6 +1435,7 @@ export interface components {
             complete: boolean;
             content: string;
             truncated: boolean;
+            attachments?: components["schemas"]["RuntimeAttachment"][];
         };
         RuntimeMessages: {
             items: components["schemas"]["RuntimeMessage"][];
@@ -1455,6 +1491,7 @@ export interface components {
             artifacts: components["schemas"]["RuntimeArtifact"][];
             usage: components["schemas"]["RuntimeUsage"];
             error: string;
+            plan?: components["schemas"]["RuntimePlan"];
         };
         UICheckpoint: {
             /** Format: uuid */
@@ -1489,6 +1526,51 @@ export interface components {
         RunSubmitInput: {
             idempotency_key: string;
             text: string;
+            attachment_ids?: string[];
+        };
+        SkillResource: {
+            path: string;
+            /** Format: uuid */
+            object_id: string;
+            sha256: string;
+            size: number;
+            media_type: string;
+        };
+        RuntimeToolPolicy: {
+            version: string;
+            max_code_bytes: number;
+            timeout_ms: number;
+            max_input_bytes: number;
+            max_output_bytes: number;
+            max_file_operations: number;
+            max_network_requests: number;
+            max_network_body_bytes: number;
+            max_log_bytes: number;
+        };
+        RuntimeAttachment: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            session_id: string;
+            name: string;
+            media_type: string;
+            size: number;
+            ref: components["schemas"]["RuntimeRef"];
+        };
+        AttachmentUploadInput: {
+            name: string;
+            media_type: string;
+            content_base64: string;
+        };
+        RuntimePlanStep: {
+            id: string;
+            title: string;
+            /** @enum {unknown} */
+            status: "pending" | "in_progress" | "completed" | "skipped";
+        };
+        RuntimePlan: {
+            revision: number;
+            steps: components["schemas"]["RuntimePlanStep"][];
         };
     };
     responses: never;
@@ -5363,6 +5445,74 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": string;
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    uploadAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachmentUploadInput"];
+            };
+        };
+        responses: {
+            /** @description Successful operation. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeAttachment"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getRunPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimePlan"];
                 };
             };
             /** @description Request rejected or dependency unavailable. */

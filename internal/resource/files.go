@@ -12,6 +12,7 @@ import (
 	"mime"
 	"os"
 	"path"
+	"reflect"
 	"strings"
 	"unicode/utf8"
 
@@ -21,15 +22,18 @@ import (
 )
 
 type FileService struct {
+	ReadBudget func(int64) error
 	Workspaces Workspaces
 	Content    *ContentStore
+	Cursors    CursorSigner
 	MaxBytes   int64
 	Limits     storage.Limits
 	Check      func(context.Context, run.Snapshot) error
 }
 type ReadFileInput struct {
-	Path           string `json:"path"`
-	ExpectedSHA256 string `json:"expected_sha256,omitempty"`
+	Path           string     `json:"path"`
+	ExpectedSHA256 string     `json:"expected_sha256,omitempty"`
+	Range          *run.Range `json:"range,omitempty"`
 }
 type WriteFileInput struct {
 	Path           string `json:"path"`
@@ -73,7 +77,7 @@ func (f *FileService) checkWrite(ctx context.Context, root *os.Root, target stri
 		if err != nil {
 			return err
 		}
-		if !filePath(name) || (!info.IsDir() && !info.Mode().IsRegular()) {
+		if !filePath(name) || (!info.IsDir() && !info.Mode().IsRegular()) || hasMultipleLinks(info) {
 			return storage.ErrWorkspace
 		}
 		folded := strings.ToLower(name)
@@ -123,7 +127,7 @@ func checkParents(root *os.Root, name string) error {
 		if err != nil {
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+		if hasMultipleLinks(info) || info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
 			return storage.ErrWorkspace
 		}
 		if i < len(parts) && !info.IsDir() {
@@ -149,12 +153,20 @@ func (f *FileService) read(ctx context.Context, dir WorkspaceDir, p string) ([]b
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, storage.ErrWorkspace
 	}
-	raw, err := io.ReadAll(io.LimitReader(storage.ContextReader{Context: ctx, Reader: file}, f.MaxBytes+1))
+	if info.Size() > f.Limits.MaxFileBytes {
+		return nil, run.ErrOverflow
+	}
+	if f.ReadBudget != nil {
+		if err = f.ReadBudget(info.Size()); err != nil {
+			return nil, err
+		}
+	}
+	raw, err := io.ReadAll(io.LimitReader(storage.ContextReader{Context: ctx, Reader: file}, info.Size()+1))
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(raw)) > f.MaxBytes {
-		return nil, run.ErrOverflow
+	if int64(len(raw)) != info.Size() {
+		return nil, storage.ErrConflict
 	}
 	after, err := file.Stat()
 	if err != nil || info.Size() != after.Size() || !info.ModTime().Equal(after.ModTime()) {
@@ -176,15 +188,18 @@ func (f *FileService) Read(ctx context.Context, s run.Snapshot, in ReadFileInput
 		if in.ExpectedSHA256 != "" && in.ExpectedSHA256 != sha {
 			return storage.ErrConflict
 		}
-		if !utf8.Valid(raw) {
-			return storage.ErrInvalid
+		view, err := rangeData(raw, in.Range)
+		if err != nil {
+			return err
 		}
+		view["path"] = in.Path
 		o, err := f.Content.Put(ctx, s.ActorID, s.SpaceID, uuid.NewString(), "file.read", "application/octet-stream", bytes.NewReader(raw))
 		if err != nil {
 			return err
 		}
-		data, _ := json.Marshal(map[string]any{"path": in.Path, "content": string(raw), "sha256": sha, "size": len(raw)})
-		result = run.ToolResult{Status: "completed", Data: data, SideEffect: "none", Complete: true, SourceRefs: []storage.Ref{{Role: "source", ObjectID: o.ID, SHA256: o.SHA256}}}
+		result = dataResult(view, "none", storage.Ref{Role: "source", ObjectID: o.ID, SHA256: o.SHA256})
+		result.Complete = view["complete"].(bool)
+		result.Truncated = !result.Complete
 		return nil
 	})
 	return result, err
@@ -193,66 +208,68 @@ func (f *FileService) Write(ctx context.Context, s run.Snapshot, in WriteFileInp
 	if !filePath(in.Path) || !utf8.ValidString(in.Content) || int64(len(in.Content)) > f.MaxBytes || in.ExpectedSHA256 == "" || !validMediaType(in.MediaType) {
 		return result, storage.ErrInvalid
 	}
-	err = f.Workspaces.With(ctx, s.SpaceID, s.SessionID, func(dir WorkspaceDir) error {
-		if err := f.Check(ctx, s); err != nil {
-			return err
-		}
-		existing, readErr := f.read(ctx, dir, in.Path)
-		if errors.Is(readErr, fs.ErrNotExist) {
-			if in.ExpectedSHA256 != "missing" {
-				return storage.ErrConflict
-			}
-		} else if readErr != nil {
-			return readErr
-		} else if in.ExpectedSHA256 != hashBytes(existing) {
-			return storage.ErrConflict
-		}
-		if err := f.checkWrite(ctx, dir.Root(), in.Path, int64(len(in.Content))); err != nil {
-			return err
-		}
-		parent := path.Dir(in.Path)
-		// New parent directories are created one segment at a time; no links are followed.
-		if parent != "." {
-			parts := strings.Split(parent, "/")
-			for i := 1; i <= len(parts); i++ {
-				p := strings.Join(parts[:i], "/")
-				if err := dir.Root().Mkdir(p, 0700); err != nil && !errors.Is(err, fs.ErrExist) {
-					return err
-				}
-				if err := checkParents(dir.Root(), p); err != nil {
-					return err
-				}
-			}
-		}
-		temp := path.Join(parent, ".mass-write-"+uuid.NewString())
-		file, err := dir.Root().OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if err != nil {
-			return err
-		}
-		defer dir.Root().Remove(temp)
-		_, err = io.Copy(file, storage.ContextReader{Context: ctx, Reader: strings.NewReader(in.Content)})
-		if err == nil {
-			err = file.Sync()
-		}
-		closeErr := file.Close()
-		if err != nil {
-			return err
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		if err = f.Check(ctx, s); err != nil {
-			return err
-		}
-		if err = dir.Root().Rename(temp, in.Path); err != nil {
-			return err
-		}
-		raw, _ := json.Marshal(map[string]any{"path": in.Path, "sha256": hashBytes([]byte(in.Content)), "size": len(in.Content)})
-		result = run.ToolResult{Status: "completed", Data: raw, SideEffect: "committed", Complete: true, SourceRefs: []storage.Ref{}}
-		return nil
-	})
+	err = f.Workspaces.With(ctx, s.SpaceID, s.SessionID, func(dir WorkspaceDir) error { return f.write(ctx, s, dir, in, &result) })
 	return
 }
+func (f *FileService) write(ctx context.Context, s run.Snapshot, dir WorkspaceDir, in WriteFileInput, result *run.ToolResult) error {
+	if err := f.Check(ctx, s); err != nil {
+		return err
+	}
+	existing, readErr := f.read(ctx, dir, in.Path)
+	if errors.Is(readErr, fs.ErrNotExist) {
+		if in.ExpectedSHA256 != "missing" {
+			return storage.ErrConflict
+		}
+	} else if readErr != nil {
+		return readErr
+	} else if in.ExpectedSHA256 != hashBytes(existing) {
+		return storage.ErrConflict
+	}
+	if err := f.checkWrite(ctx, dir.Root(), in.Path, int64(len(in.Content))); err != nil {
+		return err
+	}
+	parent := path.Dir(in.Path)
+	// New parent directories are created one segment at a time; no links are followed.
+	if parent != "." {
+		parts := strings.Split(parent, "/")
+		for i := 1; i <= len(parts); i++ {
+			p := strings.Join(parts[:i], "/")
+			if err := dir.Root().Mkdir(p, 0700); err != nil && !errors.Is(err, fs.ErrExist) {
+				return err
+			}
+			if err := checkParents(dir.Root(), p); err != nil {
+				return err
+			}
+		}
+	}
+	temp := path.Join(parent, ".mass-write-"+uuid.NewString())
+	file, err := dir.Root().OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer dir.Root().Remove(temp)
+	_, err = io.Copy(file, storage.ContextReader{Context: ctx, Reader: strings.NewReader(in.Content)})
+	if err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err = f.Check(ctx, s); err != nil {
+		return err
+	}
+	if err = dir.Root().Rename(temp, in.Path); err != nil {
+		return err
+	}
+	raw, _ := json.Marshal(map[string]any{"path": in.Path, "sha256": hashBytes([]byte(in.Content)), "size": len(in.Content)})
+	*result = run.ToolResult{Status: "completed", Data: raw, SideEffect: "committed", Complete: true, SourceRefs: []storage.Ref{}}
+	return nil
+}
+
 func (f *FileService) Publish(ctx context.Context, s run.Snapshot, callID string, in PublishInput) (artifact run.Artifact, result run.ToolResult, err error) {
 	if !filePath(in.Path) || in.ExpectedSHA256 == "" || in.ExpectedSHA256 == "missing" || len(in.DisplayName) == 0 || len(in.DisplayName) > 200 || strings.ContainsAny(in.DisplayName, "\r\n\x00/\\") || !validMediaType(in.MediaType) {
 		return artifact, result, storage.ErrInvalid
@@ -279,4 +296,16 @@ func (f *FileService) Publish(ctx context.Context, s run.Snapshot, callID string
 		return nil
 	})
 	return
+}
+
+func hasMultipleLinks(info fs.FileInfo) bool {
+	v := reflect.ValueOf(info.Sys())
+	if v.Kind() == reflect.Pointer && !v.IsNil() {
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return false
+	}
+	n := v.FieldByName("Nlink")
+	return n.IsValid() && n.CanUint() && n.Uint() > 1 && !info.IsDir()
 }

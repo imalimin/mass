@@ -3,6 +3,7 @@ package httptransport
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -22,6 +23,7 @@ import (
 )
 
 type RuntimeRepository interface {
+	RuntimePlan(context.Context, string, string, string) (run.Plan, error)
 	BeginWorkspaceMaintenance(context.Context, string, string, string) error
 	EndWorkspaceMaintenance(context.Context, string, string, string) error
 	RuntimeLastRun(context.Context, string, string, string) (run.View, error)
@@ -48,6 +50,34 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 	}
 	svc := runtime.Service
 	base := "/api/v1/spaces/{space_id}"
+	register("POST "+base+"/sessions/{session_id}/attachments", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		var b struct {
+			Name      string `json:"name"`
+			MediaType string `json:"media_type"`
+			Content   string `json:"content_base64"`
+		}
+		if err := decodeCatalog(w, r, &b, 12<<20); err != nil {
+			return err
+		}
+		raw, err := base64.StdEncoding.Strict().DecodeString(b.Content)
+		if err != nil {
+			return identity.ErrInvalid
+		}
+		a, err := svc.UploadAttachment(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("session_id"), b.Name, b.MediaType, bytes.NewReader(raw))
+		if err != nil {
+			return err
+		}
+		writeJSON(w, 201, a)
+		return nil
+	})
+	register("GET "+base+"/runs/{run_id}/plan", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		v, err := runtime.Repo.RuntimePlan(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("run_id"))
+		if err != nil {
+			return err
+		}
+		writeJSON(w, 200, v)
+		return nil
+	})
 	register("POST "+base+"/sessions", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		var b sessionapp.CreateInput
 		if err := decodeBody(w, r, &b); err != nil {

@@ -41,7 +41,7 @@ func attemptCheck(ctx context.Context, tx *sql.Tx, space, runID, id string) erro
 	return nil
 }
 func reduceRuntime(ctx context.Context, tx *sql.Tx, space, session string, e journal.Proposed, seq int64) error {
-	if strings.HasPrefix(e.Type, "model.") || strings.HasPrefix(e.Type, "tool.") || e.Type == "context.projected" || e.Type == "artifact.published" {
+	if strings.HasPrefix(e.Type, "model.") || strings.HasPrefix(e.Type, "tool.") || e.Type == "context.projected" || e.Type == "artifact.published" || e.Type == "plan.updated" {
 		var status string
 		var cancelled bool
 		if err := tx.QueryRowContext(ctx, "SELECT status,cancel_requested FROM runs WHERE space_id=? AND id=?", space, e.RunID).Scan(&status, &cancelled); err != nil {
@@ -55,11 +55,79 @@ func reduceRuntime(ctx context.Context, tx *sql.Tx, space, session string, e jou
 		}
 	}
 	switch e.Type {
+	case "plan.updated":
+		var p run.Plan
+		json.Unmarshal(e.Data, &p)
+		var status, name string
+		if err := tx.QueryRowContext(ctx, "SELECT t.status,c.name FROM tool_executions t JOIN model_calls c ON c.space_id=t.space_id AND c.run_id=t.run_id AND c.call_id=t.call_id WHERE t.space_id=? AND t.run_id=? AND t.call_id=?", space, e.RunID, e.OperationID).Scan(&status, &name); err != nil {
+			return err
+		}
+		if status != "started" || name != "update_plan" {
+			return run.ErrState
+		}
+		var current int64
+		err := tx.QueryRowContext(ctx, "SELECT revision FROM run_plans WHERE space_id=? AND run_id=?", space, e.RunID).Scan(&current)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if current+1 != p.Revision {
+			return storage.ErrConflict
+		}
+		raw, _ := json.Marshal(p)
+		_, err = tx.ExecContext(ctx, "INSERT INTO run_plans(space_id,run_id,revision,source_event_id,plan) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE revision=VALUES(revision),source_event_id=VALUES(source_event_id),plan=VALUES(plan)", space, e.RunID, p.Revision, e.EventID, raw)
+		return err
+	case "tool.execution.input_resolved", "tool.io.recorded":
+		var callID, content string
+		if e.Type == "tool.io.recorded" {
+			var d journal.IOData
+			json.Unmarshal(e.Data, &d)
+			callID = d.CallID
+			content = d.ContentID
+			var prepared, terminal int
+			var preparedName string
+			if err := tx.QueryRowContext(ctx, "SELECT COALESCE(SUM(JSON_UNQUOTE(JSON_EXTRACT(data,'$.phase'))='prepared'),0),COALESCE(SUM(JSON_UNQUOTE(JSON_EXTRACT(data,'$.phase')) IN ('completed','failed')),0),COALESCE(MAX(JSON_UNQUOTE(JSON_EXTRACT(data,'$.name'))),'') FROM runtime_events WHERE space_id=? AND run_id=? AND operation_id=? AND event_type='tool.io.recorded' AND JSON_EXTRACT(data,'$.io_sequence')=? AND sequence<?", space, e.RunID, callID, d.Sequence, seq).Scan(&prepared, &terminal, &preparedName); err != nil {
+				return err
+			}
+			if d.Phase == "prepared" && (prepared != 0 || terminal != 0) || d.Phase != "prepared" && (prepared != 1 || terminal != 0 || preparedName != d.Name) {
+				return run.ErrState
+			}
+			if d.Phase == "prepared" {
+				var previous int
+				if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(CAST(JSON_EXTRACT(data,'$.io_sequence') AS UNSIGNED)),0) FROM runtime_events WHERE space_id=? AND run_id=? AND operation_id=? AND event_type='tool.io.recorded' AND JSON_UNQUOTE(JSON_EXTRACT(data,'$.phase')) IN ('completed','failed') AND sequence<?", space, e.RunID, callID, seq).Scan(&previous); err != nil {
+					return err
+				}
+				if previous+1 != d.Sequence {
+					return run.ErrState
+				}
+			}
+		} else {
+			var d journal.ResolvedData
+			json.Unmarshal(e.Data, &d)
+			callID = d.CallID
+			content = d.ContentID
+		}
+		var status, name string
+		if err := tx.QueryRowContext(ctx, "SELECT t.status,c.name FROM tool_executions t JOIN model_calls c ON c.space_id=t.space_id AND c.run_id=t.run_id AND c.call_id=t.call_id WHERE t.space_id=? AND t.run_id=? AND t.call_id=?", space, e.RunID, callID).Scan(&status, &name); err != nil {
+			return err
+		}
+		if status != "started" || name != "run_code" || !hasRef(e, "io", content) {
+			return storage.ErrInvalid
+		}
+
 	case "user.message.accepted":
 		var d journal.UserMessageData
 		json.Unmarshal(e.Data, &d)
 		if !hasRef(e, "content", d.ContentID) {
 			return storage.ErrInvalid
+		}
+		for _, a := range d.Attachments {
+			actual, err := attachmentInTx(ctx, tx, space, session, a.ID)
+			if err != nil {
+				return err
+			}
+			if journal.Digest(actual) != journal.Digest(a) || !hasRef(e, "attachment", a.Ref.ObjectID) {
+				return storage.ErrInvalid
+			}
 		}
 		_, err := tx.ExecContext(ctx, "INSERT INTO messages(space_id,session_id,id,role,content_id,source_event_id,sequence,complete) VALUES(?,?,?,'user',?,?,?,TRUE)", space, session, d.ID, d.ContentID, e.EventID, seq)
 		return err
@@ -151,7 +219,11 @@ func reduceRuntime(ctx context.Context, tx *sql.Tx, space, session string, e jou
 			if c.ResponseEventID != e.EventID {
 				return storage.ErrInvalid
 			}
-			if _, err := tx.ExecContext(ctx, "INSERT INTO model_calls(space_id,run_id,response_event_id,call_id,name,arguments_sha256) VALUES(?,?,?,?,?,?)", space, e.RunID, e.EventID, c.ID, c.Name, journal.Digest(c.Arguments)); err != nil {
+			digest := c.ArgumentsSHA256
+			if digest == "" {
+				digest = journal.Digest(c.Arguments)
+			}
+			if _, err := tx.ExecContext(ctx, "INSERT INTO model_calls(space_id,run_id,response_event_id,call_id,name,arguments_sha256) VALUES(?,?,?,?,?,?)", space, e.RunID, e.EventID, c.ID, c.Name, digest); err != nil {
 				return err
 			}
 		}

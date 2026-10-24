@@ -11,7 +11,7 @@ import (
 	"github.com/imalimin/mass/internal/resource"
 )
 
-const Counter = "utf8-byte-upper-bound-v1"
+const Counter = "utf8-byte-upper-bound-v2"
 const Renderer = "mass-context-v1"
 
 type Projector struct{ Content *resource.ContentStore }
@@ -23,7 +23,7 @@ func (p *Projector) Project(ctx context.Context, s run.Snapshot, events []journa
 	}
 	result := run.Prepared{Spec: run.ProjectionSpec{Purpose: "task", Through: through, Counter: Counter, Renderer: Renderer, Parser: 1, OutputTokens: s.Definition.OutputTokens, DefinitionSHA256: s.DefinitionRef.SHA256, ModelSHA256: journal.Digest(s.Definition.Model), SourceEventIDs: []string{}}, Tools: tools, Messages: []run.Message{{Role: "system", Content: definition.Platform + "\n\n" + definition.Instructions}}}
 	for _, skill := range definition.Skills {
-		result.Messages[0].Content += fmt.Sprintf("\n\n<skill id=%q version=%q>\n%s\n</skill>", skill.ID, skill.Version, skill.Markdown)
+		result.Messages[0].Content += fmt.Sprintf("\n\n<skill id=%q version=%q>\n%s\n</skill>", skill.VersionID, skill.Version, skill.Markdown)
 	}
 	statuses := map[string]string{}
 	for _, e := range events {
@@ -36,7 +36,7 @@ func (p *Projector) Project(ctx context.Context, s run.Snapshot, events []journa
 			statuses[e.RunID] = d.Status
 		}
 	}
-	calls := map[string]bool{}
+	calls := map[string]string{}
 	for _, e := range events {
 		if e.Sequence > through {
 			break
@@ -53,7 +53,12 @@ func (p *Projector) Project(ctx context.Context, s run.Snapshot, events []journa
 			if err != nil {
 				return run.Prepared{}, err
 			}
-			result.Messages = append(result.Messages, run.Message{Role: "user", Content: string(raw)})
+			text := string(raw)
+			if len(d.Attachments) > 0 {
+				list, _ := json.Marshal(d.Attachments)
+				text += "\n[MASS accepted attachments; use read_attachment by ID: " + string(list) + "]"
+			}
+			result.Messages = append(result.Messages, run.Message{Role: "user", Content: text})
 		case "model.response.completed":
 			if !include {
 				continue
@@ -66,10 +71,14 @@ func (p *Projector) Project(ctx context.Context, s run.Snapshot, events []journa
 			}
 			result.Messages = append(result.Messages, reply.Message)
 			for _, c := range reply.Message.ToolCalls {
-				if calls[c.ID] {
+				if calls[c.ID] != "" {
 					return run.Prepared{}, run.ErrProtocol
 				}
-				calls[c.ID] = true
+				native := c.NativeID
+				if native == "" {
+					native = c.ID
+				}
+				calls[c.ID] = native
 			}
 		case "tool.execution.completed":
 			var d journal.ToolData
@@ -80,15 +89,16 @@ func (p *Projector) Project(ctx context.Context, s run.Snapshot, events []journa
 				}
 				continue
 			}
-			if !calls[d.CallID] {
+			if calls[d.CallID] == "" {
 				return run.Prepared{}, run.ErrProtocol
 			}
+			nativeID := calls[d.CallID]
 			delete(calls, d.CallID)
 			raw, err := resource.ReadBytes(ctx, p.Content, s.ActorID, s.SpaceID, d.ContentID, 4<<20)
 			if err != nil {
 				return run.Prepared{}, err
 			}
-			result.Messages = append(result.Messages, run.Message{Role: "tool", Content: string(raw), ToolCallID: d.CallID})
+			result.Messages = append(result.Messages, run.Message{Role: "tool", Content: string(raw), ToolCallID: nativeID})
 		case "operation.reconciled":
 			var d journal.ReconcileData
 			journal.Decode(e.Data, &d)
@@ -114,10 +124,19 @@ func (p *Projector) Project(ctx context.Context, s run.Snapshot, events []journa
 	if len(calls) > 0 {
 		return run.Prepared{}, run.ErrProtocol
 	}
+	type modelTool struct {
+		Name        string
+		Description string
+		Schema      json.RawMessage
+	}
+	modelTools := make([]modelTool, len(tools))
+	for i, tool := range tools {
+		modelTools[i] = modelTool{tool.Name, tool.Description, tool.Schema}
+	}
 	raw, _ := json.Marshal(struct {
 		Messages []run.Message
-		Tools    []run.ToolSpec
-	}{result.Messages, tools})
+		Tools    []modelTool
+	}{result.Messages, modelTools})
 	// This conservative, versioned upper bound never truncates or calls a model.
 	result.InputTokens = len(raw) + len(result.Messages)*32 + 128
 	if result.InputTokens > s.Definition.MaxInputTokens || result.InputTokens+s.Definition.OutputTokens > s.Definition.Model.ContextWindow {

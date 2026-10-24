@@ -5,7 +5,7 @@
 > - 包含：技术选型、模块算法、存储与接口设计、核心代码、运行配置、兼容性和实现限制。
 > - 不包含：重新定义产品目标，或维护开发进度、测试执行报告和交付步骤。
 > - 依据：[系统设计指引](design-guide.md)和[系统架构设计](architecture.md)；编码、测试与交付按[工程开发文档](engineering.md)执行。以后各模块细节继续补充在本文，不拆专题文档。
-> - 状态：技术方案基线，D00 已收敛契约见 T00.6，D02 管理能力见 T01.1/T03.1，D01 持久化实现在 T10.2.1/T11.5，D03 定义管理见 T02.1，D04 运行实现在 T04.1/T05.1/T07.7/T08.5/T10.7/T11.6；更新：2026-10-23。实际实现与验证范围见工程开发文档；片段中未定义的工程类型需在对应阶段补齐。
+> - 状态：技术方案基线，D00 已收敛契约见 T00.6，D02 管理能力见 T01.1/T03.1，D01 持久化实现在 T10.2.1/T11.5，D03 定义管理见 T02.1，D04 运行实现在 T04.1/T05.1/T07.7/T08.5/T10.7/T11.6，D05 内置工具见 T09.6；更新：2026-10-24。实际实现与验证范围见工程开发文档；片段中未定义的工程类型需在对应阶段补齐。
 
 ## T00 技术基线与依赖
 
@@ -289,7 +289,7 @@ func (s *CatalogService) PublishAgent(ctx context.Context, in PublishInput) (Ver
 
 ### T02.1 D03 已实现的定义契约
 
-新增迁移 00004_definitions，不改动已发布的前三份迁移；D03 使用 schema 4；当前 serve 要求 schema 5。Agent 与 Skill 的元数据、草稿和版本复用 definitions / definition_drafts / definition_versions，以 kind 区分，外部 API 仍为 /agents 和 /skills。全部关联含 space_id；definition_dependencies 保存有序、准确的 Skill 内部版本 ID，数据库外键限制删除被引用版本。版本 label 在单一定义内区分大小写且唯一；latest（不区分大小写）及范围表达式不被接受。debug=true 的不可变快照无发布 label，不改变默认版本。
+新增迁移 00004_definitions，不改动已发布的前三份迁移；D03 使用 schema 4；当前 serve 要求 schema 6。Agent 与 Skill 的元数据、草稿和版本复用 definitions / definition_drafts / definition_versions，以 kind 区分，外部 API 仍为 /agents 和 /skills。全部关联含 space_id；definition_dependencies 保存有序、准确的 Skill 内部版本 ID，数据库外键限制删除被引用版本。版本 label 在单一定义内区分大小写且唯一；latest（不区分大小写）及范围表达式不被接受。debug=true 的不可变快照无发布 label，不改变默认版本。
 
 定义名称为 1—64 字节的小写字母/数字/连字符标识，首字符为字母。agent.yaml 的 model 和 skills[].id 分别使用本空间模型配置 ID 与 Skill ID，version 是准确显示版本；name 必须与定义名称一致。严格拒绝未知字段、重复键、多 YAML 文档、alias/anchor、合并键、非法类型、未知工具、重复 Skill/工具及越界限额。草稿允许空正文和空配置便于新建；非空配置保存时校验结构，发布和调试快照进一步要求非空正文、完整配置、可用模型/凭证和未归档的准确依赖。输入/输出预留总量不得超过模型上下文容量，输出预留不超过模型上限。平台上限为 1000 步、3600 秒；这里是配置校验，D04 已接入运行限额，D05 继续扩展工具。
 
@@ -858,6 +858,23 @@ return { total, path: "summary.json" };
 
 计划和产物专用事件服务于审计及界面视图，不重复加入 LLM 对话；模型读取对应 tool 结果一次。摘要保留任务所需的计划状态、产物 ID 和来源，仍只基于固定日志边界，不从 run_plans/artifacts 当前视图反向组装上下文。
 
+### T09.6 D05 实现约定
+
+D05 延续三个 v1 工具的兼容参数，新增 range、分页及其余十一种 v1 工具；Run 中已保存的 Schema/描述保持固定。结果 Schema 与实现/策略版本一起写入新 Run；旧 Run 缺少新增字段仍能查询和恢复。新增迁移 00006_tools，既有迁移不改写。
+
+文件读取完整校验摘要并保存不可变来源，返回上限 64 KiB 的 UTF-8 或 base64 范围；JSON/CSV 附件先在 8 MiB 内完整验证，再通过 record_offset/record_limit 续读结构化记录；text 的 range 保持字节/行语义，二者不混用。列表/搜索首次有界扫描后保存 tool.query 对象，游标签名绑定主体、空间、Session、查询与位置，后续页读取同一对象；扫描上限显式给出 complete=false。查询至多扫描 min(storage.max_entries, 10000) 个条目和 8 MiB 文件，保存至多 1000 项；正则至多 512 字节，行至多 64 KiB、片段至多 1024 字节，每页 1—100 项，完整查询对象至多 4 MiB。文件工具写入上限延续 1 MiB，目录采用已有 storage 限额；编辑以原始文本唯一、不重叠区间为准。
+
+skill_binding_id 使用固定绑定的 SkillVersion ID，资源从该不可变版本清单解析；Run 事件不重复内联完整资源清单，读取时依据 session.created 的准确版本引用和摘要取得，避免大清单突破事件容量。附件上传先保存本 Session 元数据，再由 user.message.accepted 的准确清单与对象引用接受；上传成功本身不授予模型读取权。附件被接受后，原始字节可从历史消息下载，工具仅支持 UTF-8 text/JSON/CSV，并记录解析版本。
+
+run_code 使用同步函数体、单 VM/单 goroutine，与工具 context、全局代码并发名额及实际退出等待绑定。默认工具限额沿用 tools.code；每次 I/O 先保存脱敏意图，再执行，再保存结果，记录失败停止后续代码。关闭外部 source map，文件操作共享 FileService 校验；HTTP 不自动重试、最多 3 次重定向并逐次复核授权。代码异常保留已经确认的写入/请求；日志、返回值和完整性单独报告，不声称生产沙箱或硬内存隔离。
+
+计划变更与工具终结同事务，产物继续保存独立字节。Manifest 可选 runtime_state 保存该 Run 的计划/产物及其准确来源水位；水位采用最后一条相关业务事实，不因随后取消或收尾审计而变化，从而保持未知提交/快照重试的稳定对象摘要。旧 Manifest 仍按格式 1 恢复，跨会话复制只复制文件。
+
+代码源码、JSON input、宿主参数及完整文件读取共同计入 max_input_bytes；文件读取在打开后以实际 stat 大小预留容量，范围预览仍对完整来源计费。文件/网络返回共同计入宿主输出限额，VM 返回值与日志另有界限。源码最多 64 KiB、JSON 参数最多 2 MiB，完整参数保存在 model.response 对象；响应事件仅内联有界参数、保存参数摘要。平台生成独立调用 ID，保留 native_id 供 Eino 对话配对，供应商跨响应复用调用 ID 不会冲突。大参数通过 Trace 载荷查看，不发出伪造的空参数标准事件。
+
+D05 新投影使用 utf8-byte-upper-bound-v2：工具计数只含发送给模型的名称、描述和输入 Schema；结果 Schema 留在固定定义和校验中，完整指纹仍包含工具契约。旧已保存投影及 v1 计数器记录保留。计划/产物业务事件不额外加入模型消息，只有对应工具结果进入对话。
+
+
 ## T10 M10 统一会话日志、Trace、用量与审计
 
 依赖：database/sql、MariaDB JSON、TOS ContentStore、net/http。SessionJournal 是会话和执行链路的唯一事实入口，Trace 是它的查询视图，不再另写一套 trace_events。Agent/Skill 草稿、身份及空间管理仍使用普通业务表与 audit_logs，MVP 不把整个系统改成事件溯源架构。
@@ -1355,6 +1372,6 @@ D00 已固定工具链、MariaDB 目标版本、Go/前端依赖和首个 Ark 组
 
 模型缓存能力、默认压缩阈值/目标余量和投影策略版本在对应实现阶段收敛；未知缓存命中不能用假数据补齐。
 
-goja/doublestar 精确版本已由 go.mod 锁定；支持的生产 JS 子集和默认扫描/代码限额在 D05 收敛；引擎限制不能被配置成“已提供沙箱”。
+goja/doublestar 精确版本已由 go.mod 锁定；生产 JS 子集和默认扫描/代码限额见 T09.6；引擎限制不能被配置成“已提供沙箱”。
 
 真实云资源缺失时用内存 TOS fake 和 Eino FakeChatModel 完成可验证编码，但不能以 fake 测试替代真实 TOS/模型接入验收。框架与 SDK 的实际方法、字段和重试行为以锁定版本核验，并将证据记录到工程开发文档。

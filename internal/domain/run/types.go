@@ -10,15 +10,16 @@ import (
 )
 
 var (
-	ErrState       = errors.New("run_state_conflict")
-	ErrCancelled   = errors.New("run_cancelled")
-	ErrBudget      = errors.New("budget_exceeded")
-	ErrOverflow    = errors.New("context_overflow")
-	ErrUnavailable = errors.New("runtime_unavailable")
-	ErrProtocol    = errors.New("model_protocol_error")
-	ErrTool        = errors.New("unsupported_tool")
-	ErrCursor      = errors.New("invalid_cursor")
-	ErrPermission  = errors.New("permission_revoked")
+	ErrState         = errors.New("run_state_conflict")
+	ErrCancelled     = errors.New("run_cancelled")
+	ErrBudget        = errors.New("budget_exceeded")
+	ErrOverflow      = errors.New("context_overflow")
+	ErrUnavailable   = errors.New("runtime_unavailable")
+	ErrProtocol      = errors.New("model_protocol_error")
+	ErrUnknownEffect = errors.New("tool_effect_unknown")
+	ErrTool          = errors.New("unsupported_tool")
+	ErrCursor        = errors.New("invalid_cursor")
+	ErrPermission    = errors.New("permission_revoked")
 )
 
 const PlatformVersion = "mass-platform-v1"
@@ -36,17 +37,19 @@ type ModelConfig struct {
 	Temperature     float64 `json:"temperature"`
 }
 type ToolSpec struct {
-	Name        string          `json:"name"`
-	Version     string          `json:"version"`
-	Description string          `json:"description"`
-	Schema      json.RawMessage `json:"schema"`
+	Name         string          `json:"name"`
+	Version      string          `json:"version"`
+	Description  string          `json:"description"`
+	Schema       json.RawMessage `json:"schema"`
+	ResultSchema json.RawMessage `json:"result_schema,omitempty"`
 }
 type Skill struct {
-	ID        string `json:"id"`
-	VersionID string `json:"version_id"`
-	Version   string `json:"version"`
-	SHA256    string `json:"sha256"`
-	Markdown  string `json:"markdown"`
+	ID        string          `json:"id"`
+	VersionID string          `json:"version_id"`
+	Version   string          `json:"version"`
+	SHA256    string          `json:"sha256"`
+	Markdown  string          `json:"markdown"`
+	Resources []SkillResource `json:"resources,omitempty"`
 }
 type Definition struct {
 	VersionID       string      `json:"version_id"`
@@ -58,6 +61,7 @@ type Definition struct {
 	Skills          []Skill     `json:"skills"`
 	Model           ModelConfig `json:"model"`
 	Tools           []ToolSpec  `json:"tools"`
+	ToolPolicy      ToolPolicy  `json:"tool_policy,omitempty"`
 	MaxInputTokens  int         `json:"max_input_tokens"`
 	OutputTokens    int         `json:"output_tokens"`
 	MaxSteps        int         `json:"max_steps"`
@@ -112,6 +116,8 @@ type View struct {
 	Usage                Usage      `json:"usage"`
 }
 type Call struct {
+	ArgumentsSHA256 string `json:"arguments_sha256,omitempty"`
+	NativeID        string `json:"native_id,omitempty"`
 	ID              string `json:"id"`
 	Name            string `json:"name"`
 	Arguments       string `json:"arguments"`
@@ -158,15 +164,19 @@ type Outcome struct {
 	Status               string `json:"status"`
 }
 type MessageView struct {
-	ID            string `json:"id"`
-	RunID         string `json:"run_id"`
-	Role          string `json:"role"`
-	ContentID     string `json:"content_id"`
-	SourceEventID string `json:"source_event_id"`
-	Sequence      int64  `json:"sequence,string"`
-	Complete      bool   `json:"complete"`
+	Attachments   []Attachment `json:"attachments,omitempty"`
+	ID            string       `json:"id"`
+	RunID         string       `json:"run_id"`
+	Role          string       `json:"role"`
+	ContentID     string       `json:"content_id"`
+	SourceEventID string       `json:"source_event_id"`
+	Sequence      int64        `json:"sequence,string"`
+	Complete      bool         `json:"complete"`
 }
 type ToolResult struct {
+	Plan       *Plan           `json:"-"`
+	DataRef    string          `json:"data_ref,omitempty"`
+	Truncated  bool            `json:"truncated,omitempty"`
 	CallID     string          `json:"call_id"`
 	Status     string          `json:"status"`
 	Data       json.RawMessage `json:"data"`

@@ -89,7 +89,7 @@ func Code(err error) string {
 	if err == nil {
 		return ""
 	}
-	for _, candidate := range []error{run.ErrBudget, run.ErrOverflow, run.ErrCancelled, run.ErrProtocol, run.ErrTool, run.ErrUnavailable} {
+	for _, candidate := range []error{run.ErrUnknownEffect, run.ErrBudget, run.ErrOverflow, run.ErrCancelled, run.ErrProtocol, run.ErrTool, run.ErrUnavailable} {
 		if errors.Is(err, candidate) {
 			return candidate.Error()
 		}

@@ -19,4 +19,12 @@ describe('persisted AG-UI state application', () => {
     expect(() => reduceEvent(s, { type: 'RUN_FINISHED', threadId: 'other', runId: 'r' }, 's', 'r')).toThrow()
     expect(() => reduceEvent(s, { type: 'TEXT_MESSAGE_CONTENT', messageId: 'm', delta: 'late' }, 's', 'r')).toThrow()
   })
+  it('restores plan progress independently from the run outcome', () => {
+    const plan = { revision: 2, steps: [{ id: 'report', title: 'Create summary', status: 'completed' }] }
+    const event = { type: 'CUSTOM', name: 'mass.plan.v1', value: { schemaVersion: 1, threadId: 's', runId: 'r', sourceEventIds: ['e'], plan } }
+    const before = empty(), after = reduceEvent(before, event, 's', 'r')
+    expect(after.plan).toEqual(plan); expect(after.status).toBe('queued'); expect(before.plan).toBeUndefined()
+    expect(() => reduceEvent(before, { ...event, value: { ...event.value, runId: 'other' } }, 's', 'r')).toThrow('stream_scope_mismatch')
+    expect(() => reduceEvent(before, { ...event, value: { ...event.value, plan: { ...plan, steps: [{ id: 'x', title: 'x', status: 'pretended' }] } } }, 's', 'r')).toThrow('invalid_plan')
+  })
 })
