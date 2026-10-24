@@ -326,6 +326,10 @@
       {
         "path": "docs/engineering.md",
         "anchor": "D10 真实 TOS 恢复验收（2026-10-24）"
+      },
+      {
+        "path": "tests/integration/restore_uploads_test.go",
+        "anchor": "TestRestoreSkipsOnlyUnreferencedUploads"
       }
     ]
   },
@@ -379,6 +383,10 @@
       {
         "path": "docs/engineering.md",
         "anchor": "E15.6"
+      },
+      {
+        "path": "tests/integration/restore_uploads_test.go",
+        "anchor": "TestRestoreSkipsOnlyUnreferencedUploads"
       }
     ]
   },
@@ -728,6 +736,10 @@
       {
         "path": "tests/integration/long_history_test.go",
         "anchor": "TestLongHistoryContinuesAndRecovers"
+      },
+      {
+        "path": "tests/integration/restore_uploads_test.go",
+        "anchor": "TestRestoreSkipsOnlyUnreferencedUploads"
       }
     ]
   },

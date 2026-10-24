@@ -19,43 +19,43 @@ import (
 
 // RestoreStorage copies retained TOS bytes into a distinct namespace and then
 // atomically changes the restored database's location indexes. No model runs.
-func RestoreStorage(ctx context.Context, source, target Config, expectedDatabase string) (int, error) {
+func RestoreStorage(ctx context.Context, source, target Config, expectedDatabase string) (result storage.RestoreResult, err error) {
 	fromDB, err := mysql.ParseDSN(os.Getenv(source.Database.DSNEnv))
 	if err != nil {
-		return 0, errors.New("invalid source database configuration")
+		return result, errors.New("invalid source database configuration")
 	}
 	toDB, err := mysql.ParseDSN(os.Getenv(target.Database.DSNEnv))
 	if err != nil {
-		return 0, errors.New("invalid target database configuration")
+		return result, errors.New("invalid target database configuration")
 	}
 	if toDB.DBName == "" || fromDB.DBName == toDB.DBName || expectedDatabase != toDB.DBName {
-		return 0, errors.New("restore requires a distinct database matching --expect-database")
+		return result, errors.New("restore requires a distinct database matching --expect-database")
 	}
 	fromPrefix, toPrefix := strings.TrimSuffix(source.TOS.Prefix, "/")+"/", strings.TrimSuffix(target.TOS.Prefix, "/")+"/"
 	if strings.HasPrefix(fromPrefix, toPrefix) || strings.HasPrefix(toPrefix, fromPrefix) {
-		return 0, errors.New("restore requires disjoint source and target object prefixes")
+		return result, errors.New("restore requires disjoint source and target object prefixes")
 	}
 	open := func(c Config) (*tos.Store, error) {
 		return tos.New(os.Getenv(c.TOS.EndpointEnv), os.Getenv(c.TOS.RegionEnv), os.Getenv(c.TOS.BucketEnv), os.Getenv(c.TOS.AccessKeyEnv), os.Getenv(c.TOS.SecretKeyEnv))
 	}
 	from, err := open(source)
 	if err != nil {
-		return 0, err
+		return result, err
 	}
 	defer from.Client.Close()
 	to, err := open(target)
 	if err != nil {
-		return 0, err
+		return result, err
 	}
 	defer to.Client.Close()
 	key, _ := base64.StdEncoding.DecodeString(os.Getenv(target.Secrets.MasterKeyEnv))
 	cipher, err := secrets.New(key)
 	if err != nil {
-		return 0, err
+		return result, err
 	}
 	store, err := mariadb.Open(ctx, os.Getenv(target.Database.DSNEnv))
 	if err != nil {
-		return 0, err
+		return result, err
 	}
 	defer store.DB.Close()
 	return store.RelocateStorage(ctx, expectedDatabase, func(space, id, key string, ciphertext []byte) error {

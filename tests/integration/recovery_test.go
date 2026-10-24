@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -283,6 +284,28 @@ func TestTOSRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager = nil
+	// Back up real failed ContentStore operations, rather than manufacturing an
+	// uploading row. A new-ID retry succeeds but must not erase the old intent.
+	failedContent := *content
+	failedContent.Blobs = &rejectedRecoveryUpload{BlobStore: ledger}
+	missing, e := failedContent.Put(ctx, actor.ID, space.ID, uuid.NewString(), "trace", "text/plain", strings.NewReader("failed upload"))
+	if e == nil || missing.State != "uploading" {
+		t.Fatal("failed upload did not leave an intent", e)
+	}
+	if _, err = source.Admin.DB.Exec("CREATE TRIGGER reject_ready BEFORE UPDATE ON content_objects FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='injected ready failure'"); err != nil {
+		t.Fatal(err)
+	}
+	uploaded, e := content.Put(ctx, actor.ID, space.ID, uuid.NewString(), "trace", "text/plain", strings.NewReader("uploaded before SQL failure"))
+	if e == nil || uploaded.State != "uploading" {
+		t.Fatal("ready failure did not retain intent", e)
+	}
+	if _, err = source.Admin.DB.Exec("DROP TRIGGER reject_ready"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = content.Put(ctx, actor.ID, space.ID, uuid.NewString(), "trace", "text/plain", strings.NewReader("successful fresh retry")); err != nil {
+		t.Fatal(err)
+	}
+	pending := []storage.Object{missing, uploaded}
 	if err = ledger.inventory(ctx, source); err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +334,7 @@ func TestTOSRecovery(t *testing.T) {
 	targetConfig.HTTP.PublicURL = origin
 	targetPath := filepath.Join(t.TempDir(), "restored.yaml")
 	recoveryConfig(t, targetPath, targetConfig)
-	objects, err := source.Admin.DB.Query("SELECT space_id,id,object_key,tos_uri FROM content_objects ORDER BY id")
+	objects, err := source.Admin.DB.Query("SELECT space_id,id,object_key,tos_uri FROM content_objects WHERE state='ready' ORDER BY id")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,13 +379,27 @@ func TestTOSRecovery(t *testing.T) {
 	}
 	if out, e := restore(); e != nil {
 		t.Fatalf("restore-storage failed: %s", out)
+	} else if !strings.Contains(string(out), "preserved 2 unreferenced uploading intents (not copied)") {
+		t.Fatalf("restore did not report preserved intents: %s", out)
 	}
 	if err = ledger.inventory(ctx, target); err != nil {
 		t.Fatal(err)
 	}
-	if err = target.Admin.DB.QueryRow("SELECT COUNT(*) FROM content_objects WHERE object_key NOT LIKE ?", targetPrefix+"%").Scan(&changed); err != nil || changed != 0 {
+	if err = target.Admin.DB.QueryRow("SELECT COUNT(*) FROM content_objects WHERE state='ready' AND object_key NOT LIKE ?", targetPrefix+"%").Scan(&changed); err != nil || changed != 0 {
 		t.Fatal("object location not relocated", err)
 	}
+	for _, want := range pending {
+		var state, key, uri, hash string
+		if err = target.Admin.DB.QueryRow("SELECT state,object_key,tos_uri,sha256 FROM content_objects WHERE space_id=? AND id=?", want.SpaceID, want.ID).Scan(&state, &key, &uri, &hash); err != nil || state != "uploading" || key != want.Key || uri != want.URI || hash != want.SHA256 {
+			t.Fatal("restore altered upload intent", err)
+		}
+		r, e := blobs.Open(ctx, targetPrefix+want.SpaceID+"/objects/"+want.ID, "")
+		if e == nil {
+			r.Close()
+			t.Fatal("unconfirmed upload was copied")
+		}
+	}
+	report["preserved_unreferenced_uploads"] = len(pending)
 	if err = target.Admin.DB.QueryRow("SELECT COUNT(*) FROM workspace_snapshots s JOIN content_objects o ON o.space_id=s.space_id AND o.id=s.object_id WHERE s.tos_uri<>o.tos_uri").Scan(&changed); err != nil || changed != 0 {
 		t.Fatal("snapshot mapping mismatch", err)
 	}
@@ -476,6 +513,15 @@ func TestTOSRecovery(t *testing.T) {
 	report["source_removed"] = true
 	report["location_mapping_verified"] = true
 	t.Logf("D10 TOS recovery passed: %d objects, isolated SQL dump/restore, immutable collision rejected, index remapping, source deletion, history/Trace/artifact rebuild, delivered binary continuation; real TOS=%t", len(targetKeys), real)
+}
+
+type rejectedRecoveryUpload struct{ storage.BlobStore }
+
+func (*rejectedRecoveryUpload) PutNew(context.Context, string, io.Reader, int64, string) (storage.BlobInfo, error) {
+	return storage.BlobInfo{}, errors.New("injected upload outage")
+}
+func (*rejectedRecoveryUpload) Open(context.Context, string, string) (io.ReadCloser, error) {
+	return nil, errors.New("injected upload outage")
 }
 
 func recoveryWait(t *testing.T, ctx context.Context, db *testdb.Database, actor, space, id string) run.View {

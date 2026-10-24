@@ -12,26 +12,26 @@ import (
 // RelocateStorage operates only on an offline restored database. Immutable
 // events retain their historical URIs; content_objects resolves current bytes.
 // copyObject must verify both source and destination bytes before returning.
-func (s *Store) RelocateStorage(ctx context.Context, expectedDatabase string, checkKey func(string, string, string, []byte) error, copyObject func(context.Context, storage.Object) (storage.Object, error)) (int, error) {
+func (s *Store) RelocateStorage(ctx context.Context, expectedDatabase string, checkKey func(string, string, string, []byte) error, copyObject func(context.Context, storage.Object) (storage.Object, error)) (result storage.RestoreResult, err error) {
 	var database string
 	if err := s.DB.QueryRowContext(ctx, "SELECT DATABASE()").Scan(&database); err != nil {
-		return 0, err
+		return result, err
 	}
 	if expectedDatabase == "" || database != expectedDatabase {
-		return 0, errors.New("restore database does not match --expect-database")
+		return result, errors.New("restore database does not match --expect-database")
 	}
 	if err := s.CheckSchema(ctx); err != nil {
-		return 0, err
+		return result, err
 	}
 	lease, err := s.OpenRuntime(ctx)
 	if err != nil {
-		return 0, errors.New("restore requires the target service to be stopped")
+		return result, errors.New("restore requires the target service to be stopped")
 	}
 	defer lease.Close()
 	// Validate every credential, including disabled ones needed by old backups.
 	rows, err := s.DB.QueryContext(ctx, "SELECT space_id,id,key_id,ciphertext FROM credentials")
 	if err != nil {
-		return 0, err
+		return result, err
 	}
 	for rows.Next() {
 		var space, id, key string
@@ -41,70 +41,72 @@ func (s *Store) RelocateStorage(ctx context.Context, expectedDatabase string, ch
 		}
 		if err != nil {
 			rows.Close()
-			return 0, errors.New("restore master key cannot decrypt all credentials")
+			return result, errors.New("restore master key cannot decrypt all credentials")
 		}
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
-		return 0, err
+		return result, err
 	}
 	var invalid int
 	if err = s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE status IN ('queued','running')").Scan(&invalid); err != nil {
-		return 0, err
+		return result, err
 	}
 	if invalid != 0 {
-		return 0, errors.New("restore requires a quiescent backup with no queued or running runs")
+		return result, errors.New("restore requires a quiescent backup with no queued or running runs")
 	}
-	if err = s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM content_objects WHERE state<>'ready'").Scan(&invalid); err != nil {
-		return 0, err
-	}
-	if invalid != 0 {
-		return 0, errors.New("restore contains unfinished uploads; reconcile them before relocation")
-	}
-	if err = s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM event_objects e LEFT JOIN content_objects o ON o.space_id=e.space_id AND o.id=e.object_id WHERE o.id IS NULL OR o.state<>'ready'").Scan(&invalid); err != nil {
-		return 0, err
+	// Every committed reference counts, including drafts and attachments that
+	// have not yet been accepted by a Run. Never infer this from event_objects
+	// alone. An unreferenced upload intent is not confirmed content; retain its
+	// original metadata without reading, copying, deleting or promoting bytes.
+	if err = s.DB.QueryRowContext(ctx, restoredInvalidObjects).Scan(&invalid); err != nil {
+		return result, err
 	}
 	if invalid != 0 {
-		return 0, storage.ErrIntegrity
+		return result, errors.Join(storage.ErrIntegrity, errors.New("restore contains a missing or unfinished referenced object"))
 	}
 	if err = s.checkRestoredJournal(ctx); err != nil {
-		return 0, err
+		return result, err
 	}
-	rows, err = s.DB.QueryContext(ctx, "SELECT "+objectColumns+" FROM content_objects ORDER BY space_id,id")
+	var unreferencedUploads int
+	if err = s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM content_objects WHERE state='uploading'").Scan(&unreferencedUploads); err != nil {
+		return result, err
+	}
+	rows, err = s.DB.QueryContext(ctx, "SELECT "+objectColumns+" FROM content_objects WHERE state='ready' ORDER BY space_id,id")
 	if err != nil {
-		return 0, err
+		return result, err
 	}
 	var objects []storage.Object
 	for rows.Next() {
 		o, e := scanObject(rows.Scan)
 		if e != nil {
 			rows.Close()
-			return 0, e
+			return result, e
 		}
 		objects = append(objects, o)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
-		return 0, err
+		return result, err
 	}
 	relocated := make([]storage.Object, 0, len(objects))
 	for _, o := range objects {
 		if err = lease.Check(ctx); err != nil {
-			return 0, err
+			return result, err
 		}
 		next, e := copyObject(ctx, o)
 		if e != nil {
-			return 0, e
+			return result, e
 		}
 		if next.SpaceID != o.SpaceID || next.ID != o.ID || next.Size != o.Size || next.SHA256 != o.SHA256 {
-			return 0, storage.ErrIntegrity
+			return result, storage.ErrIntegrity
 		}
 		relocated = append(relocated, next)
 	}
 	if err = lease.Check(ctx); err != nil {
-		return 0, err
+		return result, err
 	}
 	err = s.transaction(ctx, func(tx *sql.Tx) error {
 		for i, o := range objects {
@@ -126,8 +128,30 @@ func (s *Store) RelocateStorage(ctx context.Context, expectedDatabase string, ch
 		}
 		return nil
 	})
-	return len(relocated), err
+	if err != nil {
+		return result, err
+	}
+	return storage.RestoreResult{Relocated: len(relocated), UnreferencedUploads: unreferencedUploads}, nil
 }
+
+// Keep all content_objects foreign-key columns represented here. The schema
+// contract test checks this list against the embedded migrations so a new
+// reference cannot silently make an unfinished upload eligible for skipping.
+const restoredInvalidObjects = `SELECT COUNT(*) FROM (
+ SELECT space_id,object_id FROM event_objects
+ UNION ALL SELECT space_id,object_id FROM workspace_snapshots
+ UNION ALL SELECT space_id,manifest_ref FROM workspace_snapshots
+ UNION ALL SELECT space_id,content_id FROM definition_versions
+ UNION ALL SELECT space_id,object_id FROM definition_draft_objects
+ UNION ALL SELECT space_id,object_id FROM definition_version_objects
+ UNION ALL SELECT space_id,definition_ref FROM sessions WHERE definition_ref IS NOT NULL
+ UNION ALL SELECT space_id,content_id FROM messages
+ UNION ALL SELECT space_id,result_ref FROM tool_executions WHERE result_ref IS NOT NULL
+ UNION ALL SELECT space_id,object_id FROM artifacts
+ UNION ALL SELECT space_id,object_id FROM attachments
+ UNION ALL SELECT space_id,content_id FROM context_projections
+) refs LEFT JOIN content_objects o ON o.space_id=refs.space_id AND o.id=refs.object_id
+WHERE o.id IS NULL OR o.state<>'ready'`
 
 // Verify event digests (including reconstructed object hashes) and contiguous
 // session sequences before changing any location. Paging bounds event memory.

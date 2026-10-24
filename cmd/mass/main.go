@@ -117,11 +117,11 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		count, err := bootstrap.RestoreStorage(ctx, source, c, *expectedDatabase)
+		result, err := bootstrap.RestoreStorage(ctx, source, c, *expectedDatabase)
 		if err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(out, "verified and relocated %d objects\n", count)
+		_, err = fmt.Fprintf(out, "verified and relocated %d objects; preserved %d unreferenced uploading intents (not copied)\n", result.Relocated, result.UnreferencedUploads)
 		return err
 	}
 	if args[0] == "migrate" || args[0] == "user-create" || member {

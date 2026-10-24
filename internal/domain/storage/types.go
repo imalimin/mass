@@ -35,6 +35,14 @@ type Object struct {
 	State     string `json:"state"`
 }
 type BlobInfo struct{ ETag, VersionID string }
+
+// RestoreResult counts only committed relocation. Uploading intents without
+// references remain unchanged in the restored database and are never exposed.
+type RestoreResult struct {
+	Relocated           int
+	UnreferencedUploads int
+}
+
 type BlobStore interface {
 	PutNew(context.Context, string, io.Reader, int64, string) (BlobInfo, error)
 	Open(context.Context, string, string) (io.ReadCloser, error)
