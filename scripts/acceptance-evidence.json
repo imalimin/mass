@@ -304,16 +304,16 @@
   },
   {
     "id": "A22",
-    "status": "pending_delivery",
-    "note": "D10 reproducible package and isolated MariaDB/TOS-protocol restore passed locally; authorized real TOS retention/restore is still pending.",
+    "status": "historical_real",
+    "note": "D10 real TOS recovery passed on 2026-10-24: delivered binary, empty isolated SQL import, 22 objects remapped, source removed, history/artifact/Trace restored, snapshot continuation, 0 paid-model requests; 57 exact keys cleaned and absent.",
     "sources": [
       {
-        "path": "scripts/delivery-smoke.mjs",
-        "anchor": "D10 delivery passed"
+        "path": "tests/integration/recovery_test.go",
+        "anchor": "D10 TOS recovery passed"
       },
       {
         "path": "docs/engineering.md",
-        "anchor": "E15.11 D10 本地交付与备份还原"
+        "anchor": "D10 真实 TOS 恢复验收（2026-10-24）"
       }
     ]
   },

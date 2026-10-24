@@ -1,4 +1,4 @@
-name: D10 local delivery
+name: MVP verification
 on: [push, pull_request]
 permissions:
   contents: read
@@ -31,4 +31,4 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y mariadb-client
       - run: make setup
       - run: make setup-browser PLAYWRIGHT_INSTALL_FLAGS=--with-deps
-      - run: make verify-d10-local
+      - run: make verify

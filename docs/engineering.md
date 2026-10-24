@@ -5,7 +5,7 @@
 > - 包含：建设阶段、前置条件、具体任务、交付物、测试门槛、验收清单、运行交付步骤和进度证据。
 > - 不包含：替代用户目标或维护另一套技术方案；发现缺失细节应先补入技术方案再实施。
 > - 输入依次为[系统设计指引](design-guide.md)、[系统架构设计](architecture.md)、[技术方案](technical-design.md)。所有开发计划、验收和操作说明集中在本文，不再拆计划、测试或操作主文档。
-> - 状态：D00—D07 已完成；既有阶段兼容回归通过，D07 真实验收见 E15.8；D08 页面与本地验收已完成；D09 本地故障/隔离验收通过，完整门槛待 D10 云恢复；D10 构建/本地交付与还原已实现，真实云恢复待验收；更新：2026-10-24。当前实现与验证证据见 E15.1—E15.11，后续阶段的命令和路径仍为待建立约定。
+> - 状态：D00—D10 已完成；本地全套、D07 真实模型及 D10 真实 TOS 恢复均有证据，见 E15.8/E15.11；更新：2026-10-24。当前实现与验证证据见 E15.1—E15.11。
 
 ## E00 四份文档与 AI 执行规则
 
@@ -53,8 +53,8 @@
 | D06 上下文完整能力 | M07 | D05 | 确定性投影、阶段摘要、稳定前缀、大结果和来源检查 | 已完成 |
 | D07 模型能力完善与真实验证 | M03/M08 | D06 | 多工具/摘要、凭证撤销/轮换、异常协议与真实缓存观测 | 已完成，真实模型/缓存观测通过，见 E15.8 |
 | D08 完整调试工作台 | M12 | D07 | 版本化调试、SSE 续传、完整输入输出与产物 | 页面与本地验收已完成；D07 真实验证已补齐，见 E15.8/E15.9 |
-| D09 故障与隔离验收 | 全部 | D08 | 并发、取消、故障、权限及快照恢复证据 | 本地验收通过；完整门槛待 D10 云恢复，见 E15.10 |
-| D10 构建与交付 | 全部 | D09 | 可重建产物、启动与备份恢复验证 | 本地实现/演练通过，真实云恢复待验收，见 E15.11 |
+| D09 故障与隔离验收 | 全部 | D08 | 并发、取消、故障、权限及快照恢复证据 | 已完成；本地故障验收见 E15.10，真实供应商/恢复门槛已补齐 |
+| D10 构建与交付 | 全部 | D09 | 可重建产物、启动与备份恢复验证 | 已完成；构建、本地及真实 TOS 恢复通过，见 E15.11 |
 
 主路径为 D00 → D01 → D02 → D03 → D04 → D05 → D06 → D07 → D08 → D09 → D10。页面伴随所属业务阶段实现，不把全部 UI 拖到最后；D08 负责整合复杂调试体验。D00 先验证所选 Eino 组件可注入 HTTPClient、捕获实际字节并控制重试；D02 提供模型配置，D04 首次集成真实适配器，不把这一风险拖到 D07。每个子步骤单独实现、验证后再进入下一步；下面的拆分只表达工程依赖，不要求多 Agent 并行。
 
@@ -276,11 +276,13 @@ D00—D03 已建立下表标明相应阶段的入口；后续阶段入口随实�
 | make verify-d03 | verify-d02 加 D03 浏览器闭环；CI 默认门槛，真实 TOS 另跑 smoke-tos | D03 |
 | make release / make test-delivery | 可重现主机平台交付包 / 隔离数据库与回环对象恢复演练 | D10 |
 | make verify-d10-local | D09 本地全套及 D10 交付/还原，不发真实云请求 | D10 |
-| make verify | 本地全套后检查完整证据；待验收项存在则失败；补齐后要求 MASS_VERIFY_REAL_APPROVED=1 并执行 smoke-real | D10 |
+| make test-recovery / make smoke-recovery | 交付二进制+真实 SQL 导出还原，前者回环 TOS，后者显式授权真实 TOS；两者模型均为回环夹具 | D10 |
+| make verify | 当前本地全套+已完成的受控真实验收记录检查；任何 pending 项均失败，不新发云请求 | D10 |
+| make verify-live | verify 后显式重做 smoke-real / smoke-recovery；要求本次云授权及 MASS_VERIFY_REAL_APPROVED=1 | D10 |
 
 Vite 构建不能代替 TypeScript 类型检查。Vitest 用于前端状态与工具函数；Playwright 用于实际浏览器流程，不通过页面内部状态注入绕过核心后端行为。工具参考：[Vitest](https://vitest.dev/guide/)、[Playwright](https://playwright.dev/docs/intro)。
 
-测试数据库和 TOS 前缀必须与开发/生产隔离，清理只针对测试命名空间。普通 CI 不注入云凭证，使用内存替身和假 HTTP 端点完成离线检查；受控集成任务显式注入专用 TOS 测试凭证，真实模型测试另行启用并设置预算。缺少凭证时集成项标记未验证，make verify 不得伪报全套通过。内存替身不作为生产存储实现。
+测试数据库和 TOS 前缀必须与开发/生产隔离，清理只针对测试命名空间。普通 CI 不注入云凭证，使用内存替身和假 HTTP 端点完成离线检查；受控集成任务显式注入专用 TOS 测试凭证，真实模型测试另行启用并设置预算。尚无受控真实证据的集成项标记未验证，make verify 不得将其当作通过。已有真实验收结果以 E15 及逐项索引明确保留，普通 CI 用当前本地测试和已审阅的真实证据构成门槛；这不代表每次 CI 都访问了真实云。需要重新取得当前云结果时使用经单独授权的 make verify-live。内存替身不作为生产存储实现。
 
 每次变更先跑适用检查；合并或交付前跑全套门槛。命令执行失败或环境缺失应如实记录，不用“未发现问题”代替“未验证”。
 
@@ -372,7 +374,7 @@ P1 审查整改文档更新完成：按用户确认将 run_code 文件范围限�
 | D05 / 2026-10-24 | 基于 8459a09；迁移 00006、全部工具、真实 goja、附件/计划/UI 与测试 | 固定工具链、真实 MariaDB/TOS、实际 Eino/HTTP 协议夹具、Chromium | verify-d05、race、smoke-tos，见 E15.6 | D06 上下文完整能力 |
 | D06 / 2026-10-24 | 基于 d2010bf；迁移 00007、context/planner/projector、摘要/索引、来源 API/UI | 固定工具链、真实 MariaDB 11.8.9、Eino FakeChatModel 与实际 HTTP 协议夹具、Chromium | verify-d06、race，见 E15.7 | D07 模型能力与真实缓存观测 |
 | D08 / 2026-10-24 | 基于 db55c28；AguiRunClient、debug/Trace/Markdown、模型统计 API、调试导航 | 真实 MariaDB、本地 Eino/HTTP 与 TOS 协议夹具、Chromium | 本地回归与 race，见 E15.9 | D07 真实验证待授权；D09 故障/隔离验收 |
-| D10 本地 / 2026-10-24 | 基于 7916de7；release、restore-storage、member CLI 与 delivery-smoke | macOS arm64、MariaDB 11.8.9、本地模型/TOS 夹具、Chromium | 可重现包与隔离还原，本节验证记录见 E15.11 | D07 真实验证已补齐；D10 云 TOS 还原待验收 |
+| D10 本地 / 2026-10-24 | 基于 7916de7；release、restore-storage、member CLI 与 delivery-smoke | macOS arm64、MariaDB 11.8.9、本地模型/TOS 夹具、Chromium | 可重现包与隔离还原，本节验证记录见 E15.11 | D07 及 D10 真实验收均已补齐，见 E15.8/E15.11 |
 | D09 本地 / 2026-10-24 | 基于 8d41114；faults_test、SIGKILL 浏览器及逐项证据索引 | 真实隔离 MariaDB、本地模型/TOS 夹具、真实 goja、Chromium | verify-d09-local 全流程与 race，见 E15.10 | A21/A31 真实验证待授权，A22 交付/备份还原待 D10 |
 
 每次交接应说明当前阶段、已完成小步、实际文件、通过的检查、未通过/未运行的检查及下一步。不得把设计片段写入仓库后即标记功能完成，也不得跳过真实模型验证而宣称完整交付。
@@ -633,7 +635,7 @@ D07 本地验收：`make verify-d06`（包含新增协议/重试/凭证用例）
 
 5/5 样本返回 cache_read_tokens，覆盖率 100%，3/5 正值；正常追加两样本加权缓存读取/输入比为 85.30%，压缩后为 27.53%，初始与摘要为 0。全部 HTTP 200；cache_write_tokens 全为 null，保持未知，不补零。两次真实工具为 list_files 和 glob_files，摘要只生成一次。样本按阶段记录，仅证明本次返回了实际缓存命中，不据此承诺稳定命中、吞吐或延迟收益，也未启用显式远端缓存。
 
-忽略的原始观测为 `.cache/d07-real-observation.json`，校验/总请求数及清理收据为 `.cache/d07-real-verification.json`，执行日志 `.cache/d07-real-validation.log`。A21/A31 更新为 historical_real，以本文保留实际结果，普通 CI 不读取真实配置、不反复消耗额度。D07 完成条件满足；完整 MVP 仍保留 A22 的 D10 真实 TOS 留存/恢复待验收。 新增计数器后的本地 TestRealRequestBudgetGuard、TestRuntimeVertical、TestContextStages 针对性 race 回归通过（14.107s），go vet、51 项证据链接和 diff 检查通过；完整门槛分支复查仅因 A22 非零退出，没有再次调用模型。日志 .cache/d07-approved-local-regression.log / .cache/d07-approved-full-gate.log。
+忽略的原始观测为 `.cache/d07-real-observation.json`，校验/总请求数及清理收据为 `.cache/d07-real-verification.json`，执行日志 `.cache/d07-real-validation.log`。A21/A31 更新为 historical_real，以本文保留实际结果，普通 CI 不读取真实配置、不反复消耗额度。D07 完成条件满足；D07 验收时完整 MVP 仍保留 A22，后续 D10 真实 TOS 恢复已按 E15.11 补齐。 新增计数器后的本地 TestRealRequestBudgetGuard、TestRuntimeVertical、TestContextStages 针对性 race 回归通过（14.107s），go vet、51 项证据链接和 diff 检查通过；完整门槛分支复查仅因 A22 非零退出，没有再次调用模型。日志 .cache/d07-approved-local-regression.log / .cache/d07-approved-full-gate.log。
 
 ## E15.9 D08 完整调试工作台（2026-10-24）
 
@@ -663,9 +665,9 @@ AguiRunClient 对快照运行时校验，帧经 Schema/reducer 后才推进 UI �
 
 新增 `make verify-d09-local` 显式固定 MASS_TEST_TOS=0/MASS_TEST_REAL_MODEL=0，避免继承环境意外调用云服务；包含 verify-d08、进程故障测试、全量 race 及证据链接检查；CI 使用该目标。报告 .cache/d09-acceptance.json 保存基准版本、时间、来源 SHA 和每项状态。A21/A31=pending_real，A22=pending_delivery；A25=此前真实 TOS 证据（E15.3—E15.6），本阶段不冒充再次真实验证；A33=显式缓存未启用。其余条目关联已执行的本地/协议测试，链接检查本身不代表功能通过。`make verify-d09-local` 全流程通过，包含既有协议/浏览器回归、新增故障与进程测试和全量 race（集成 81.564s）；日志 .cache/d09-verify.log。最后增加本地云测试开关屏蔽后，模拟继承真实测试开关仍被固定为 0 的 Make 作用域检查通过（未重复运行已通过的功能测试）。
 
-### E15.11 D10 本地交付与备份还原
+## E15.11 D10 本地交付与备份还原
 
-基于 7916de7，本阶段增加可重现的当前主机平台交付包、`build-info`、停服 `member add/remove` 维护命令、`restore-storage` 离线对象迁移，以及打包后全流程验收。schema 仍为 7，不新增迁移。D10 初次本地验收时 D07 真实模型验证未获追加授权，当时没有发起真实云存储请求；D07 后续已按 E15.8 单独授权并通过，D10 云 TOS 对象留存/恢复仍待授权环境实测。以下本地证据不等于完整 MVP 通过。
+基于 7916de7，本阶段增加可重现的当前主机平台交付包、`build-info`、停服 `member add/remove` 维护命令、`restore-storage` 离线对象迁移，以及打包后全流程验收。schema 仍为 7，不新增迁移。D10 初次本地验收时 D07 真实模型验证未获追加授权，当时没有发起真实云存储请求；D07 后续已按 E15.8 单独授权并通过，D10 真实 TOS 恢复现也已按本节后续记录单独授权并通过。以下早期本地记录仍与真实云结果分开注明。
 
 交付构建：构建机按仓库锁定版本执行 `make setup && make release`。release 先检查生成物，构建包含前端和迁移的单一二进制，以当前提交时间作为 SOURCE_DATE_EPOCH，生成 `.cache/release/mass-<os>-<arch>.tar.gz` 和 `.sha256`。包内 `manifest.json` 逐文件校验，`build-info.json` 和 `bin/mass build-info` 包含源码 revision、version、Go、平台、schema 和构建时间（Unix 秒）。VERSION 可显式设置；相同源码/工具链/参数应有相同 SHA-256，`dirty` 表示带未提交修改。当前仅打包/验收构建机平台；没有宣称跨平台二进制已经测试。配置来自 configs/mass.example.yaml，打包时改名 mass.yaml，真实 mass.yaml 与秘密不入包。产物不额外发布到外部。
 
@@ -711,8 +713,24 @@ AguiRunClient 对快照运行时校验，帧经 Schema/reducer 后才推进 UI �
 
 验收覆盖错误目标库、错误主密钥、未完成上传、非终态 Run、损坏日志、损坏源/目标对象、活动服务锁、幂等重试、历史/产物恢复、离线视图重建不调用模型，以及 member CLI 授权。截图/报告/日志为忽略的 `.cache/d10-restored.png`、`.cache/d10-delivery.json` 和 `.cache/d10-verify.log`。报告含构建及归档摘要、SQL 导出摘要、对象计数，明确 real_cloud=false；不包含原配置、密码、密钥或原始业务内容。
 
-当前完整门槛：A21/A31 的 D07 真实文本/工具/摘要/缓存观测已补齐，A22 的 D10 真实 TOS 留存/恢复仍待授权验证。`make verify` 先运行本地全套，再由证据检查器对 pending 项失败；补齐真实证据后还需 MASS_VERIFY_REAL_APPROVED=1 才执行 smoke-real（最多 8 次已约定真实模型调用）。不因缺少云配置而跳过后报全套通过；普通 CI 仅使用 verify-d10-local。没有执行外部发布或替用户启动长期业务服务。
+当前完整门槛：A21/A31 的 D07 真实模型与 A22 的 D10 真实 TOS 恢复均已补齐，索引没有 pending 项。`make verify` 运行当前本地全套及历史受控真实验收记录检查，不重复云调用；`make verify-live` 保留重新执行真实模型/恢复的入口，需本次单独授权及 MASS_VERIFY_REAL_APPROVED=1，模型每次硬上限 8。普通 CI 执行 verify，日志/索引明确区分当前本地结果和此前真实证据，不能把引用检查说成实时云验证。没有执行外部发布或替用户启动长期业务服务。
 
 验证结果：锁定 npm 的 `npm ci` 成功，随后 `make verify-d10-local` 退出 0，包含生成物漂移、类型/lint/vet/边界/格式、Go/Vitest、真实隔离 MariaDB（最终不缓存集成 37.039s）、D02—D09 进程/浏览器回归、全包 race 和 D10 发布/恢复。race 首轮集成 80.774s，最终重跑命中缓存。51 项证据引用检查和 git diff --check 均通过。用 `make -o verify-d10-local verify` 单独检查完整门槛分支，明确非零报告 A21/A22/A31，未执行后续云调用；本地前置门槛由前述实际全流程提供证据。
 
 测试中修正：空库夹具需要跳过 goose UpTo(0)；维护 CLI 由测试编排异步启动，避免同步等待阻塞同进程回环 TOS 服务；初次全流程在发布精确工具链检查时发现 PATH 的 npm 实为 11.6.2，已仅在临时工具目录安装 11.19.1、按锁文件重装前端依赖并重跑全流程。发布目标现在强制检查工具链，不能以错误 npm 版本悄悄生成交付包。未修改系统 npm、项目依赖版本或真实业务配置。
+
+### D10 真实 TOS 恢复验收（2026-10-24）
+
+用户明确要求继续真实 TOS 恢复验收后，新增 TestTOSRecovery 和持久化精确对象账本；执行 `make smoke-recovery`，仅读取现有 MASS_TOS_* 测试配置及明确隔离的 MASS_TEST_ADMIN_DSN。构建基准 7f13299 加本次未提交的验收入口改动，schema 7，无新增迁移；Go 1.26.9、Node 24.22.0/npm 11.19.1、MariaDB 11.8.9，macOS arm64。开始时间 2026-10-24 18:50:29（Asia/Shanghai），真实用例 60.98s 通过。
+
+验收从 tar.gz 交付包提取 bin/mass 与唯一配置模板，并验证 manifest SHA-256；空源库用提取的二进制 migrate 两次，使用 DML 应用账号创建合成 Skill/资源、Agent、模型凭证和产生文件/产物/快照的 Run。仅模型为明确 fake；存储经过官方 SDK 写入真实 TOS。导出 MariaDB 逻辑备份并导入另一个随机空库，用同一二进制执行 restore-storage / rebuild-views，再以空 PATH、无 Go/Node 依赖启动 serve。迁移前后保留原测试主密钥，恢复后的回环模型要求原凭证，验证解密材料及引用一致。
+
+真实 TOS 使用现有测试 Bucket 下 `tmp/mass-d10-随机ID/source/` 和 `restored/`；先保留源对象，恢复 **22 个** ready 对象并核对大小/SHA-256、位置和快照 URI。预先在一个本次专属、尚未创建的目标 key 写入错误字节，确认禁止覆盖且恢复失败不改变 SQL 位置索引；只删除这个测试错误对象后重试成功。然后删除本次源对象和原临时工作目录，幂等重试不再依赖原对象，离线重建的 UI 检查点与原值相同，历史重建和 API 查看没有模型请求。
+
+恢复实例的健康检查、登录、固定 Skill/Agent 版本、Trace、UI 历史及产物下载通过；显式提交新 Run 后从恢复的 TOS 快照读取 retained.txt，结果正确并保存新快照。真实模型调用 **0 次**，仅两个 HTTP 请求发往本地合成模型端点；没有向 mass 子进程传入真实模型密钥，迁移账号环境在迁移后移除。没有部署长期业务服务或发布外部产物。
+
+结束共检查 **57 个独立 key**，完成 **58 次对象/版本删除**（包含先删除错误目标、后重建正确内容的同 key），全部逐个确认 404；不列举或清理整个 Bucket。账本在任何可能上传之前持久化 key，恢复目标预登记，最终收集测试库内新增对象，未知上传回执仅对本次精确 key 读取确认版本。账本只包含前缀/key/版本及清理结果，不保存 SDK 客户端或秘密。报告 `.cache/d10-recovery-real.json`、日志 `.cache/d10-recovery-real.log`、逐次 `.cache/d10-recovery-mass-d10-UUID.json` 被 Git 忽略。本次归档 SHA-256 ea8eada03c3bcab949bc98c3dce89a79b3aa5c1e17cbb576ad700a8a3ba86f81，SQL 备份 SHA-256 保存在报告。
+
+范围：实际云验证为同一 Bucket 的两个隔离前缀，不声称已经验证跨 Bucket 云迁移、其他平台二进制或缺失旧主密钥时的数据恢复；独立备份 Bucket 的映射仅由原本地协议演练覆盖。A22 更新为 historical_real；A21/A31 的 D07 真实证据沿用 E15.8，A33 显式缓存为非启用能力，A01—A51 不再有 pending。常规 verify 合并当前本地回归与这些受控真实记录，不自动复用此前付费模型授权；重新执行云门槛使用显式 verify-live。
+
+最终验证：`make verify` 退出 0，包含 Go/Vitest、生成物/类型/静态/依赖边界检查、真实隔离 MariaDB 集成（36.772s）、D02—D09 进程/浏览器回归、全包 race（集成 81.592s）、可重现交付包与原 D10 浏览器恢复、新增 TestTOSRecovery 回环演练（4.32s）以及 A01—A51 完整证据检查；索引 pending=none。TestRecoveryLedgerScope 确认越界上传/删除在请求发出前拒绝，账本无客户端/凭证；go vet 与 git diff --check 通过。日志 `.cache/d10-complete-verify.log`，当前本地回归没有再次访问真实 TOS 或付费模型，真实结果单独来自本节已完成的 smoke-recovery 及 E15.8。随机测试数据库和账号最终均为 0，隔离服务停止；远端 CI 配置已更新但未触发，未代替用户部署业务实例。
