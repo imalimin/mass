@@ -188,6 +188,7 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		transportModel.Fake = nil
 	}
 	if real {
+		transportModel.Base = realModelHTTPBudget
 		auth.Endpoint = strings.TrimSuffix(os.Getenv("MASS_LLM_MODEL_BASE_URL"), "/")
 		transportModel.Fake = nil
 	}

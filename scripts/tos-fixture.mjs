@@ -21,5 +21,5 @@ export async function startTOSFixture() {
     res.writeHead(404); res.end('{"Code":"NoSuchKey"}')
   })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
-  return { endpoint: `http://127.0.0.1:${server.address().port}`, stop: () => new Promise((resolve, reject) => server.close(e => { objects.clear(); e ? reject(e) : resolve() })) }
+  return { endpoint: `http://127.0.0.1:${server.address().port}`, objects, stop: () => new Promise((resolve, reject) => server.close(e => { objects.clear(); e ? reject(e) : resolve() })) }
 }

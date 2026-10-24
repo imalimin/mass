@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,15 +10,18 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/imalimin/mass/internal/adapter/mariadb"
 	"github.com/imalimin/mass/internal/app/identity"
 	"github.com/imalimin/mass/internal/bootstrap"
-	"time"
 )
 
 var version = "dev"
+var revision = "unknown"
+var buildTime = "unknown"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -30,7 +34,13 @@ func main() {
 
 func run(ctx context.Context, args []string, out, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: mass <serve|migrate|rebuild-views|user create|check-config|version> [--config mass.yaml]")
+		return errors.New("usage: mass <serve|migrate|rebuild-views|restore-storage|user create|member add|member remove|check-config|version|build-info> [--config mass.yaml]")
+	}
+	if args[0] == "build-info" {
+		if len(args) != 1 {
+			return errors.New("build-info takes no arguments")
+		}
+		return json.NewEncoder(out).Encode(map[string]any{"version": version, "revision": revision, "build_time": buildTime, "go_version": runtime.Version(), "platform": runtime.GOOS + "/" + runtime.GOARCH, "schema": 7})
 	}
 	if args[0] == "version" {
 		if len(args) != 1 {
@@ -45,13 +55,35 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) error {
 		}
 		args = append([]string{"user-create"}, args[2:]...)
 	}
-	if args[0] != "serve" && args[0] != "check-config" && args[0] != "migrate" && args[0] != "rebuild-views" && args[0] != "user-create" {
-		return errors.New("unknown command; available: serve, migrate, rebuild-views, user create, check-config, version")
+	if args[0] == "member" {
+		if len(args) < 2 || (args[1] != "add" && args[1] != "remove") {
+			return errors.New("usage: mass member <add|remove> --actor OWNER_ID --space SPACE_ID --username NAME (add) | --user USER_ID (remove)")
+		}
+		args = append([]string{"member-" + args[1]}, args[2:]...)
+	}
+	member := args[0] == "member-add" || args[0] == "member-remove"
+	if args[0] != "serve" && args[0] != "check-config" && args[0] != "migrate" && args[0] != "rebuild-views" && args[0] != "restore-storage" && args[0] != "user-create" && !member {
+		return errors.New("unknown command; available: serve, migrate, rebuild-views, restore-storage, user create, member add/remove, check-config, version, build-info")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "mass.yaml", "single service configuration file")
 	var username, passwordEnv *string
+	var actor, space, memberName, user *string
+	var sourceConfig, expectedDatabase *string
+	if args[0] == "restore-storage" {
+		sourceConfig = flags.String("source-config", "", "original configuration for retained source TOS objects")
+		expectedDatabase = flags.String("expect-database", "", "exact isolated restored database name")
+	}
+	if member {
+		actor = flags.String("actor", "", "existing space owner ID; command requires database operator access")
+		space = flags.String("space", "", "space ID")
+		if args[0] == "member-add" {
+			memberName = flags.String("username", "", "existing username")
+		} else {
+			user = flags.String("user", "", "existing user ID")
+		}
+	}
 	if args[0] == "user-create" {
 		username = flags.String("username", "", "existing account name")
 		passwordEnv = flags.String("password-env", "", "environment variable holding the password (12-72 bytes)")
@@ -77,7 +109,22 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) error {
 		_, err = fmt.Fprintln(out, "views rebuilt from journal")
 		return err
 	}
-	if args[0] == "migrate" || args[0] == "user-create" {
+	if args[0] == "restore-storage" {
+		if *sourceConfig == "" || *expectedDatabase == "" {
+			return errors.New("restore-storage requires --source-config and --expect-database")
+		}
+		source, err := bootstrap.LoadConfig(*sourceConfig, os.Getenv)
+		if err != nil {
+			return err
+		}
+		count, err := bootstrap.RestoreStorage(ctx, source, c, *expectedDatabase)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(out, "verified and relocated %d objects\n", count)
+		return err
+	}
+	if args[0] == "migrate" || args[0] == "user-create" || member {
 		dsn := os.Getenv(c.Database.DSNEnv)
 		if args[0] == "migrate" {
 			if c.Database.MigrationDSNEnv == "" || os.Getenv(c.Database.MigrationDSNEnv) == "" {
@@ -98,6 +145,30 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) error {
 			return err
 		}
 		if err = store.CheckSchema(ctx); err != nil {
+			return err
+		}
+		if member {
+			lease, err := store.OpenRuntime(ctx)
+			if err != nil {
+				return errors.New("member CLI requires the service to be stopped; use the authenticated member API while running")
+			}
+			defer lease.Close()
+			if *actor == "" || *space == "" {
+				return errors.New("member requires --actor and --space")
+			}
+			svc, err := identity.New(store, nil, time.Hour, nil)
+			if err != nil {
+				return err
+			}
+			if args[0] == "member-add" {
+				err = svc.AddMember(ctx, *actor, *space, *memberName)
+			} else {
+				err = svc.RemoveMember(ctx, *actor, *space, *user)
+			}
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(out, "membership updated")
 			return err
 		}
 		if *passwordEnv == "" {

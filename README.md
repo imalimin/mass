@@ -2,7 +2,7 @@
 
 Multi-use Agent Systems：支持空间协作、Agent/Skill 定义、版本管理与连续任务执行的单服务应用。
 
-当前已完成 D00—D06，D08 调试页面已实现；D07 真实供应商验证仍待授权：可配置模型、发布 Agent/Skill、创建连续对话，使用全部十四个内置工具处理文件、已接受附件和固定版本 Skill 资源。支持 JavaScript 文件/HTTP/CSV 操作、计划展示、产物下载、Trace、取消和快照恢复；支持阶段摘要复用和原始事件 → 投影 Manifest → 实际请求的来源检查。
+当前已完成 D00—D07、D08 调试页面、D09 本地故障验收及 D10 本地交付/恢复；D10 真实 TOS 恢复验证仍待授权：可配置模型、发布 Agent/Skill、创建连续对话，使用全部十四个内置工具处理文件、已接受附件和固定版本 Skill 资源。支持 JavaScript 文件/HTTP/CSV 操作、计划展示、产物下载、Trace、取消和快照恢复；支持阶段摘要复用和原始事件 → 投影 Manifest → 实际请求的来源检查。
 
 > 本文件提供项目简介、Quickstart 和建设文档入口。系统方案及工程验收继续由文末四份建设文档维护，不新增专题主文档。
 
@@ -216,7 +216,7 @@ unset MASS_INITIAL_PASSWORD
 
 Trace 的每个模型完成/失败事件保存 `observation`（调用耗时、首个文本片段延迟、HTTP 状态、组件版本），失败流仍保留原始 usage。无文本、无 HTTP 响应或缺失供应商统计时使用 null 或状态 0 表示未知，不推断缓存命中。原始供应商字段保留在实际响应及完整模型响应对象中。
 
-D07 的真实文本、工具与摘要验收使用 `make smoke-real`，需明确授权及隔离测试配置；测试最多 8 次模型调用。缓存观测报告保存在忽略的 `.cache/d07-real-observation.json`。当前真实验证尚待授权完成，不能据本地假供应商测试声称全阶段交付。
+D07 的真实文本、工具与摘要验收使用 `make smoke-real`，需明确授权及隔离测试配置；测试最多 8 次模型调用。缓存观测报告保存在忽略的 `.cache/d07-real-observation.json`。2026-10-24 已获授权并通过：实际 6 次 HTTP 模型请求（上限 8），真实文本、双工具、追加及一次摘要，563 个测试对象已精确清理；观测模型 deepseek-flash 的缓存读取和延迟，数据见工程文档 E15.8。这是本次样本结果，不代表所有请求必命中。
 
 ### 调试工作台（D08）
 
@@ -234,6 +234,45 @@ D07 的真实文本、工具与摘要验收使用 `make smoke-real`，需明确�
 
 新增验收包括：数据库不可用时停止接单、未提交终态不释放占用、恢复后 queued 继续且 running 不重放；两个已确认文件写入后 SIGKILL，重启不重做未知动作；部分模型输出超时、Trace 存储失败、上传响应丢失核实；真实 Goja 文件操作后撤权、系统收尾与下载/历史拒绝；认证到期后历史、快照和产物仍保留，损坏/缺失内容阻止完整重建；同 Run 摘要和重试统一记账，未知用量不当零。
 
-证据索引为 `scripts/acceptance-evidence.json`，检查报告输出到忽略的 `.cache/d09-acceptance.json`。引用检查只核对用例与源文件，不代替功能测试。A21/A31 的真实模型与缓存观测仍待授权；A22 的干净部署/备份还原属于 D10；A25 使用此前真实 TOS 验收证据，本阶段没有再次调用云资源；A33 显式缓存未启用。因此本地通过不等于全部 MVP 验收完成，`make verify` 在 D10 前仍明确失败。
+证据索引为 `scripts/acceptance-evidence.json`，检查报告输出到忽略的 `.cache/d09-acceptance.json`。引用检查只核对用例与源文件，不代替功能测试。A21/A31 的 D07 真实模型与缓存观测已于 2026-10-24 补齐；A22 的干净部署/备份还原属于 D10；A25 使用此前真实 TOS 验收证据，本阶段没有再次调用云资源；A33 显式缓存未启用。因此本地通过不等于全部 MVP 验收完成，当前交付和完整门槛见下文 D10。
 
 数据库 schema 保持 7，无新增迁移。数据库/日志故障导致执行入口停止时，先修复依赖并检查已保存记录，再重启；已有 running 会标记中断，未确认副作用须人工核实。不要直接重放旧 Run。快照保存失败时使用已有“仅重试保存文件”或“恢复最近已提交快照”，后者会放弃未保存文件。
+
+## D10 交付包与恢复演练
+
+```sh
+make setup                 # 首次构建机准备；安装锁定依赖及测试浏览器
+make release               # 生成 API、嵌入前端，CGO_ENABLED=0 构建当前主机平台
+bin/mass build-info
+```
+
+产物为 `.cache/release/mass-<os>-<arch>.tar.gz` 及同名 `.sha256` 校验文件。压缩包内有 `bin/mass`、唯一配置模板 `mass.yaml`、README、四份文档及图片、`build-info.json`、逐文件 SHA-256 `manifest.json`。不打包工作区中的真实 `mass.yaml`、环境变量或凭证。相同源码、锁定工具链、`VERSION` 和 `SOURCE_DATE_EPOCH` 会生成相同字节；默认使用 Git 提交时间作为构建时间，未提交源码的版本含 `dirty`。目前打包入口支持构建主机的平台，不宣称已验证跨平台产物。
+
+部署机器解压后按 Quickstart 配置环境、执行 `bin/mass migrate`、`bin/mass user create` 和 `bin/mass serve --config mass.yaml`。仅应用进程不需要 Go、Node、npm 或仓库；MariaDB/TOS 是外部依赖。`serve` 不自动建库/迁移。用 `kill -TERM <mass-pid>` 停止并等待退出后再备份或升级，避免直接覆盖运行中的二进制。
+
+停服维护时还可管理已有用户的空间成员关系；数据库操作者需指定现有空间 owner 的 ID，仍检查 owner 权限并写审计。运行期间通过页面/API 管理成员。
+
+```sh
+bin/mass member add --config mass.yaml --actor OWNER_ID --space SPACE_ID --username bob
+bin/mass member remove --config mass.yaml --actor OWNER_ID --space SPACE_ID --user USER_ID
+```
+
+备份需要停服、无排队/运行中的任务，保留 MariaDB 导出、对应 TOS 对象的全部版本，以及单独安全保管的原主密钥。仅复制会话临时目录不能恢复业务。完整步骤和故障处理见[工程文档 E15.11](docs/engineering.md#e1511-d10-本地交付与备份还原)。恢复到隔离库后，可用同一二进制复制留存对象到独立前缀并校正引用：
+
+```sh
+bin/mass restore-storage --config restored.yaml --source-config original.yaml --expect-database mass_restore
+bin/mass rebuild-views --config restored.yaml
+bin/mass serve --config restored.yaml
+```
+
+`original.yaml` 和 `restored.yaml` 使用同一份模板的结构，各自引用原库/恢复库及源/目标 TOS 环境；源库不会被此命令连接或修改；源 TOS 也可指向保留了原对象键和字节的备份 Bucket。目标库必须是独立库名、对象前缀必须互不包含；命令核对主密钥、日志、对象大小和 SHA-256，所有复制成功后一次性提交位置索引，支持重试，不删除源对象。历史日志保留原始 URI，当前读取以校正后的对象索引为准。缺失对象或未完成上传会明确拒绝，不能跳过后启动服务。
+
+本地演练需隔离 MariaDB 及 MariaDB 客户端工具；不调用真实云资源：
+
+```sh
+export MASS_TEST_ADMIN_DSN='root:test-password@tcp(127.0.0.1:3306)/'
+# mariadb / mariadb-dump 不在 PATH 时，用 MASS_TEST_MARIADB_CLIENT / MASS_TEST_MARIADB_DUMP 指定绝对路径。
+make verify-d10-local
+```
+
+本地验证包括两次完整构建的字节对比、空库迁移、压缩包二进制以空 PATH 启动、发布 Skill/Agent、运行和 Trace/产物查看、真实 SQL 导出还原、TOS 协议夹具对象迁移、错误主密钥/损坏数据/运行中服务拒绝、历史无执行重建，以及原临时目录和源对象删除后的连续对话。报告在忽略的 `.cache/d10-delivery.json`。D07 真实验证已通过，D10 真实 TOS 恢复演练仍待授权，因此 `make verify` 先检查待验收证据并明确失败；证据补齐后还需 `MASS_VERIFY_REAL_APPROVED=1` 才会运行真实模型门槛，不将本地通过标为完整 MVP 通过。

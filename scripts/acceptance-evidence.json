@@ -289,23 +289,31 @@
   },
   {
     "id": "A21",
-    "status": "pending_real",
-    "note": "Real D07 text/tool/summary and cache measurements require explicit approval; local coverage is not real-provider evidence.",
+    "status": "historical_real",
+    "note": "D07 passed on 2026-10-24 with deepseek-flash: 6 actual HTTP requests (approved cap 8), real text/two tools/append/one summary, cache usage/timing observed, 563 exact TOS objects cleaned; see E15.8.",
     "sources": [
       {
         "path": "tests/integration/model_real_test.go",
         "anchor": "exerciseD07"
+      },
+      {
+        "path": "docs/engineering.md",
+        "anchor": "D07 真实验收结果（2026-10-24）"
       }
     ]
   },
   {
     "id": "A22",
     "status": "pending_delivery",
-    "note": "Clean deployment and database backup/restore belong to D10.",
+    "note": "D10 reproducible package and isolated MariaDB/TOS-protocol restore passed locally; authorized real TOS retention/restore is still pending.",
     "sources": [
       {
+        "path": "scripts/delivery-smoke.mjs",
+        "anchor": "D10 delivery passed"
+      },
+      {
         "path": "docs/engineering.md",
-        "anchor": "E12 D10"
+        "anchor": "E15.11 D10 本地交付与备份还原"
       }
     ]
   },
@@ -317,6 +325,10 @@
       {
         "path": "scripts/smoke.mjs",
         "anchor": "D02 process smoke passed"
+      },
+      {
+        "path": "scripts/delivery-smoke.mjs",
+        "anchor": "D10 delivery passed"
       }
     ]
   },
@@ -336,6 +348,10 @@
       {
         "path": "scripts/fault-browser-smoke.mjs",
         "anchor": "D09 process fault passed"
+      },
+      {
+        "path": "scripts/delivery-smoke.mjs",
+        "anchor": "D10 delivery passed"
       }
     ]
   },
@@ -427,8 +443,8 @@
   },
   {
     "id": "A31",
-    "status": "pending_real",
-    "note": "Real D07 text/tool/summary and cache measurements require explicit approval; local coverage is not real-provider evidence.",
+    "status": "historical_real",
+    "note": "D07 passed on 2026-10-24 with deepseek-flash: 6 actual HTTP requests (approved cap 8), real text/two tools/append/one summary, cache usage/timing observed, 563 exact TOS objects cleaned; see E15.8.",
     "sources": [
       {
         "path": "internal/domain/run/metrics_test.go",
@@ -437,6 +453,10 @@
       {
         "path": "tests/integration/model_real_test.go",
         "anchor": "cache_statistics"
+      },
+      {
+        "path": "docs/engineering.md",
+        "anchor": "D07 真实验收结果（2026-10-24）"
       }
     ]
   },

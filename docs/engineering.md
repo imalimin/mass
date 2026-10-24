@@ -5,7 +5,7 @@
 > - 包含：建设阶段、前置条件、具体任务、交付物、测试门槛、验收清单、运行交付步骤和进度证据。
 > - 不包含：替代用户目标或维护另一套技术方案；发现缺失细节应先补入技术方案再实施。
 > - 输入依次为[系统设计指引](design-guide.md)、[系统架构设计](architecture.md)、[技术方案](technical-design.md)。所有开发计划、验收和操作说明集中在本文，不再拆计划、测试或操作主文档。
-> - 状态：D00—D06 已完成；既有阶段兼容回归通过，D07 实现中、真实验证待授权；D08 页面与本地验收已完成；D09 本地故障/隔离验收通过，完整门槛待 D07/D10；D10 未开始；更新：2026-10-24。当前实现与验证证据见 E15.1—E15.10，后续阶段的命令和路径仍为待建立约定。
+> - 状态：D00—D07 已完成；既有阶段兼容回归通过，D07 真实验收见 E15.8；D08 页面与本地验收已完成；D09 本地故障/隔离验收通过，完整门槛待 D10 云恢复；D10 构建/本地交付与还原已实现，真实云恢复待验收；更新：2026-10-24。当前实现与验证证据见 E15.1—E15.11，后续阶段的命令和路径仍为待建立约定。
 
 ## E00 四份文档与 AI 执行规则
 
@@ -51,10 +51,10 @@
 | D04 最小运行纵向闭环 | M04—M11 | D03 | Eino 接入、原文 Trace、最小投影、读写文件/产物、取消和快照恢复 | 已完成，2026-10-23，见 E15.5 |
 | D05 内置工具闭环 | M09/M11 | D04 | 补齐 14 个工具、代码文件/网络能力、计划/交付与 I/O 记录 | 已完成，见 E15.6 |
 | D06 上下文完整能力 | M07 | D05 | 确定性投影、阶段摘要、稳定前缀、大结果和来源检查 | 已完成 |
-| D07 模型能力完善与真实验证 | M03/M08 | D06 | 多工具/摘要、凭证撤销/轮换、异常协议与真实缓存观测 | 实现中；真实验证待授权，见 E15.8 |
-| D08 完整调试工作台 | M12 | D07 | 版本化调试、SSE 续传、完整输入输出与产物 | 页面与本地验收已完成；D07 真实验证另行待授权，见 E15.9 |
-| D09 故障与隔离验收 | 全部 | D08 | 并发、取消、故障、权限及快照恢复证据 | 本地验收通过；完整门槛待 D07/D10，见 E15.10 |
-| D10 构建与交付 | 全部 | D09 | 可重建产物、启动与备份恢复验证 | 未开始 |
+| D07 模型能力完善与真实验证 | M03/M08 | D06 | 多工具/摘要、凭证撤销/轮换、异常协议与真实缓存观测 | 已完成，真实模型/缓存观测通过，见 E15.8 |
+| D08 完整调试工作台 | M12 | D07 | 版本化调试、SSE 续传、完整输入输出与产物 | 页面与本地验收已完成；D07 真实验证已补齐，见 E15.8/E15.9 |
+| D09 故障与隔离验收 | 全部 | D08 | 并发、取消、故障、权限及快照恢复证据 | 本地验收通过；完整门槛待 D10 云恢复，见 E15.10 |
+| D10 构建与交付 | 全部 | D09 | 可重建产物、启动与备份恢复验证 | 本地实现/演练通过，真实云恢复待验收，见 E15.11 |
 
 主路径为 D00 → D01 → D02 → D03 → D04 → D05 → D06 → D07 → D08 → D09 → D10。页面伴随所属业务阶段实现，不把全部 UI 拖到最后；D08 负责整合复杂调试体验。D00 先验证所选 Eino 组件可注入 HTTPClient、捕获实际字节并控制重试；D02 提供模型配置，D04 首次集成真实适配器，不把这一风险拖到 D07。每个子步骤单独实现、验证后再进入下一步；下面的拆分只表达工程依赖，不要求多 Agent 并行。
 
@@ -274,7 +274,9 @@ D00—D03 已建立下表标明相应阶段的入口；后续阶段入口随实�
 | make verify-d02 | 生成、类型、lint、单元/协议、真实 MariaDB 集成、进程与 D02 浏览器检查（含 D01 本地回归） | D01/D02 |
 | make verify-d01 | verify-d02 加 smoke-tos；必须显式配置专用 MariaDB、TOS 与测试前缀 | D01 全量验收 |
 | make verify-d03 | verify-d02 加 D03 浏览器闭环；CI 默认门槛，真实 TOS 另跑 smoke-tos | D03 |
-| make verify | 完整 MVP 门槛；当前明确失败并提示使用 verify-d03，不能伪报集成通过 | D10 前完成 |
+| make release / make test-delivery | 可重现主机平台交付包 / 隔离数据库与回环对象恢复演练 | D10 |
+| make verify-d10-local | D09 本地全套及 D10 交付/还原，不发真实云请求 | D10 |
+| make verify | 本地全套后检查完整证据；待验收项存在则失败；补齐后要求 MASS_VERIFY_REAL_APPROVED=1 并执行 smoke-real | D10 |
 
 Vite 构建不能代替 TypeScript 类型检查。Vitest 用于前端状态与工具函数；Playwright 用于实际浏览器流程，不通过页面内部状态注入绕过核心后端行为。工具参考：[Vitest](https://vitest.dev/guide/)、[Playwright](https://playwright.dev/docs/intro)。
 
@@ -370,6 +372,7 @@ P1 审查整改文档更新完成：按用户确认将 run_code 文件范围限�
 | D05 / 2026-10-24 | 基于 8459a09；迁移 00006、全部工具、真实 goja、附件/计划/UI 与测试 | 固定工具链、真实 MariaDB/TOS、实际 Eino/HTTP 协议夹具、Chromium | verify-d05、race、smoke-tos，见 E15.6 | D06 上下文完整能力 |
 | D06 / 2026-10-24 | 基于 d2010bf；迁移 00007、context/planner/projector、摘要/索引、来源 API/UI | 固定工具链、真实 MariaDB 11.8.9、Eino FakeChatModel 与实际 HTTP 协议夹具、Chromium | verify-d06、race，见 E15.7 | D07 模型能力与真实缓存观测 |
 | D08 / 2026-10-24 | 基于 db55c28；AguiRunClient、debug/Trace/Markdown、模型统计 API、调试导航 | 真实 MariaDB、本地 Eino/HTTP 与 TOS 协议夹具、Chromium | 本地回归与 race，见 E15.9 | D07 真实验证待授权；D09 故障/隔离验收 |
+| D10 本地 / 2026-10-24 | 基于 7916de7；release、restore-storage、member CLI 与 delivery-smoke | macOS arm64、MariaDB 11.8.9、本地模型/TOS 夹具、Chromium | 可重现包与隔离还原，本节验证记录见 E15.11 | D07 真实验证已补齐；D10 云 TOS 还原待验收 |
 | D09 本地 / 2026-10-24 | 基于 8d41114；faults_test、SIGKILL 浏览器及逐项证据索引 | 真实隔离 MariaDB、本地模型/TOS 夹具、真实 goja、Chromium | verify-d09-local 全流程与 race，见 E15.10 | A21/A31 真实验证待授权，A22 交付/备份还原待 D10 |
 
 每次交接应说明当前阶段、已完成小步、实际文件、通过的检查、未通过/未运行的检查及下一步。不得把设计片段写入仓库后即标记功能完成，也不得跳过真实模型验证而宣称完整交付。
@@ -604,17 +607,37 @@ verify-d05 包含生成契约检查、TypeScript/ESLint/go vet/依赖方向和 g
 
 验证中发现并修复：测试数据库默认 schema/RuntimeDefinition API Schema 未同步；正常恢复提示触发摘要边界；摘要 JSON 转录自身可能比原消息大，改为按完整旧轮次缩小范围；页面仍显示 D05 不支持摘要的旧提示。真实模型付费工具/摘要调用和缓存命中收益未在 D06 新测，仍由 D07 验证；平台前缀稳定不能作为真实缓存命中证据。
 
-## E15.8 D07 模型能力完善（进行中）
+## E15.8 D07 模型能力完善与真实验收（已完成）
 
 基于 db1248d。已加入显式平台重试、逐 attempt 关联/凭证解析/预算、完成与失败 observation、失败流 usage 保留和缓存统计覆盖率；不改 SDK 隐藏重试配置，不启用显式云缓存。测试覆盖实际 Eino/HTTP 逐字节中文 SSE、缺少结束标记、非法 JSON、401/429/503、空错误正文、部分输出、失败 usage、原文匹配、持久化失败不重试，以及数据库凭证轮换/禁用和模型禁用。协议矩阵暴露的非法 JSON 原文前缀与 D06 摘要检查点跨批次问题已修正。
 
-真实文本/双工具/追加/摘要脚本已加入 smoke-real，读取此前环境变量、仅使用唯一测试前缀；尚未执行。自动审批拒绝了真实模型/TOS 调用，要求本次具体载荷、目的地与最多 8 次付费请求获得明确授权，已向用户询问。全阶段不得标记完成；本地验证结果及真实结果随后补充。
+初次本地验收时，真实文本/双工具/追加/摘要脚本已加入 smoke-real，读取此前环境变量、仅使用唯一测试前缀，尚未执行。自动审批拒绝了真实模型/TOS 调用，要求本次具体载荷、目的地与最多 8 次付费请求获得明确授权，已向用户询问。当时未满足全阶段完成条件；后续授权和真实结果见下文。
 
-D07 本地验收：`make verify-d06`（包含新增协议/重试/凭证用例）及全量 `make test-race` 通过；后者真实 MariaDB 集成耗时 80.562s。新增并行工具跨帧参数、观测组件标识与检查点加载断言后，Eino/Gateway/domain 针对性 race 与 TestContextStages 再次通过。日志为 .cache/d07-regression.log、.cache/d07-race.log。真实验证仍未执行，D07 保持进行中；没有新增迁移，schema 保持 7，改动尚未提交。
+D07 本地验收：`make verify-d06`（包含新增协议/重试/凭证用例）及全量 `make test-race` 通过；后者真实 MariaDB 集成耗时 80.562s。新增并行工具跨帧参数、观测组件标识与检查点加载断言后，Eino/Gateway/domain 针对性 race 与 TestContextStages 再次通过。日志为 .cache/d07-regression.log、.cache/d07-race.log。当时真实验证未执行，D07 保持进行中；后续已取得授权并完成下述真实验收。没有新增迁移，schema 保持 7。
+
+### D07 真实验收结果（2026-10-24）
+
+用户明确批准现有 MASS_LLM_MODEL_* 模型配置最多 8 次付费请求，仅发送生成测试文本、工具 Schema 和测试目录结果；TOS 仅现有 MASS_TOS_* 测试 Bucket 的 tmp/mass-d01-随机ID/，结束精确清理本次对象。读取 ~/.zshrc 的既有环境后执行 `make smoke-real`；MariaDB 使用本地独立 Unix socket 实例及随机测试库，不连接真实业务库。基准为 7916de7 加当前未提交的 D10/验收改动，schema 7，无迁移。该授权未扩展为 D10 真实恢复演练或后续无限次模型测试。
+
+实际结果：`TestRealTOSStorage` 通过（254.44s），文本冒烟 1 次、D07 工具/追加/摘要 5 次，HTTP 边界共 **6 次**，少于批准上限 8；SDK RetryTimes=0，新增跨全部 purpose 的共享原子计数器在发送前硬性拒绝超额。20 个并发本地请求的 race 用例 TestRealRequestBudgetGuard 确认仅 8 个请求实际到达回环服务。没有为了用完剩余额度而重复调用。真实 TOS 同时通过定义、资源、十四工具、快照和日志回归；结束删除 **563 个**本次精确 key/版本并逐个读取确认 404，测试未留下其随机数据库与账号。
+
+实际模型为配置端点的 `deepseek-flash`，适配组件 eino-ark-v0.1.71；上下文窗口测试配置 32768、模型 max_output_tokens 2048、任务 max_input_tokens 20000 / reserved_output_tokens 1024、max_steps 8 / timeout 180s。观察时间 2026-10-24 17:46:47（Asia/Shanghai；报告 UTC 为 09:46:47Z）。没有在文档中保存端点秘密或 API key。
+
+| purpose / 阶段 | 输入 Token | 输出 Token | 缓存读取 Token | 首文本延迟 ms | 总时长 ms |
+| --- | --- | --- | --- | --- | --- |
+| task / initial，双工具请求 | 1887 | 75 | 0 | 1524 | 3353 |
+| task / append，工具结果后续 | 2445 | 40 | 1920 | 2040 | 3541 |
+| task / append，新用户追加 | 2507 | 9 | 2304 | 1008 | 1444 |
+| summary / summary_generation | 2732 | 538 | 0 | 21784 | 32451 |
+| task / history_compressed | 1395 | 10 | 384 | 933 | 1403 |
+
+5/5 样本返回 cache_read_tokens，覆盖率 100%，3/5 正值；正常追加两样本加权缓存读取/输入比为 85.30%，压缩后为 27.53%，初始与摘要为 0。全部 HTTP 200；cache_write_tokens 全为 null，保持未知，不补零。两次真实工具为 list_files 和 glob_files，摘要只生成一次。样本按阶段记录，仅证明本次返回了实际缓存命中，不据此承诺稳定命中、吞吐或延迟收益，也未启用显式远端缓存。
+
+忽略的原始观测为 `.cache/d07-real-observation.json`，校验/总请求数及清理收据为 `.cache/d07-real-verification.json`，执行日志 `.cache/d07-real-validation.log`。A21/A31 更新为 historical_real，以本文保留实际结果，普通 CI 不读取真实配置、不反复消耗额度。D07 完成条件满足；完整 MVP 仍保留 A22 的 D10 真实 TOS 留存/恢复待验收。 新增计数器后的本地 TestRealRequestBudgetGuard、TestRuntimeVertical、TestContextStages 针对性 race 回归通过（14.107s），go vet、51 项证据链接和 diff 检查通过；完整门槛分支复查仅因 A22 非零退出，没有再次调用模型。日志 .cache/d07-approved-local-regression.log / .cache/d07-approved-full-gate.log。
 
 ## E15.9 D08 完整调试工作台（2026-10-24）
 
-按 E10 允许在 D07 真实凭证验证阻塞时先完成页面。基于 db55c28，数据库 schema 仍为 7，无新迁移。Agent 固定版本直接进入幂等调试 Session；实际模型配置、定义快照、工具、日志和快照继续沿用既有执行路径。D07 的真实外部调用没有执行，不因本阶段验收改变其状态。
+按 E10 允许在 D07 真实凭证验证阻塞时先完成页面。基于 db55c28，数据库 schema 仍为 7，无新迁移。Agent 固定版本直接进入幂等调试 Session；实际模型配置、定义快照、工具、日志和快照继续沿用既有执行路径。D08 初次验收时 D07 的真实外部调用未执行；后续补齐结果见 E15.8。
 
 AguiRunClient 对快照运行时校验，帧经 Schema/reducer 后才推进 UI 游标；重新授权查询后受控重连，去重、缺口拒绝、旧回调隔离、终态停止及连续失败转人工同步。修复旧前端因 CUSTOM 成功状态提前关闭而漏接标准终态的问题。公共 ui-snapshot 去掉内部摘要标记，后端仍保留回放用途。大载荷按流实际字节限制 1 MiB；消息/工具按 50 条窗口展示，Trace 保留分类/水位分页/来源/下载，Markdown 控制 HTML、图片和 URL。
 
@@ -639,3 +662,57 @@ AguiRunClient 对快照运行时校验，帧经 Schema/reducer 后才推进 UI �
 进程/浏览器用例：两个 Session 的写文件工具结果均已确认，模型第二次调用阻塞时 SIGKILL 自建 mass 子进程；另一个 Session 的 queued 任务和一个已取消 queued 同时存在。重启后前两项只登记中断，不重做写入；queued 正常执行，cancelled 不执行；下载及刷新历史不调用模型。以同一账号另一个空间 ID 查询 Run、Trace、metrics、UI 快照、工作快照、载荷和产物，全部拒绝。
 
 新增 `make verify-d09-local` 显式固定 MASS_TEST_TOS=0/MASS_TEST_REAL_MODEL=0，避免继承环境意外调用云服务；包含 verify-d08、进程故障测试、全量 race 及证据链接检查；CI 使用该目标。报告 .cache/d09-acceptance.json 保存基准版本、时间、来源 SHA 和每项状态。A21/A31=pending_real，A22=pending_delivery；A25=此前真实 TOS 证据（E15.3—E15.6），本阶段不冒充再次真实验证；A33=显式缓存未启用。其余条目关联已执行的本地/协议测试，链接检查本身不代表功能通过。`make verify-d09-local` 全流程通过，包含既有协议/浏览器回归、新增故障与进程测试和全量 race（集成 81.564s）；日志 .cache/d09-verify.log。最后增加本地云测试开关屏蔽后，模拟继承真实测试开关仍被固定为 0 的 Make 作用域检查通过（未重复运行已通过的功能测试）。
+
+### E15.11 D10 本地交付与备份还原
+
+基于 7916de7，本阶段增加可重现的当前主机平台交付包、`build-info`、停服 `member add/remove` 维护命令、`restore-storage` 离线对象迁移，以及打包后全流程验收。schema 仍为 7，不新增迁移。D10 初次本地验收时 D07 真实模型验证未获追加授权，当时没有发起真实云存储请求；D07 后续已按 E15.8 单独授权并通过，D10 云 TOS 对象留存/恢复仍待授权环境实测。以下本地证据不等于完整 MVP 通过。
+
+交付构建：构建机按仓库锁定版本执行 `make setup && make release`。release 先检查生成物，构建包含前端和迁移的单一二进制，以当前提交时间作为 SOURCE_DATE_EPOCH，生成 `.cache/release/mass-<os>-<arch>.tar.gz` 和 `.sha256`。包内 `manifest.json` 逐文件校验，`build-info.json` 和 `bin/mass build-info` 包含源码 revision、version、Go、平台、schema 和构建时间（Unix 秒）。VERSION 可显式设置；相同源码/工具链/参数应有相同 SHA-256，`dirty` 表示带未提交修改。当前仅打包/验收构建机平台；没有宣称跨平台二进制已经测试。配置来自 configs/mass.example.yaml，打包时改名 mass.yaml，真实 mass.yaml 与秘密不入包。产物不额外发布到外部。
+
+运行与升级：解压到专用目录，按 README 配置同一 mass.yaml 及秘密环境，用迁移账号执行 `bin/mass migrate --config mass.yaml`，初始化账号后删除迁移 DSN 注入，仅用 DML 应用账号执行 `bin/mass serve --config mass.yaml`。运行目录不需要源码、Go、Node/npm；浏览器仅访问 Go 端口。停止前先在页面等待/取消所有排队及运行中任务并确认终态，执行 `kill -TERM <pid>` 并等待正常退出；shutdown_timeout 内未完成则按中断处理，不能假定未保存文件已备份。升级需保留旧二进制、原主密钥、关系库和对象备份，先停服备份再迁移；新版本写入后不承诺旧版本直接降级。
+
+备份操作（`mass`、`mass_restore` 为示例库名，路径由操作者选择；客户端工具在备份管理机执行，不是 mass 运行依赖）：
+
+1. 停服并确认所有 Run 终结；保留原配置以及与密文对应的原 MASS_MASTER_KEY，秘密另行安全存放。源/恢复配置使用同一模板结构，但给数据库环境变量不同名称，例如原 MASS_MARIADB_DSN 和恢复 MASS_RESTORE_DSN，分别指向原库和恢复库。不要更换原主密钥后丢弃旧值。
+2. 在权限受限的文件中配置备份账号。MariaDB 客户端的 `--defaults-file` 必须是第一个选项，文件包含 `[client]`、host/socket、user、password 等，不能提交仓库或将密码放入命令行。设置 `umask 077` 后导出：
+
+   ```sh
+   mariadb-dump --defaults-file=/secure/source.cnf --single-transaction --hex-blob \
+     --skip-add-drop-table --skip-add-locks --skip-comments --skip-dump-date --no-tablespaces \
+     mass > /secure/mass.sql
+   ```
+
+3. 停服期间同时保存对象清单，例如导出 content_objects 的 space_id/id/object_key/tos_uri/version_id/size/sha256/state；SQL 备份已包含这些字段。通过独立的 TOS 留存策略/受控复制保留清单对应的字节及版本，不得让过期策略清除它们。日志、定义资源、产物、快照归档和 Manifest 都在对象范围内。数据库导出不包含 TOS 字节；会话临时目录不是内容备份。记录数据库导出和对象清单的校验和，并按实际基础设施保护原主密钥。
+4. 使用恢复管理员创建**新的空库**并导入；不要将示例命令指向已有业务库。恢复应用账号按 Quickstart 只授权该库的 DML，导入账号另行具备 DDL 权限：
+
+   ```sh
+   mariadb --defaults-file=/secure/restore-admin.cnf -e 'CREATE DATABASE mass_restore CHARACTER SET utf8mb4 COLLATE utf8mb4_bin'
+   mariadb --defaults-file=/secure/restore-admin.cnf mass_restore < /secure/mass.sql
+   ```
+
+5. 准备 `restored.yaml`：dsn_env 指向 MASS_RESTORE_DSN；TOS endpoint/bucket 可指向独立恢复目标，prefix 设为新的互不包含前缀，例如原 `mass/`、恢复 `restore-20261024/`；源配置 `original.yaml` 保留原库 DSN 环境名，TOS 可指向原 Bucket 或按原 key 留存的独立备份 Bucket；跨 Bucket 不沿用原版本 ID，而是读取留存字节并校验哈希。源和目标库名必须不同，即使在不同服务器也采取此保守限制。主密钥必须能解密备份中所有凭证；目标使用新的受限临时目录，演练时绑定隔离地址。仅注入已授权目标的凭证，保持恢复服务停止：
+
+   ```sh
+   bin/mass check-config --config restored.yaml
+   bin/mass restore-storage --config restored.yaml --source-config original.yaml --expect-database mass_restore
+   bin/mass rebuild-views --config restored.yaml
+   bin/mass serve --config restored.yaml
+   ```
+
+6. 检查 /health/live、/health/ready，登录查看固定 Skill/Agent、Trace、历史消息与产物，确认这些读取没有新模型请求。显式提交一个新任务，确认原凭证仍可解密且能从最后快照继续读取文件。演练报告注明供应商、环境、构建 revision 和授权范围，避免把本地夹具结论移用于真实云环境。
+
+恢复实现：不连接源库；目标取得数据库运行锁，校验精确库名、schema、全部凭证、Run 静止、无未完成上传、日志序列/摘要及引用。每个 ready 对象按 size/SHA-256 校验源，禁止覆盖地上传到目标前缀并读回验证，所有对象通过后在一次关系事务内校正 content_objects 和 workspace_snapshots 的位置/版本索引。历史事件和摘要不改写，原 URI 是历史来源；读取通过对象 ID 和当前索引解析。目标已有同内容时允许重试，源对象不被删除；提交后的重试只验证目标对象，不再依赖源字节。复制中失败不修改数据库位置索引，已写出的独立副本保留以便重试，没有自动删除或自动回滚外部副本。
+
+故障处理：库名/前缀不符或运行锁被占用时停止恢复，核对隔离配置；主密钥错误先找回原密钥，不能生成新密钥覆盖；缺失、损坏或版本不存在时找回留存对象，不能忽略校验；未完成上传/非终态 Run 需回到原实例核对已确认效果并完成正常收尾，再建立静止备份。还原后缺失本地临时目录由快照恢复，未确认快照的进程内修改不保证恢复。命令均以非零退出明确失败；不提供覆盖已有数据库、修改原日志、跳过损坏对象或自动重做工具的恢复选项。
+
+停服成员维护命令：`mass member add --actor OWNER_ID --space SPACE_ID --username NAME --config mass.yaml` 与 `member remove --actor OWNER_ID --space SPACE_ID --user USER_ID`。数据库操作者提供现有 owner，沿用成员服务的权限检查/审计及 owner 删除限制；运行锁占用时拒绝 CLI，在线使用鉴权页面/API。
+
+本地验收环境：macOS arm64、Go 1.26.9、Node 24.22.0/npm 11.19.1、MariaDB 服务/客户端 11.8.9、Chromium，独立 Unix socket skip-networking 测试服务。命令 `make verify-d10-local`；MariaDB 客户端不在 PATH 时指定 MASS_TEST_MARIADB_CLIENT/MASS_TEST_MARIADB_DUMP 的绝对路径。该目标强制真实 TOS/模型标志为 0，普通 CI 同样不注入云凭证。交付脚本使用随机空库，由打包后的 mass migrate 建表，之后发布 Skill/Agent、运行真实 Eino/HTTP 与 TOS SDK 回环流程；导出/导入另一个随机空库，先将对象留存到独立备份 Bucket 并删除原 Bucket 对象，再迁移 28 个对象到恢复前缀，移除原临时目录和备份副本后从还原快照继续新 Run。两次完整前端/Go 构建后的归档字节相同。PATH 为空的运行进程仍提供页面/API/SSE，测试编排用 Node/Go/客户端不属于应用运行依赖。
+
+验收覆盖错误目标库、错误主密钥、未完成上传、非终态 Run、损坏日志、损坏源/目标对象、活动服务锁、幂等重试、历史/产物恢复、离线视图重建不调用模型，以及 member CLI 授权。截图/报告/日志为忽略的 `.cache/d10-restored.png`、`.cache/d10-delivery.json` 和 `.cache/d10-verify.log`。报告含构建及归档摘要、SQL 导出摘要、对象计数，明确 real_cloud=false；不包含原配置、密码、密钥或原始业务内容。
+
+当前完整门槛：A21/A31 的 D07 真实文本/工具/摘要/缓存观测已补齐，A22 的 D10 真实 TOS 留存/恢复仍待授权验证。`make verify` 先运行本地全套，再由证据检查器对 pending 项失败；补齐真实证据后还需 MASS_VERIFY_REAL_APPROVED=1 才执行 smoke-real（最多 8 次已约定真实模型调用）。不因缺少云配置而跳过后报全套通过；普通 CI 仅使用 verify-d10-local。没有执行外部发布或替用户启动长期业务服务。
+
+验证结果：锁定 npm 的 `npm ci` 成功，随后 `make verify-d10-local` 退出 0，包含生成物漂移、类型/lint/vet/边界/格式、Go/Vitest、真实隔离 MariaDB（最终不缓存集成 37.039s）、D02—D09 进程/浏览器回归、全包 race 和 D10 发布/恢复。race 首轮集成 80.774s，最终重跑命中缓存。51 项证据引用检查和 git diff --check 均通过。用 `make -o verify-d10-local verify` 单独检查完整门槛分支，明确非零报告 A21/A22/A31，未执行后续云调用；本地前置门槛由前述实际全流程提供证据。
+
+测试中修正：空库夹具需要跳过 goose UpTo(0)；维护 CLI 由测试编排异步启动，避免同步等待阻塞同进程回环 TOS 服务；初次全流程在发布精确工具链检查时发现 PATH 的 npm 实为 11.6.2，已仅在临时工具目录安装 11.19.1、按锁文件重装前端依赖并重跑全流程。发布目标现在强制检查工具链，不能以错误 npm 版本悄悄生成交付包。未修改系统 npm、项目依赖版本或真实业务配置。

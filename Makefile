@@ -4,10 +4,14 @@ GO := sh scripts/go.sh
 GO_PACKAGES := ./cmd/... ./internal/... ./db/... ./tests/... ./scripts/...
 CONFIG ?= mass.yaml
 VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
+REVISION := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct 2>/dev/null || echo 0)
+export SOURCE_DATE_EPOCH
+BUILD_TIME := $(SOURCE_DATE_EPOCH)
 export NPM_CONFIG_CACHE := $(CURDIR)/.cache/npm
 export PLAYWRIGHT_BROWSERS_PATH := $(CURDIR)/.cache/playwright
 
-.PHONY: setup setup-browser generate generate-check fmt lint typecheck test-unit test-race test-e2e build-frontend dev build verify-d00 verify-d01 verify-d02 verify-d03 verify-d04 verify-d05 verify-d06 verify-d08 verify-d09-local test-fault-e2e test-debug-e2e test-context-e2e test-tools-e2e smoke-real smoke-tos test-runtime-e2e test-catalog-e2e test-integration verify
+.PHONY: setup setup-browser generate generate-check fmt lint typecheck test-unit test-race test-e2e build-frontend dev build verify-d00 verify-d01 verify-d02 verify-d03 verify-d04 verify-d05 verify-d06 verify-d08 verify-d09-local test-fault-e2e test-debug-e2e test-context-e2e test-tools-e2e smoke-real smoke-tos test-runtime-e2e test-catalog-e2e test-integration verify release test-delivery verify-d10-local check-toolchain
 setup:
 	node scripts/check-toolchain.mjs
 	$(GO) mod download
@@ -46,7 +50,21 @@ test-race: build-frontend
 	$(GO) test -race $(GO_PACKAGES)
 
 build: build-frontend
-	$(GO) build -trimpath -ldflags '-X main.version=$(VERSION)' -o bin/mass ./cmd/mass
+	CGO_ENABLED=0 $(GO) build -mod=readonly -buildvcs=false -trimpath -ldflags '-X main.version=$(VERSION) -X main.revision=$(REVISION) -X main.buildTime=$(BUILD_TIME)' -o bin/mass ./cmd/mass
+
+check-toolchain:
+	node scripts/check-toolchain.mjs
+
+release: check-toolchain generate-check build
+	$(GO) run ./scripts/release
+
+test-delivery: release
+	node scripts/delivery-smoke.mjs
+
+verify-d10-local: export MASS_TEST_TOS := 0
+verify-d10-local: export MASS_TEST_REAL_MODEL := 0
+verify-d10-local: verify-d09-local test-delivery
+	git diff --check
 
 test-e2e: build
 	node scripts/smoke.mjs
@@ -115,7 +133,8 @@ verify-d02: generate-check typecheck lint test-unit test-integration test-e2e
 verify-d00: generate-check typecheck lint test-unit
 	git diff --check
 
-# Full MVP verification must not claim success while later stages are absent.
-verify:
-	@echo 'Full MVP verify is unavailable before D10; use make verify-d08 for current execution functionality.' >&2
-	@exit 1
+# Full MVP validation includes real-provider gates; never silently skip them.
+verify: verify-d10-local
+	node scripts/check-acceptance.mjs --full
+	@test "$$MASS_VERIFY_REAL_APPROVED" = 1 || (echo 'Full verification requires explicit cloud approval; local D10 passed. See E15.11.' >&2; exit 1)
+	$(MAKE) smoke-real

@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +29,28 @@ import (
 	"github.com/imalimin/mass/internal/runtime/modelgateway"
 	"github.com/imalimin/mass/tests/testdb"
 )
+
+// Shared by the text smoke and all D07 purposes. Count at the HTTP boundary,
+// including failed sends and redirects, so the approved paid-request cap is hard.
+type paidRequestBudget struct {
+	limit int64
+	sent  atomic.Int64
+}
+
+var realModelHTTPBudget *paidRequestBudget
+
+func (b *paidRequestBudget) RoundTrip(request *http.Request) (*http.Response, error) {
+	for {
+		current := b.sent.Load()
+		if current >= b.limit {
+			return nil, run.ErrBudget
+		}
+		if b.sent.CompareAndSwap(current, current+1) {
+			break
+		}
+	}
+	return http.DefaultTransport.RoundTrip(request)
+}
 
 // exerciseD07 uses the same durable journal and gateway as production. The
 // wrapper caps actual paid attempts across all purposes, independently of Runs.
@@ -99,7 +123,7 @@ func exerciseD07(t *testing.T, blobs storage.BlobStore, prefix string) {
 		t.Fatal(err)
 	}
 
-	limited := &limitedModel{}
+	limited := &limitedModel{transport: einoadapter.ModelTransport{Base: realModelHTTPBudget}}
 	limits := storage.Limits{MaxFileBytes: 1 << 20, MaxTotalBytes: 8 << 20, MaxEntries: 1000}
 	manager, err := workspace.New(t.TempDir(), limits)
 	if err != nil {

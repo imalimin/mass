@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -118,6 +119,18 @@ func TestRealTOSStorage(t *testing.T) {
 				t.Fatalf("missing %s", key)
 			}
 		}
+		limit := int64(8)
+		if value := os.Getenv("MASS_TEST_REAL_REQUEST_LIMIT"); value != "" {
+			parsed, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || parsed < 1 || parsed > 8 {
+				t.Fatal("MASS_TEST_REAL_REQUEST_LIMIT must be between 1 and 8")
+			}
+			limit = parsed
+		}
+		realModelHTTPBudget = &paidRequestBudget{limit: limit}
+		t.Cleanup(func() {
+			t.Logf("real model HTTP requests sent: %d (hard limit %d)", realModelHTTPBudget.sent.Load(), limit)
+		})
 		exerciseRuntime(t, tracked, prefix+"real-model/", false, true)
 		exerciseD07(t, tracked, prefix+"d07/")
 	}

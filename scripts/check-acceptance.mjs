@@ -3,6 +3,7 @@
 import { readFile, mkdir, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
+if (process.argv.slice(2).some(arg => arg !== '--full')) throw Error('Usage: check-acceptance.mjs [--full]')
 const engineering = await readFile('docs/engineering.md', 'utf8')
 const required = [...engineering.matchAll(/^\| (A\d\d)/gm)].map(m => m[1])
 const evidence = JSON.parse(await readFile('scripts/acceptance-evidence.json', 'utf8'))
@@ -21,3 +22,5 @@ for (const row of evidence) {
 const report = { revision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), generated_at: new Date().toISOString(), meaning: 'Evidence references only. Local functional verification is a separate prerequisite. Real and delivery gates remain pending.', evidence }
 await mkdir('.cache', { recursive: true }); await writeFile('.cache/d09-acceptance.json', JSON.stringify(report, null, 2) + '\n')
 console.log(`Acceptance evidence: ${evidence.length} rows linked; pending: ${evidence.filter(r => r.status.startsWith('pending')).map(r => `${r.id}=${r.status}`).join(', ')}; A25=historical real TOS, A33=not enabled.`)
+
+if (process.argv.includes('--full') && evidence.some(row => row.status.startsWith('pending'))) throw Error('Full MVP gate still has pending evidence: '+evidence.filter(row => row.status.startsWith('pending')).map(row=>row.id+'='+row.status).join(', '))

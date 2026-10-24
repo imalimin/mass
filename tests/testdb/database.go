@@ -81,15 +81,17 @@ func NewVersion(ctx context.Context, version int64) (*Database, error) {
 	if err != nil {
 		return fail(err)
 	}
-	provider, err := goose.NewProvider(goose.DialectMySQL, d.Admin.DB, migrations.Files)
-	if err != nil {
-		return fail(err)
-	}
-	if _, err = provider.UpTo(ctx, version); err != nil {
-		return fail(err)
-	}
-	if _, err = provider.UpTo(ctx, version); err != nil {
-		return fail(err)
+	if version > 0 {
+		provider, err := goose.NewProvider(goose.DialectMySQL, d.Admin.DB, migrations.Files)
+		if err != nil {
+			return fail(err)
+		}
+		if _, err = provider.UpTo(ctx, version); err != nil {
+			return fail(err)
+		}
+		if _, err = provider.UpTo(ctx, version); err != nil {
+			return fail(err)
+		}
 	}
 	cfg.User = user
 	cfg.Passwd = password
