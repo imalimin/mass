@@ -20,7 +20,18 @@ type RunData struct {
 type StartData struct {
 	OwnerID string `json:"owner_id,omitempty"`
 }
+type SummaryData struct {
+	ContentID       string `json:"content_id"`
+	ResponseEventID string `json:"response_event_id"`
+	ProjectionID    string `json:"projection_id"`
+	Through         int64  `json:"coverage_through,string"`
+	Policy          string `json:"policy"`
+}
 type ProjectionData struct {
+	Purpose            string `json:"purpose,omitempty"`
+	ParentID           string `json:"parent_projection_id,omitempty"`
+	PrefixChangeReason string `json:"prefix_change_reason,omitempty"`
+
 	ID          string `json:"id"`
 	ContentID   string `json:"content_id"`
 	Fingerprint string `json:"fingerprint"`
@@ -105,9 +116,14 @@ func validateRuntime(e Proposed) (bool, error) {
 		if Decode(e.Data, &struct{}{}) != nil {
 			return bad()
 		}
+	case "context.summary.created":
+		var d SummaryData
+		if Decode(e.Data, &d) != nil || !storage.ValidID(d.ContentID) || !storage.ValidID(d.ResponseEventID) || !storage.ValidID(d.ProjectionID) || d.Through < 1 || d.Policy == "" {
+			return bad()
+		}
 	case "context.projected":
 		var d ProjectionData
-		if Decode(e.Data, &d) != nil || !storage.ValidID(d.ID) || !storage.ValidID(d.ContentID) || !hashPattern.MatchString(d.Fingerprint) || d.Through < 1 || d.Counter == "" || d.Epoch != 1 {
+		if Decode(e.Data, &d) != nil || !storage.ValidID(d.ID) || !storage.ValidID(d.ContentID) || !hashPattern.MatchString(d.Fingerprint) || d.Through < 1 || d.Counter == "" || d.Epoch < 1 || (d.Purpose != "" && d.Purpose != "task" && d.Purpose != "summary") || (d.ParentID != "" && !storage.ValidID(d.ParentID)) {
 			return bad()
 		}
 	case "model.attempt.started":

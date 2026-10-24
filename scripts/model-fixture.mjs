@@ -4,6 +4,7 @@ import { once } from 'node:events'
 import { createHash, randomUUID } from 'node:crypto'
 export async function startModelFixture() {
   let calls = 0
+  const requests = []
   const server = createServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/tools-input') {
       let value = ''; for await (const b of req) value += b
@@ -13,12 +14,19 @@ export async function startModelFixture() {
     let body
     try { const chunks = []; for await (const b of req) chunks.push(b); body = JSON.parse(Buffer.concat(chunks)) } catch { res.writeHead(400); res.end(); return }
     calls++
+    requests.push(body)
     const messages = body.messages ?? []; let task = '', index = 0
     for (const [i, message] of messages.entries()) if (message.role === 'user' && !message.content.startsWith('[MASS')) { task = message.content; index = i }
     const count = messages.slice(index + 1).filter(m => m.role === 'tool').length
     res.setHeader('Content-Type', 'text/event-stream'); res.flushHeaders()
     const frame = (delta, reason = null, usage = undefined) => res.write(`data: ${JSON.stringify({ id: 'fixture-completion', choices: [{ index: 0, delta, finish_reason: reason }], ...(usage ? { usage } : {}) })}\n\n`)
     const usage = { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110, prompt_tokens_details: { cached_tokens: 0 } }
+    if (messages[0]?.content?.startsWith('Summarize this historical transcript') || task.startsWith('D06')) {
+      const summary = messages[0]?.content?.startsWith('Summarize this historical transcript')
+      if (summary && body.tools?.length) throw new Error('summary bound tools')
+      frame({ role: 'assistant', content: summary ? 'D06 saved history: earlier reports completed; no tool effects.' : task.includes('long') ? 'report fact. '.repeat(60) : 'D06 continued.' }, 'stop', usage)
+      res.end('data: [DONE]\n\n'); return
+    }
     if (/wait|等待/.test(task)) {
       frame({ role: 'assistant', content: '正在等待取消或重启。' })
       const timer = setTimeout(() => { if (!res.destroyed) { frame({}, 'stop', usage); res.end('data: [DONE]\n\n') } }, 30000)
@@ -62,5 +70,5 @@ export async function startModelFixture() {
     res.end('data: [DONE]\n\n')
   })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
-  return { endpoint: `http://127.0.0.1:${server.address().port}/v1`, get calls() { return calls }, stop: () => new Promise((resolve, reject) => server.close(e => e ? reject(e) : resolve())) }
+  return { endpoint: `http://127.0.0.1:${server.address().port}/v1`, get calls() { return calls }, get requests() { return requests }, stop: () => new Promise((resolve, reject) => server.close(e => e ? reject(e) : resolve())) }
 }

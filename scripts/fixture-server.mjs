@@ -73,6 +73,6 @@ export async function startFixtureServer({ storage = false, model = false } = {}
     })
     }
     await startApplication()
-    return { url, stop, modelCalls: () => provider?.calls ?? 0, restart: async () => { child.kill('SIGKILL'); await exited; errors = ''; await startApplication() } }
+    return { url, stop, modelCalls: () => provider?.calls ?? 0, modelRequests: () => provider?.requests ?? [], restart: async () => { child.kill('SIGKILL'); await exited; errors = ''; await startApplication() } }
   } catch (error) { await stop().catch(() => {}); throw error }
 }

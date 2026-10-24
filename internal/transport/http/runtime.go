@@ -208,7 +208,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 			if kind == "contexts" {
 				filtered := []journal.Event{}
 				for _, e := range page.Events {
-					if e.Type == "context.projected" {
+					if e.Type == "context.projected" || e.Type == "context.summary.created" {
 						filtered = append(filtered, e)
 					}
 				}
@@ -218,6 +218,71 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 			return nil
 		})
 	}
+	register("GET "+base+"/runs/{run_id}/contexts/{projection_id}", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		space := r.PathValue("space_id")
+		view, err := runtime.Repo.RuntimeRun(r.Context(), u.ID, space, r.PathValue("run_id"))
+		if err != nil {
+			return err
+		}
+		history, _, err := resource.History(r.Context(), runtime.Snapshots.Journal, u.ID, space, view.SessionID)
+		if err != nil {
+			return err
+		}
+		var projection run.Prepared
+		found := false
+		for _, e := range history {
+			if e.RunID == view.ID && e.Type == "context.projected" {
+				var d journal.ProjectionData
+				journal.Decode(e.Data, &d)
+				if d.ID == r.PathValue("projection_id") {
+					if err = resource.ReadJSON(r.Context(), svc.Content, u.ID, space, d.ContentID, 32<<20, &projection); err != nil {
+						return err
+					}
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			return identity.ErrNotFound
+		}
+		selected := map[string]bool{}
+		for _, id := range projection.Spec.SourceEventIDs {
+			selected[id] = true
+		}
+		sources := []journal.Event{}
+		requests := []journal.Event{}
+		attempts := map[string]bool{}
+		for _, e := range history {
+			if selected[e.EventID] {
+				sources = append(sources, e)
+			}
+			if e.Type == "model.attempt.started" {
+				var d journal.AttemptData
+				journal.Decode(e.Data, &d)
+				if d.ProjectionEventID == projection.EventID {
+					attempts[d.ID] = true
+				}
+			}
+			if e.Type == "model.request.recorded" {
+				var d journal.WireData
+				journal.Decode(e.Data, &d)
+				if attempts[d.AttemptID] {
+					requests = append(requests, e)
+				}
+			}
+		}
+		var summary *run.ContextSummary
+		if projection.Spec.SummaryRef != nil {
+			summary = &run.ContextSummary{}
+			if err = resource.ReadJSON(r.Context(), svc.Content, u.ID, space, projection.Spec.SummaryRef.ObjectID, 32<<20, summary); err != nil {
+				return err
+			}
+		}
+		writeJSON(w, 200, map[string]any{"projection": projection, "source_events": sources, "requests": requests, "summary": summary})
+		return nil
+	})
+
 	register("GET "+base+"/runs/{run_id}/artifacts", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		items, err := svc.Repo.RuntimeArtifacts(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("run_id"))
 		if err != nil {

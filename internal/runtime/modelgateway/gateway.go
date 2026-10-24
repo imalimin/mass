@@ -142,6 +142,9 @@ func (g *Gateway) Call(ctx context.Context, s run.Snapshot, p run.Prepared) (rep
 	if !utf8.ValidString(reply.Message.Content) || (reply.FinishReason != "stop" && reply.FinishReason != "tool_calls") || (len(reply.Message.ToolCalls) > 0) != (reply.FinishReason == "tool_calls") || len(reply.Message.ToolCalls) > 16 {
 		return reply, run.ErrProtocol
 	}
+	if purpose == "summary" && len(reply.Message.ToolCalls) > 0 {
+		return reply, run.ErrProtocol
+	}
 	if reply.FinishReason == "stop" && reply.Message.Content == "" {
 		return reply, run.ErrProtocol
 	}

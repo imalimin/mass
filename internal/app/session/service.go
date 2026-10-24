@@ -107,7 +107,7 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 	b := version.Bundle
 	c := b.Config
 	m := b.Model
-	d := run.Definition{VersionID: version.ID, AgentID: in.AgentID, Debug: version.Debug, PlatformVersion: run.PlatformVersion, Platform: run.PlatformInstructions, Instructions: b.Document.Markdown, Skills: []run.Skill{}, Model: Model(*m), Tools: []run.ToolSpec{}, MaxInputTokens: c.Context.MaxInputTokens, OutputTokens: c.Context.ReservedOutputTokens, MaxSteps: c.Limits.MaxSteps, TimeoutSeconds: c.Limits.TimeoutSeconds}
+	d := run.Definition{VersionID: version.ID, AgentID: in.AgentID, Debug: version.Debug, PlatformVersion: run.PlatformVersion, Platform: run.PlatformInstructions, Instructions: b.Document.Markdown, Skills: []run.Skill{}, Model: Model(*m), Tools: []run.ToolSpec{}, Compression: c.Context.Compression, MaxInputTokens: c.Context.MaxInputTokens, OutputTokens: c.Context.ReservedOutputTokens, MaxSteps: c.Limits.MaxSteps, TimeoutSeconds: c.Limits.TimeoutSeconds}
 	refs := []storage.Ref{{Role: "agent_version", ObjectID: version.ContentID, SHA256: version.SHA256}}
 	for i, binding := range b.Bindings {
 		skill, err := s.Catalog.Version(ctx, actor, space, "skill", binding.SkillID, binding.VersionID)

@@ -35,14 +35,15 @@ type State struct {
 	Error           string         `json:"error"`
 }
 type Checkpoint struct {
-	SessionID string `json:"session_id"`
-	Source    int64  `json:"source_sequence,string"`
-	Cursor    int64  `json:"cursor,string"`
-	Profile   string `json:"protocol_profile"`
-	Mapper    int    `json:"mapper_version"`
-	Parser    int    `json:"parser_version"`
-	Closed    bool   `json:"closed"`
-	State     State  `json:"state"`
+	SummaryAttempts map[string]bool `json:"summary_attempts,omitempty"`
+	SessionID       string          `json:"session_id"`
+	Source          int64           `json:"source_sequence,string"`
+	Cursor          int64           `json:"cursor,string"`
+	Profile         string          `json:"protocol_profile"`
+	Mapper          int             `json:"mapper_version"`
+	Parser          int             `json:"parser_version"`
+	Closed          bool            `json:"closed"`
+	State           State           `json:"state"`
 }
 type Frame struct {
 	Sequence int64           `json:"sequence,string"`
@@ -153,7 +154,17 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 			cp.State.Messages = append(cp.State.Messages, MessageState{ID: id})
 			return &cp.State.Messages[len(cp.State.Messages)-1]
 		}
+		if cp.SummaryAttempts == nil {
+			cp.SummaryAttempts = map[string]bool{}
+		}
 		switch source.Type {
+		case "model.attempt.started":
+			var d journal.AttemptData
+			journal.Decode(source.Data, &d)
+			if d.Purpose == "summary" {
+				cp.SummaryAttempts[d.ID] = true
+			}
+			custom("mass.trace.v1", map[string]any{"eventType": source.Type, "purpose": d.Purpose, "attemptId": d.ID})
 		case "run.created":
 			cp.State.Status = "queued"
 			if err := emit(events.NewRunStartedEvent(cp.SessionID, runID)); err != nil {
@@ -169,6 +180,9 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 		case "model.response.delta":
 			var d journal.DeltaData
 			journal.Decode(source.Data, &d)
+			if cp.SummaryAttempts[d.AttemptID] {
+				continue
+			}
 			m := message(d.MessageID)
 			if m.Text == "" {
 				emit(events.NewTextMessageStartEvent(d.MessageID, events.WithRole("assistant")))
@@ -178,6 +192,10 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 		case "model.response.completed":
 			var d journal.ResponseData
 			journal.Decode(source.Data, &d)
+			if cp.SummaryAttempts[d.AttemptID] {
+				custom("mass.usage.v1", map[string]any{"usage": d.Usage, "attemptId": d.AttemptID, "purpose": "summary"})
+				continue
+			}
 			for i := range cp.State.Messages {
 				m := &cp.State.Messages[i]
 				if m.ID == d.MessageID && !m.Closed {
@@ -202,6 +220,10 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 		case "model.attempt.failed":
 			var d journal.AttemptFailedData
 			journal.Decode(source.Data, &d)
+			if cp.SummaryAttempts[d.AttemptID] {
+				custom("mass.usage.v1", map[string]any{"usage": d.Usage, "attemptId": d.AttemptID, "purpose": "summary"})
+				continue
+			}
 			for i := range cp.State.Messages {
 				m := &cp.State.Messages[i]
 				if m.ID == d.MessageID && !m.Closed {
@@ -251,7 +273,7 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 		case "context.projected":
 			var d journal.ProjectionData
 			journal.Decode(source.Data, &d)
-			custom("mass.context.v1", map[string]any{"projectionId": d.ID, "fingerprint": d.Fingerprint, "epoch": d.Epoch, "payloadRef": d.ContentID})
+			custom("mass.context.v1", map[string]any{"projectionId": d.ID, "fingerprint": d.Fingerprint, "epoch": d.Epoch, "purpose": d.Purpose, "prefixChangeReason": d.PrefixChangeReason, "payloadRef": d.ContentID})
 		case "run.finished":
 			var d journal.FinishData
 			journal.Decode(source.Data, &d)

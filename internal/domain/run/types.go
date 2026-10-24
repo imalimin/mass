@@ -13,6 +13,7 @@ var (
 	ErrState         = errors.New("run_state_conflict")
 	ErrCancelled     = errors.New("run_cancelled")
 	ErrBudget        = errors.New("budget_exceeded")
+	ErrSummary       = errors.New("context_summary_failed")
 	ErrOverflow      = errors.New("context_overflow")
 	ErrUnavailable   = errors.New("runtime_unavailable")
 	ErrProtocol      = errors.New("model_protocol_error")
@@ -62,6 +63,7 @@ type Definition struct {
 	Model           ModelConfig `json:"model"`
 	Tools           []ToolSpec  `json:"tools"`
 	ToolPolicy      ToolPolicy  `json:"tool_policy,omitempty"`
+	Compression     string      `json:"compression,omitempty"`
 	MaxInputTokens  int         `json:"max_input_tokens"`
 	OutputTokens    int         `json:"output_tokens"`
 	MaxSteps        int         `json:"max_steps"`
@@ -139,6 +141,20 @@ type Reply struct {
 	ResponseEventID string  `json:"response_event_id"`
 }
 type ProjectionSpec struct {
+	EffectiveConfigEventID string            `json:"effective_config_event_id,omitempty"`
+	Omissions              []ContextOmission `json:"omissions,omitempty"`
+	Policy                 string            `json:"policy,omitempty"`
+	Epoch                  int               `json:"context_epoch,omitempty"`
+	ParentID               string            `json:"parent_projection_id,omitempty"`
+	BaseProjectionID       string            `json:"base_projection_ref,omitempty"`
+	SummaryRef             *storage.Ref      `json:"summary_ref,omitempty"`
+	SummaryThrough         int64             `json:"summary_through,string,omitempty"`
+	PrefixChangeReason     string            `json:"prefix_change_reason,omitempty"`
+	ToolsSHA256            string            `json:"tools_sha256,omitempty"`
+	EffectiveConfigSHA256  string            `json:"effective_config_sha256,omitempty"`
+	Blocks                 []ContextBlock    `json:"ordered_block_refs,omitempty"`
+	OmittedEventIDs        []string          `json:"omitted_event_ids,omitempty"`
+
 	Purpose          string   `json:"purpose"`
 	Through          int64    `json:"through_sequence,string"`
 	Counter          string   `json:"counter"`
@@ -150,13 +166,14 @@ type ProjectionSpec struct {
 	SourceEventIDs   []string `json:"source_event_ids"`
 }
 type Prepared struct {
-	ID          string         `json:"id"`
-	EventID     string         `json:"event_id"`
-	Fingerprint string         `json:"fingerprint"`
-	Spec        ProjectionSpec `json:"spec"`
-	Messages    []Message      `json:"messages"`
-	Tools       []ToolSpec     `json:"tools"`
-	InputTokens int            `json:"input_tokens"`
+	ID            string         `json:"id"`
+	EventID       string         `json:"event_id"`
+	Fingerprint   string         `json:"fingerprint"`
+	ContentDigest string         `json:"content_digest"`
+	Spec          ProjectionSpec `json:"spec"`
+	Messages      []Message      `json:"messages"`
+	Tools         []ToolSpec     `json:"tools"`
+	InputTokens   int            `json:"input_tokens"`
 }
 type Outcome struct {
 	FinalResponseEventID string `json:"final_response_event_id"`

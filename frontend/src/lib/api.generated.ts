@@ -772,6 +772,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/spaces/{space_id}/runs/{run_id}/contexts/{projection_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["inspectRunContext"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/spaces/{space_id}/runs/{run_id}/artifacts": {
         parameters: {
             query?: never;
@@ -1067,7 +1083,7 @@ export interface components {
             name: "MASS";
             version: string;
             /** @enum {string} */
-            stage: "D00" | "D02" | "D03" | "D04" | "D05";
+            stage: "D00" | "D02" | "D03" | "D04" | "D05" | "D06";
             /** @constant */
             protocol_profile: "mass-agui-v1";
         };
@@ -1230,6 +1246,16 @@ export interface components {
             enabled: boolean;
             revision: number;
         };
+        ContextInspection: {
+            projection: {
+                [key: string]: unknown;
+            };
+            source_events: components["schemas"]["JournalEvent"][];
+            requests: components["schemas"]["JournalEvent"][];
+            summary: {
+                [key: string]: unknown;
+            } | null;
+        };
         JournalEvent: {
             /** Format: uuid */
             event_id: string;
@@ -1320,6 +1346,8 @@ export interface components {
             resources?: components["schemas"]["SkillResource"][];
         };
         RuntimeDefinition: {
+            /** @enum {string} */
+            compression?: "summary" | "reject";
             /** Format: uuid */
             version_id: string;
             /** Format: uuid */
@@ -5216,6 +5244,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JournalPage"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    inspectRunContext: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+                run_id: string;
+                projection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextInspection"];
                 };
             };
             /** @description Request rejected or dependency unavailable. */

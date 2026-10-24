@@ -115,6 +115,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		budget := control.New(s, started, history, func(ctx context.Context) error { return lease.CheckRun(ctx, s) })
 		contextPlanner := &planner.Planner{Journal: journalService, Content: content, Projector: &projector.Projector{Content: content}, Tools: registryService}
 		gateway := &modelgateway.Gateway{Journal: journalService, Content: content, Transport: transport, Credentials: auth, Control: budget}
+		contextPlanner.Model = gateway
 		fileService := &resource.FileService{Workspaces: workspaces, Content: content, Cursors: auth, MaxBytes: min(c.Storage.MaxFileBytes, 1<<20), Limits: storage.Limits{MaxFileBytes: c.Storage.MaxFileBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes, MaxEntries: c.Storage.MaxEntries}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
 		code := &resource.CodeService{Engine: codeEngine, Files: fileService, Network: &resource.Network{}, Journal: journalService, Content: content}
 		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: &resource.Sources{Files: fileService, Journal: journalService}, Code: code, Journal: journalService}, Control: budget, Journal: journalService, Content: content}

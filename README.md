@@ -2,7 +2,7 @@
 
 Multi-use Agent Systems：支持空间协作、Agent/Skill 定义、版本管理与连续任务执行的单服务应用。
 
-当前已完成 D00—D05：可配置模型、发布 Agent/Skill、创建连续对话，使用全部十四个内置工具处理文件、已接受附件和固定版本 Skill 资源。支持 JavaScript 文件/HTTP/CSV 操作、计划展示、产物下载、Trace、取消和快照恢复；自动摘要待 D06 实现。
+当前已完成 D00—D06：可配置模型、发布 Agent/Skill、创建连续对话，使用全部十四个内置工具处理文件、已接受附件和固定版本 Skill 资源。支持 JavaScript 文件/HTTP/CSV 操作、计划展示、产物下载、Trace、取消和快照恢复；支持阶段摘要复用和原始事件 → 投影 Manifest → 实际请求的来源检查。
 
 > 本文件提供项目简介、Quickstart 和建设文档入口。系统方案及工程验收继续由文末四份建设文档维护，不新增专题主文档。
 
@@ -110,7 +110,7 @@ bin/mass check-config --config mass.yaml
 bin/mass migrate --config mass.yaml
 ```
 
-依次看到 `configuration valid` 和 `migrations applied` 即表示配置格式有效、迁移已完成。`check-config` 不验证外部服务连通性。当前 schema 版本为 **6**；迁移文件已嵌入二进制，无需手工执行 SQL 文件。
+依次看到 `configuration valid` 和 `migrations applied` 即表示配置格式有效、迁移已完成。`check-config` 不验证外部服务连通性。当前 schema 版本为 **7**；迁移文件已嵌入二进制，无需手工执行 SQL 文件。
 
 ### 5. 创建登录账号
 
@@ -199,3 +199,13 @@ unset MASS_INITIAL_PASSWORD
 - [x] SSE采用AG‑UI协议
 - [x] 技术方案的runtime模块粒度还是有点大，再细分下
 - [x] MVP版本都支持哪些tool？
+
+### 上下文与阶段摘要（D06）
+
+新建 Session 使用 Agent 的 `context.compression: summary` 时，上下文达到输入预算的 85% 会尝试压缩完整旧轮次，保留当前请求和全部工具配对；`reject` 直接拒绝超限输入。摘要通过同一模型网关调用，禁用工具，消耗当前 Run 的调用次数与 Token 预算。保存并验证成功后才切换 epoch，后续轮次复用已保存摘要。D05 及更早已创建 Session 的固定定义没有压缩字段，继续采用拒绝策略；需要创建新 Session 才会使用新配置。
+
+在“Trace 与上下文”中展开 `context.projected`，点击“检查上下文来源”，可查看 epoch、前缀变化原因、选取/省略事件、完整投影与实际模型请求。摘要及递归来源会保留，摘要响应不会显示为助手任务回复。大工具结果使用固定的 4 KiB 数据节选，完整结果仍可在 Trace 下载。
+
+计数仍为保守估计。关键输入、当前轮工具链或摘要请求无法容纳时明确失败；摘要失败显示 `context_summary_failed`，容量失败显示 `context_overflow`。阶段前缀稳定不代表云端缓存命中，真实缓存收益验证属于 D07。
+
+升级 D05 时，构建新二进制后先运行 `mass migrate --config mass.yaml`，再启动服务。开发验收使用 `make verify-d06`，需要显式设置隔离 MariaDB 的 `MASS_TEST_ADMIN_DSN`。

@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: MASS API
   version: 0.5.0
-  description: D05 complete built-in tools, attachments, JavaScript file/network I/O audit, plans and immutable artifacts.
+  description: D06 deterministic context projection, stage summaries and request provenance, with complete built-in tools.
 servers:
   - url: /
 paths:
@@ -3201,6 +3201,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/runs/{run_id}/contexts/{projection_id}:
+    get:
+      operationId: inspectRunContext
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: projection_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextInspection'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/runs/{run_id}/artifacts:
     get:
       operationId: getRunArtifacts
@@ -3940,6 +3977,7 @@ components:
             - D03
             - D04
             - D05
+            - D06
         protocol_profile:
           type: string
           const: mass-agui-v1
@@ -4404,6 +4442,25 @@ components:
           type: integer
           minimum: 1
           maximum: 9007199254740991
+    ContextInspection:
+      type: object
+      additionalProperties: false
+      required: [projection, source_events, requests, summary]
+      properties:
+        projection:
+          type: object
+          additionalProperties: true
+        source_events:
+          type: array
+          items:
+            $ref: '#/components/schemas/JournalEvent'
+        requests:
+          type: array
+          items:
+            $ref: '#/components/schemas/JournalEvent'
+        summary:
+          type: [object, 'null']
+          additionalProperties: true
     JournalEvent:
       type: object
       additionalProperties: false
@@ -4670,6 +4727,9 @@ components:
         - max_steps
         - timeout_seconds
       properties:
+        compression:
+          type: string
+          enum: [summary, reject]
         version_id:
           type: string
           format: uuid
