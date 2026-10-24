@@ -27,7 +27,7 @@ export async function startModelFixture() {
       frame({ role: 'assistant', content: summary ? 'D06 saved history: earlier reports completed; no tool effects.' : task.includes('long') ? 'report fact. '.repeat(60) : 'D06 continued.' }, 'stop', usage)
       res.end('data: [DONE]\n\n'); return
     }
-    if (/wait|等待/.test(task)) {
+    if (/wait|等待/.test(task) || task.startsWith('D09 crash') && count > 0) {
       frame({ role: 'assistant', content: '正在等待取消或重启。' })
       const timer = setTimeout(() => { if (!res.destroyed) { frame({}, 'stop', usage); res.end('data: [DONE]\n\n') } }, 30000)
       res.on('close', () => clearTimeout(timer)); return

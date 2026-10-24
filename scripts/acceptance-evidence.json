@@ -1,0 +1,731 @@
+[
+  {
+    "id": "A01",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/identity_test.go",
+        "anchor": "TestIdentityDatabaseAndHTTP"
+      }
+    ]
+  },
+  {
+    "id": "A02",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "scripts/fault-browser-smoke.mjs",
+        "anchor": "D09 process fault passed"
+      },
+      {
+        "path": "tests/integration/identity_test.go",
+        "anchor": "TestIdentityDatabaseAndHTTP"
+      }
+    ]
+  },
+  {
+    "id": "A03",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/catalog_test.go",
+        "anchor": "TestCatalogDatabaseAndHTTP"
+      }
+    ]
+  },
+  {
+    "id": "A04",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/tools_test.go",
+        "anchor": "TestToolsVertical"
+      }
+    ]
+  },
+  {
+    "id": "A05",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/runtime_test.go",
+        "anchor": "TestRuntimeVertical"
+      }
+    ]
+  },
+  {
+    "id": "A06",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "scripts/debug-browser-smoke.mjs",
+        "anchor": "D08 workbench passed"
+      }
+    ]
+  },
+  {
+    "id": "A07",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/runtime_test.go",
+        "anchor": "TestRuntimeVertical"
+      }
+    ]
+  },
+  {
+    "id": "A08",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/faults_test.go",
+        "anchor": "TestFaultQueuedCancellationAndDatabaseLoss"
+      },
+      {
+        "path": "tests/integration/runtime_test.go",
+        "anchor": "TestRuntimeVertical"
+      },
+      {
+        "path": "scripts/fault-browser-smoke.mjs",
+        "anchor": "D09 process fault passed"
+      }
+    ]
+  },
+  {
+    "id": "A09",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/context_test.go",
+        "anchor": "TestContextStages"
+      }
+    ]
+  },
+  {
+    "id": "A10",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/context_test.go",
+        "anchor": "TestContextStages"
+      },
+      {
+        "path": "internal/runtime/context/projector/projector_test.go",
+        "anchor": "TestCompleteGroupsAndExplicitFailures"
+      }
+    ]
+  },
+  {
+    "id": "A11",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/tools_test.go",
+        "anchor": "TestToolsVertical"
+      }
+    ]
+  },
+  {
+    "id": "A12",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "internal/resource/tool_files_test.go",
+        "anchor": "TestFileEditingAndMutationBoundaries"
+      },
+      {
+        "path": "tests/integration/tools_test.go",
+        "anchor": "TestToolsVertical"
+      },
+      {
+        "path": "internal/adapter/workspace/workspace_test.go",
+        "anchor": "TestRestoreRejectsUnsafeOrIncompleteArchives"
+      }
+    ]
+  },
+  {
+    "id": "A13",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "internal/adapter/eino/protocol_test.go",
+        "anchor": "TestActualProtocolMatrix"
+      },
+      {
+        "path": "tests/integration/faults_test.go",
+        "anchor": "TestFaultSummaryRetryAccounting"
+      },
+      {
+        "path": "tests/integration/context_test.go",
+        "anchor": "TestContextStages"
+      }
+    ]
+  },
+  {
+    "id": "A14",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "internal/adapter/eino/protocol_test.go",
+        "anchor": "TestActualProtocolMatrix"
+      },
+      {
+        "path": "tests/integration/runtime_test.go",
+        "anchor": "TestRuntimeActualEinoWire"
+      }
+    ]
+  },
+  {
+    "id": "A15",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "scripts/debug-browser-smoke.mjs",
+        "anchor": "D08 workbench passed"
+      },
+      {
+        "path": "frontend/src/features/sessions/AguiRunClient.test.ts",
+        "anchor": "MASS submission and controlled AG-UI subscription"
+      },
+      {
+        "path": "scripts/tools-browser-smoke.mjs",
+        "anchor": "tool parameter stream was not interrupted"
+      }
+    ]
+  },
+  {
+    "id": "A16",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/faults_test.go",
+        "anchor": "TestFaultTimeoutAndTraceStorage"
+      },
+      {
+        "path": "tests/integration/runtime_test.go",
+        "anchor": "TestRuntimeVertical"
+      }
+    ]
+  },
+  {
+    "id": "A17",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "scripts/fault-browser-smoke.mjs",
+        "anchor": "D09 process fault passed"
+      },
+      {
+        "path": "tests/integration/faults_test.go",
+        "anchor": "TestFaultQueuedCancellationAndDatabaseLoss"
+      }
+    ]
+  },
+  {
+    "id": "A18",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "internal/runtime/control/control_test.go",
+        "anchor": "TestReservationsAndUnknownUsage"
+      },
+      {
+        "path": "internal/runtime/executor/executor_test.go",
+        "anchor": "TestConsumerContracts"
+      },
+      {
+        "path": "tests/integration/tools_test.go",
+        "anchor": "TestToolsVertical"
+      }
+    ]
+  },
+  {
+    "id": "A19",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/tools_test.go",
+        "anchor": "TestToolsVertical"
+      },
+      {
+        "path": "tests/integration/faults_test.go",
+        "anchor": "TestFaultHistoryRetentionAndCorruptRebuild"
+      }
+    ]
+  },
+  {
+    "id": "A20",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "scripts/debug-browser-smoke.mjs",
+        "anchor": "D08 workbench passed"
+      },
+      {
+        "path": "tests/integration/faults_test.go",
+        "anchor": "TestFaultRevocationDuringCode"
+      }
+    ]
+  },
+  {
+    "id": "A21",
+    "status": "pending_real",
+    "note": "Real D07 text/tool/summary and cache measurements require explicit approval; local coverage is not real-provider evidence.",
+    "sources": [
+      {
+        "path": "tests/integration/model_real_test.go",
+        "anchor": "exerciseD07"
+      }
+    ]
+  },
+  {
+    "id": "A22",
+    "status": "pending_delivery",
+    "note": "Clean deployment and database backup/restore belong to D10.",
+    "sources": [
+      {
+        "path": "docs/engineering.md",
+        "anchor": "E12 D10"
+      }
+    ]
+  },
+  {
+    "id": "A23",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "scripts/smoke.mjs",
+        "anchor": "D02 process smoke passed"
+      }
+    ]
+  },
+  {
+    "id": "A24",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/runtime_test.go",
+        "anchor": "TestRuntimeVertical"
+      },
+      {
+        "path": "tests/integration/faults_test.go",
+        "anchor": "TestFaultHistoryRetentionAndCorruptRebuild"
+      },
+      {
+        "path": "scripts/fault-browser-smoke.mjs",
+        "anchor": "D09 process fault passed"
+      }
+    ]
+  },
+  {
+    "id": "A25",
+    "status": "historical_real",
+    "note": "D01-D05 real TOS evidence is retained in E15.3-E15.6; D09 does not rerun real cloud requests.",
+    "sources": [
+      {
+        "path": "tests/integration/storage_test.go",
+        "anchor": "TestStorageJournalAndSnapshots"
+      },
+      {
+        "path": "docs/engineering.md",
+        "anchor": "E15.6"
+      }
+    ]
+  },
+  {
+    "id": "A26",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/storage_test.go",
+        "anchor": "TestStorageJournalAndSnapshots"
+      },
+      {
+        "path": "tests/integration/runtime_test.go",
+        "anchor": "TestRuntimeVertical"
+      }
+    ]
+  },
+  {
+    "id": "A27",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/context_test.go",
+        "anchor": "TestContextStages"
+      },
+      {
+        "path": "internal/runtime/context/projector/projector_test.go",
+        "anchor": "TestCompleteGroupsAndExplicitFailures"
+      }
+    ]
+  },
+  {
+    "id": "A28",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "internal/runtime/context/projector/projector_test.go",
+        "anchor": "TestCompleteGroupsAndExplicitFailures"
+      },
+      {
+        "path": "tests/integration/tools_test.go",
+        "anchor": "TestToolsVertical"
+      },
+      {
+        "path": "tests/integration/faults_test.go",
+        "anchor": "TestFaultSummaryRetryAccounting"
+      }
+    ]
+  },
+  {
+    "id": "A29",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "scripts/context-browser-smoke.mjs",
+        "anchor": "wire prefix changed"
+      }
+    ]
+  },
+  {
+    "id": "A30",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/context_test.go",
+        "anchor": "TestContextStages"
+      }
+    ]
+  },
+  {
+    "id": "A31",
+    "status": "pending_real",
+    "note": "Real D07 text/tool/summary and cache measurements require explicit approval; local coverage is not real-provider evidence.",
+    "sources": [
+      {
+        "path": "internal/domain/run/metrics_test.go",
+        "anchor": "TestCacheCoverage"
+      },
+      {
+        "path": "tests/integration/model_real_test.go",
+        "anchor": "cache_statistics"
+      }
+    ]
+  },
+  {
+    "id": "A32",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "internal/runtime/context/projector/projector_test.go",
+        "anchor": "TestCompleteGroupsAndExplicitFailures"
+      },
+      {
+        "path": "tests/integration/faults_test.go",
+        "anchor": "TestFaultHistoryRetentionAndCorruptRebuild"
+      }
+    ]
+  },
+  {
+    "id": "A33",
+    "status": "not_enabled",
+    "note": "Explicit provider cache is not enabled; no cross-space cache binding exists.",
+    "sources": [
+      {
+        "path": "docs/technical-design.md",
+        "anchor": "显式缓存"
+      }
+    ]
+  },
+  {
+    "id": "A34",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "frontend/src/lib/agui.test.ts",
+        "anchor": "fixtures"
+      },
+      {
+        "path": "scripts/agui-fixtures/main.go",
+        "anchor": "func main()"
+      }
+    ]
+  },
+  {
+    "id": "A35",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/runtime_test.go",
+        "anchor": "TestRuntimeVertical"
+      },
+      {
+        "path": "frontend/src/features/sessions/AguiRunClient.test.ts",
+        "anchor": "MASS submission and controlled AG-UI subscription"
+      }
+    ]
+  },
+  {
+    "id": "A36",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "frontend/src/features/sessions/AguiRunClient.test.ts",
+        "anchor": "MASS submission and controlled AG-UI subscription"
+      },
+      {
+        "path": "tests/integration/context_test.go",
+        "anchor": "TestContextStages"
+      }
+    ]
+  },
+  {
+    "id": "A37",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "scripts/check-boundaries.mjs",
+        "anchor": "Runtime dependency violates consumer boundaries"
+      }
+    ]
+  },
+  {
+    "id": "A38",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/runtime_test.go",
+        "anchor": "TestRuntimeVertical"
+      },
+      {
+        "path": "internal/runtime/supervisor/supervisor_test.go",
+        "anchor": "TestPanicStillFinishesOnce"
+      }
+    ]
+  },
+  {
+    "id": "A39",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/tools_test.go",
+        "anchor": "TestToolsVertical"
+      },
+      {
+        "path": "tests/integration/storage_test.go",
+        "anchor": "TestStorageJournalAndSnapshots"
+      }
+    ]
+  },
+  {
+    "id": "A40",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/faults_test.go",
+        "anchor": "TestFaultSummaryRetryAccounting"
+      }
+    ]
+  },
+  {
+    "id": "A41",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "internal/resource/tool_files_test.go",
+        "anchor": "TestFileEditingAndMutationBoundaries"
+      }
+    ]
+  },
+  {
+    "id": "A42",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/tools_test.go",
+        "anchor": "TestToolsVertical"
+      },
+      {
+        "path": "internal/resource/tool_files_test.go",
+        "anchor": "TestBoundedReadAndStableQueryPages"
+      }
+    ]
+  },
+  {
+    "id": "A43",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "internal/adapter/javascript/runner_test.go",
+        "anchor": "TestVMContractAndBoundedResults"
+      },
+      {
+        "path": "internal/adapter/javascript/runner_test.go",
+        "anchor": "TestCancellationKeepsSlotUntilHostActuallyExits"
+      }
+    ]
+  },
+  {
+    "id": "A44",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "internal/adapter/javascript/runner_test.go",
+        "anchor": "TestVMContractAndBoundedResults"
+      },
+      {
+        "path": "internal/resource/network_test.go",
+        "anchor": "TestNetworkStatusLimitsRedirectAndAuthorization"
+      }
+    ]
+  },
+  {
+    "id": "A45",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/tools_test.go",
+        "anchor": "TestToolsVertical"
+      },
+      {
+        "path": "tests/integration/context_test.go",
+        "anchor": "TestContextStages"
+      },
+      {
+        "path": "frontend/src/features/sessions/AguiRunClient.test.ts",
+        "anchor": "MASS submission and controlled AG-UI subscription"
+      }
+    ]
+  },
+  {
+    "id": "A46",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/tools_test.go",
+        "anchor": "TestToolsVertical"
+      },
+      {
+        "path": "scripts/debug-browser-smoke.mjs",
+        "anchor": "D08 workbench passed"
+      }
+    ]
+  },
+  {
+    "id": "A47",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/runtime_test.go",
+        "anchor": "TestRuntimeVertical"
+      },
+      {
+        "path": "tests/integration/faults_test.go",
+        "anchor": "TestFaultHistoryRetentionAndCorruptRebuild"
+      }
+    ]
+  },
+  {
+    "id": "A48",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/runtime_test.go",
+        "anchor": "TestRuntimeVertical"
+      },
+      {
+        "path": "tests/integration/storage_test.go",
+        "anchor": "TestStorageJournalAndSnapshots"
+      },
+      {
+        "path": "tests/integration/faults_test.go",
+        "anchor": "TestFaultQueuedCancellationAndDatabaseLoss"
+      }
+    ]
+  },
+  {
+    "id": "A49",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/faults_test.go",
+        "anchor": "TestFaultRevocationDuringCode"
+      },
+      {
+        "path": "scripts/debug-browser-smoke.mjs",
+        "anchor": "D08 workbench passed"
+      },
+      {
+        "path": "internal/transport/http/storage_test.go",
+        "anchor": "TestDownloadStopsOnRevocation"
+      }
+    ]
+  },
+  {
+    "id": "A50",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "scripts/browser-smoke.mjs",
+        "anchor": "D02 browser flow passed"
+      }
+    ]
+  },
+  {
+    "id": "A51",
+    "status": "local_evidence",
+    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "sources": [
+      {
+        "path": "tests/integration/faults_test.go",
+        "anchor": "TestFaultHistoryRetentionAndCorruptRebuild"
+      }
+    ]
+  }
+]

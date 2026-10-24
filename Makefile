@@ -7,7 +7,7 @@ VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
 export NPM_CONFIG_CACHE := $(CURDIR)/.cache/npm
 export PLAYWRIGHT_BROWSERS_PATH := $(CURDIR)/.cache/playwright
 
-.PHONY: setup setup-browser generate generate-check fmt lint typecheck test-unit test-race test-e2e build-frontend dev build verify-d00 verify-d01 verify-d02 verify-d03 verify-d04 verify-d05 verify-d06 verify-d08 test-debug-e2e test-context-e2e test-tools-e2e smoke-real smoke-tos test-runtime-e2e test-catalog-e2e test-integration verify
+.PHONY: setup setup-browser generate generate-check fmt lint typecheck test-unit test-race test-e2e build-frontend dev build verify-d00 verify-d01 verify-d02 verify-d03 verify-d04 verify-d05 verify-d06 verify-d08 verify-d09-local test-fault-e2e test-debug-e2e test-context-e2e test-tools-e2e smoke-real smoke-tos test-runtime-e2e test-catalog-e2e test-integration verify
 setup:
 	node scripts/check-toolchain.mjs
 	$(GO) mod download
@@ -77,6 +77,15 @@ test-context-e2e: build
 
 test-debug-e2e: build
 	node scripts/debug-browser-smoke.mjs
+
+test-fault-e2e: build
+	node scripts/fault-browser-smoke.mjs
+
+verify-d09-local: export MASS_TEST_TOS := 0
+verify-d09-local: export MASS_TEST_REAL_MODEL := 0
+verify-d09-local: verify-d08 test-fault-e2e test-race
+	node scripts/check-acceptance.mjs
+	git diff --check
 
 # D07 real-provider validation remains separately gated by explicit credentials.
 verify-d08: verify-d06 test-debug-e2e
