@@ -33,6 +33,12 @@ func NewHandler(assets fs.FS, version string, logger *slog.Logger, options ...Id
 	}
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status": "alive"}) })
 	mux.HandleFunc("GET /health/ready", func(w http.ResponseWriter, r *http.Request) {
+		if len(options) > 0 && options[0].Runtime != nil && options[0].Runtime.Service != nil && options[0].Runtime.Service.Ready != nil {
+			if err := options[0].Runtime.Service.Ready(r.Context()); err != nil {
+				writeError(w, 503, "runtime_unavailable", "Runtime is unavailable")
+				return
+			}
+		}
 		if len(options) == 0 || options[0].Storage == nil || options[0].Storage.Check == nil {
 			writeError(w, 503, "dependencies_not_initialized", "Storage services are unavailable")
 			return

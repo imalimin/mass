@@ -61,6 +61,42 @@ type Repository interface {
 	ReadEvents(context.Context, string, string, string, int64, *int64, int) (Page, error)
 }
 type Journal struct{ Repo Repository }
+
+// RunReader is an optional indexed read capability. It retains Session sequence
+// numbers; omitted records from other runs are not gaps in this filtered view.
+type RunReader interface {
+	ReadRunEvents(context.Context, string, string, string, string, int64, *int64, int) (Page, error)
+}
+
+func (j *Journal) ReadRun(ctx context.Context, actor, space, session, runID string, after int64, through *int64, limit int) (Page, error) {
+	if !storage.ValidID(runID) || !storage.ValidID(space) || !storage.ValidID(session) || after < 0 || limit < 1 || limit > 100 || through != nil && *through < after {
+		return Page{}, storage.ErrInvalid
+	}
+	var page Page
+	var err error
+	if reader, ok := j.Repo.(RunReader); ok {
+		page, err = reader.ReadRunEvents(ctx, actor, space, session, runID, after, through, limit)
+	} else {
+		page, err = j.Read(ctx, actor, space, session, after, through, limit)
+		items := []Event{}
+		for _, e := range page.Events {
+			if e.RunID == runID {
+				items = append(items, e)
+			}
+		}
+		page.Events = items
+	}
+	if err != nil {
+		return Page{}, err
+	}
+	for _, e := range page.Events {
+		if err = Validate(e.Proposed); err != nil {
+			return Page{}, err
+		}
+	}
+	return page, nil
+}
+
 type SessionData struct {
 	SourceSnapshotID string       `json:"source_snapshot_id,omitempty"`
 	DefinitionRef    *storage.Ref `json:"definition_ref,omitempty"`

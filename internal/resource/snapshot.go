@@ -79,7 +79,7 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 		}
 		defer archive.Close()
 		if s.Journal != nil {
-			history, _, err := History(ctx, s.Journal, actor, r.SpaceID, r.SessionID)
+			history, err := RunHistory(ctx, s.Journal, actor, r.SpaceID, r.SessionID, r.RunID, "plan.updated", "artifact.published", "tool.execution.completed")
 			if err != nil {
 				return err
 			}

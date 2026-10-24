@@ -36,11 +36,11 @@ func (r *Sources) skill(ctx context.Context, s run.Snapshot, id string) (run.Ski
 			return skill, nil
 		}
 		// Exact version objects remain referenced by session.created, including D04.
-		history, _, err := History(ctx, r.Journal, s.ActorID, s.SpaceID, s.SessionID)
+		page, err := r.Journal.Read(ctx, s.ActorID, s.SpaceID, s.SessionID, 0, nil, 1)
 		if err != nil {
 			return skill, err
 		}
-		for _, e := range history {
+		for _, e := range page.Events {
 			if e.Type != "session.created" {
 				continue
 			}
@@ -126,12 +126,9 @@ func (r *Sources) ReadAttachment(ctx context.Context, s run.Snapshot, in SourceI
 	if err := r.Files.Check(ctx, s); err != nil {
 		return run.ToolResult{}, err
 	}
-	history, _, err := History(ctx, r.Journal, s.ActorID, s.SpaceID, s.SessionID)
-	if err != nil {
-		return run.ToolResult{}, err
-	}
 	var a *run.Attachment
-	for _, e := range history {
+	reached := false
+	_, err := WalkHistory(ctx, r.Journal, s.ActorID, s.SpaceID, s.SessionID, func(e journal.Event) error {
 		if e.Type == "user.message.accepted" {
 			var d journal.UserMessageData
 			journal.Decode(e.Data, &d)
@@ -143,8 +140,16 @@ func (r *Sources) ReadAttachment(ctx context.Context, s run.Snapshot, in SourceI
 			}
 		}
 		if e.EventID == s.UserEventID {
-			break
+			reached = true
+			return io.EOF
 		}
+		return nil
+	})
+	if err != nil {
+		return run.ToolResult{}, err
+	}
+	if !reached {
+		return run.ToolResult{}, storage.ErrIntegrity
 	}
 	if a == nil || a.SessionID != s.SessionID {
 		return run.ToolResult{}, run.ToolFailure("attachment_not_accepted", "none")

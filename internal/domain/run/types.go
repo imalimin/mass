@@ -143,6 +143,7 @@ type Reply struct {
 	ResponseEventID string            `json:"response_event_id"`
 }
 type ProjectionSpec struct {
+	AuditRanges            []ContextRange    `json:"audit_ranges,omitempty"`
 	EffectiveConfigEventID string            `json:"effective_config_event_id,omitempty"`
 	Omissions              []ContextOmission `json:"omissions,omitempty"`
 	Policy                 string            `json:"policy,omitempty"`

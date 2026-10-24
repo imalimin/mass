@@ -108,7 +108,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	}
 	codeEngine := &javascript.Runner{MaxConcurrent: max(1, c.Tools.Code.MaxConcurrent)}
 	supervisorService.NewRunner = func(ctx context.Context, s run.Snapshot, started time.Time) (supervisor.Runner, error) {
-		history, _, err := resource.History(ctx, journalService, s.ActorID, s.SpaceID, s.SessionID)
+		history, err := resource.RunHistory(ctx, journalService, s.ActorID, s.SpaceID, s.SessionID, s.ID, "model.attempt.started", "model.response.completed", "model.attempt.failed", "tool.execution.started")
 		if err != nil {
 			return nil, err
 		}

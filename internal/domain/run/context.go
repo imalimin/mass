@@ -29,3 +29,12 @@ type ContextOmission struct {
 	EventID string `json:"event_id"`
 	Reason  string `json:"reason"`
 }
+
+// ContextRange preserves verified audit coverage without one ID per wire chunk.
+// Digest folds the ordered immutable event digests; the raw Journal is retained.
+type ContextRange struct {
+	From    int64  `json:"from_sequence,string"`
+	Through int64  `json:"through_sequence,string"`
+	Digest  string `json:"digest"`
+	Reason  string `json:"reason"`
+}

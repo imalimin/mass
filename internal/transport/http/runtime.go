@@ -224,7 +224,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if err != nil {
 			return err
 		}
-		history, _, err := resource.History(r.Context(), runtime.Snapshots.Journal, u.ID, space, view.SessionID)
+		history, err := resource.RunHistory(r.Context(), runtime.Snapshots.Journal, u.ID, space, view.SessionID, view.ID, "context.projected", "model.attempt.started", "model.request.recorded")
 		if err != nil {
 			return err
 		}
@@ -253,7 +253,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		sources := []journal.Event{}
 		requests := []journal.Event{}
 		attempts := map[string]bool{}
-		for _, e := range history {
+		_, err = resource.WalkHistory(r.Context(), runtime.Snapshots.Journal, u.ID, space, view.SessionID, func(e journal.Event) error {
 			if selected[e.EventID] {
 				sources = append(sources, e)
 			}
@@ -271,6 +271,10 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 					requests = append(requests, e)
 				}
 			}
+			return nil
+		})
+		if err != nil {
+			return err
 		}
 		var summary *run.ContextSummary
 		if projection.Spec.SummaryRef != nil {

@@ -14,7 +14,8 @@ import (
 )
 
 const Counter = "utf8-byte-upper-bound-v2"
-const Renderer = "mass-context-v2"
+const Renderer = "mass-context-v3"
+const LegacyRenderer = "mass-context-v2"
 const Policy = "stage-summary-v1"
 const ExcerptBytes = 4096
 
@@ -23,8 +24,17 @@ type Projector struct {
 	Cache   Cache
 }
 
-func (p *Projector) Project(ctx context.Context, s run.Snapshot, events []journal.Event, through int64, tools []run.ToolSpec) (run.Prepared, error) {
+func (p *Projector) Project(ctx context.Context, s run.Snapshot, events []journal.Event, through int64, tools []run.ToolSpec, ranges ...[]run.ContextRange) (run.Prepared, error) {
 	spec := run.ProjectionSpec{Purpose: "task", Through: through, Counter: Counter, Renderer: Renderer, Parser: 1, Policy: Policy, Epoch: 1, PrefixChangeReason: "initial"}
+	if len(ranges) > 0 {
+		spec.AuditRanges = ranges[0]
+	} else {
+		var err error
+		events, spec.AuditRanges, err = compactHistory(ctx, s, events, through)
+		if err != nil {
+			return run.Prepared{}, err
+		}
+	}
 	// A successful task projection is the epoch checkpoint. A summary alone never
 	// activates a new epoch (including after validation failure or process exit).
 	for i := len(events) - 1; i >= 0; i-- {
@@ -85,7 +95,29 @@ func (p *Projector) readJSON(ctx context.Context, s run.Snapshot, id string, v a
 // reads a clock, generates a summary, or calls a model.
 func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.Event, tools []run.ToolSpec, spec run.ProjectionSpec) (run.Prepared, error) {
 	result := run.Prepared{Spec: spec, Tools: tools, Messages: []run.Message{}}
-	if spec.Through < 1 || spec.Policy != Policy || spec.Renderer != Renderer || spec.Parser != 1 || spec.Counter != Counter || spec.Purpose != "task" || spec.Epoch < 1 {
+	if spec.Through < 1 || spec.Policy != Policy || (spec.Renderer != Renderer && spec.Renderer != LegacyRenderer) || spec.Parser != 1 || spec.Counter != Counter || spec.Purpose != "task" || spec.Epoch < 1 {
+		return result, storage.ErrSchema
+	}
+	if spec.Renderer == Renderer {
+		// Omitted audit facts are still subject to scope and schema validation
+		// when the caller supplies a full replay, before range selection.
+		for _, e := range events {
+			if e.Sequence > spec.Through {
+				break
+			}
+			if e.SpaceID != s.SpaceID || e.SessionID != s.SessionID {
+				return result, storage.ErrIntegrity
+			}
+			if err := journal.Validate(e.Proposed); err != nil {
+				return result, err
+			}
+		}
+		var err error
+		events, err = selectRanges(events, spec.AuditRanges, spec.Through)
+		if err != nil {
+			return result, err
+		}
+	} else if len(spec.AuditRanges) > 0 {
 		return result, storage.ErrSchema
 	}
 	result.Spec.Blocks = nil
@@ -132,10 +164,13 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 	results := map[string]journal.Event{}
 	var previous int64
 	for _, e := range events {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		if e.Sequence > spec.Through {
 			break
 		}
-		if e.Sequence != previous+1 || e.SpaceID != s.SpaceID || e.SessionID != s.SessionID {
+		if (spec.Renderer == LegacyRenderer && e.Sequence != previous+1) || e.SpaceID != s.SpaceID || e.SessionID != s.SessionID {
 			return result, storage.ErrIntegrity
 		}
 		previous = e.Sequence
@@ -167,7 +202,7 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 			results[d.CallID] = e
 		}
 	}
-	if previous != spec.Through {
+	if spec.Renderer == LegacyRenderer && previous != spec.Through {
 		return result, storage.ErrIntegrity
 	}
 	add([]run.Message{{Role: "system", Content: system}}, instructionSources, "fixed_instructions")
@@ -192,6 +227,9 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 
 	used := map[string]bool{}
 	for _, e := range events {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		if e.Sequence > spec.Through {
 			break
 		}
@@ -356,6 +394,9 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 	result.Spec.OmittedEventIDs = nil
 	result.Spec.Omissions = nil
 	for _, e := range events {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		if e.Sequence > spec.Through {
 			break
 		}

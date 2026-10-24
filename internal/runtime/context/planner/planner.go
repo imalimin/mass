@@ -16,7 +16,7 @@ import (
 )
 
 type Projector interface {
-	Project(context.Context, run.Snapshot, []journal.Event, int64, []run.ToolSpec) (run.Prepared, error)
+	Project(context.Context, run.Snapshot, []journal.Event, int64, []run.ToolSpec, ...[]run.ContextRange) (run.Prepared, error)
 	Build(context.Context, run.Snapshot, []journal.Event, []run.ToolSpec, run.ProjectionSpec) (run.Prepared, error)
 }
 type ModelCaller interface {
@@ -34,7 +34,7 @@ type Planner struct {
 }
 
 func (p *Planner) Prepare(ctx context.Context, s run.Snapshot) (run.Prepared, error) {
-	events, through, err := resource.History(ctx, p.Journal, s.ActorID, s.SpaceID, s.SessionID)
+	events, ranges, through, err := projector.ReadHistory(ctx, p.Journal, s)
 	if err != nil {
 		return run.Prepared{}, err
 	}
@@ -42,7 +42,7 @@ func (p *Planner) Prepare(ctx context.Context, s run.Snapshot) (run.Prepared, er
 	if err != nil {
 		return run.Prepared{}, err
 	}
-	prepared, err := p.Projector.Project(ctx, s, events, through, tools)
+	prepared, err := p.Projector.Project(ctx, s, events, through, tools, ranges)
 	if err != nil && !errors.Is(err, run.ErrOverflow) {
 		return prepared, err
 	}
@@ -169,12 +169,13 @@ func (p *Planner) Prepare(ctx context.Context, s run.Snapshot) (run.Prepared, er
 	if _, err = resource.AppendRun(ctx, p.Journal, s, event); err != nil {
 		return prepared, err
 	}
-	events, through, err = resource.History(ctx, p.Journal, s.ActorID, s.SpaceID, s.SessionID)
+	events, ranges, through, err = projector.ReadHistory(ctx, p.Journal, s)
 	if err != nil {
 		return prepared, err
 	}
 	spec := prepared.Spec
 	spec.Through = through
+	spec.AuditRanges = ranges
 	spec.SummaryRef = &ref
 	spec.SummaryThrough = coverage
 	spec.Epoch++

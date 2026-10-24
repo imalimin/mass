@@ -146,3 +146,7 @@ type persistedUIState struct {
 	agui.State
 	SummaryAttempts map[string]bool `json:"_summary_attempts,omitempty"`
 }
+
+func (r *UIRepository) ReadRunEvents(ctx context.Context, a, s, session, id string, after int64, through *int64, limit int) (journal.Page, error) {
+	return r.store.ReadRunEvents(ctx, a, s, session, id, after, through, limit)
+}

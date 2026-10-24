@@ -1,7 +1,10 @@
 package httptransport
 
 import (
+	"context"
 	"encoding/json"
+	sessionapp "github.com/imalimin/mass/internal/app/session"
+	"github.com/imalimin/mass/internal/domain/run"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -9,6 +12,32 @@ import (
 	"testing"
 	"testing/fstest"
 )
+
+func TestReadinessTracksRuntimeFaultWithoutStorageCache(t *testing.T) {
+	fault := false
+	h := NewHandler(fstest.MapFS{"index.html": {Data: []byte("MASS")}}, "test", slog.New(slog.NewTextHandler(io.Discard, nil)), IdentityOptions{
+		Storage: &StorageOptions{Check: CachedReadiness(func(context.Context) error { return nil })},
+		Runtime: &RuntimeOptions{Service: &sessionapp.Service{Ready: func(context.Context) error {
+			if fault {
+				return run.ErrUnavailable
+			}
+			return nil
+		}}},
+	})
+	for _, status := range []int{200, 503} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/health/ready", nil))
+		if w.Code != status {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		fault = true
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/health/live", nil))
+	if w.Code != 200 {
+		t.Fatal("runtime fault is not process death")
+	}
+}
 
 func TestRoutingBoundaries(t *testing.T) {
 	assets := fstest.MapFS{"index.html": {Data: []byte("<html>MASS</html>")}, "assets/app.js": {Data: []byte("export {}")}}

@@ -107,6 +107,10 @@
       {
         "path": "tests/integration/context_test.go",
         "anchor": "TestContextStages"
+      },
+      {
+        "path": "tests/integration/long_history_test.go",
+        "anchor": "TestLongHistoryContinuesAndRecovers"
       }
     ]
   },
@@ -235,6 +239,10 @@
       {
         "path": "tests/integration/faults_test.go",
         "anchor": "TestFaultQueuedCancellationAndDatabaseLoss"
+      },
+      {
+        "path": "tests/integration/long_history_test.go",
+        "anchor": "TestLongHistoryContinuesAndRecovers"
       }
     ]
   },
@@ -254,6 +262,10 @@
       {
         "path": "tests/integration/tools_test.go",
         "anchor": "TestToolsVertical"
+      },
+      {
+        "path": "tests/integration/long_history_test.go",
+        "anchor": "TestLongHistoryContinuesAndRecovers"
       }
     ]
   },
@@ -397,6 +409,10 @@
       {
         "path": "internal/runtime/context/projector/projector_test.go",
         "anchor": "TestCompleteGroupsAndExplicitFailures"
+      },
+      {
+        "path": "tests/integration/long_history_test.go",
+        "anchor": "TestLongHistoryContinuesAndRecovers"
       }
     ]
   },
@@ -554,6 +570,10 @@
       {
         "path": "internal/runtime/supervisor/supervisor_test.go",
         "anchor": "TestPanicStillFinishesOnce"
+      },
+      {
+        "path": "tests/integration/long_history_test.go",
+        "anchor": "TestLongHistoryContinuesAndRecovers"
       }
     ]
   },
@@ -704,6 +724,10 @@
       {
         "path": "tests/integration/faults_test.go",
         "anchor": "TestFaultQueuedCancellationAndDatabaseLoss"
+      },
+      {
+        "path": "tests/integration/long_history_test.go",
+        "anchor": "TestLongHistoryContinuesAndRecovers"
       }
     ]
   },

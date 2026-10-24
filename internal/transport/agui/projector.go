@@ -60,7 +60,10 @@ type Repository interface {
 type Projector struct{ Repo Repository }
 
 func (p *Projector) CatchUp(ctx context.Context, actor, space, runID string) (Checkpoint, error) {
-	for iteration := 0; iteration < 250; iteration++ {
+	for {
+		if err := ctx.Err(); err != nil {
+			return Checkpoint{}, err
+		}
 		old, err := p.Repo.LoadStream(ctx, actor, space, runID)
 		if err != nil {
 			return old, err
@@ -71,7 +74,12 @@ func (p *Projector) CatchUp(ctx context.Context, actor, space, runID string) (Ch
 		if old.Closed {
 			return old, nil
 		}
-		page, err := p.Repo.ReadEvents(ctx, actor, space, old.SessionID, old.Source, nil, 100)
+		var page journal.Page
+		if reader, ok := p.Repo.(journal.RunReader); ok {
+			page, err = reader.ReadRunEvents(ctx, actor, space, old.SessionID, runID, old.Source, nil, 100)
+		} else {
+			page, err = p.Repo.ReadEvents(ctx, actor, space, old.SessionID, old.Source, nil, 100)
+		}
 		if err != nil {
 			return old, err
 		}
@@ -92,7 +100,6 @@ func (p *Projector) CatchUp(ctx context.Context, actor, space, runID string) (Ch
 			return next, nil
 		}
 	}
-	return Checkpoint{}, run.ErrUnavailable
 }
 func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Frame, error) {
 	// Deep copy before mutating slices; a failed CAS cannot mutate the old checkpoint.

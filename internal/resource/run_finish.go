@@ -53,7 +53,7 @@ func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, outcome run.Outco
 		return err
 	}
 	// Record uncertainty after execution has actually stopped, never replay actions.
-	history, _, err := History(ctx, j, s.ActorID, s.SpaceID, s.SessionID)
+	history, err := RunHistory(ctx, j, s.ActorID, s.SpaceID, s.SessionID, s.ID, "model.attempt.started", "model.response.completed", "model.attempt.failed", "tool.execution.started", "tool.execution.completed", "operation.reconciled")
 	if err != nil {
 		return err
 	}

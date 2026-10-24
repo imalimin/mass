@@ -38,7 +38,7 @@ func PreparePlan(ctx context.Context, j *journal.Journal, s run.Snapshot, expect
 	if !ValidatePlan(p) {
 		return run.ToolResult{}, storage.ErrInvalid
 	}
-	history, _, err := History(ctx, j, s.ActorID, s.SpaceID, s.SessionID)
+	history, err := RunHistory(ctx, j, s.ActorID, s.SpaceID, s.SessionID, s.ID, "plan.updated")
 	if err != nil {
 		return run.ToolResult{}, err
 	}
