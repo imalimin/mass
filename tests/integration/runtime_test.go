@@ -405,7 +405,7 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 	}
 	validate := contractValidator(t)
 	base := "/spaces/" + space.ID
-	for _, p := range []string{base + "/sessions", base + "/sessions/" + session.ID, base + "/sessions/" + session.ID + "/runs", base + "/sessions/" + session.ID + "/messages", base + "/sessions/" + session.ID + "/workspace-snapshots", base + "/runs/" + first.ID, base + "/runs/" + first.ID + "/trace", base + "/runs/" + first.ID + "/contexts", base + "/runs/" + first.ID + "/artifacts", base + "/runs/" + first.ID + "/ui-snapshot"} {
+	for _, p := range []string{base + "/sessions", base + "/sessions/" + session.ID, base + "/sessions/" + session.ID + "/runs", base + "/sessions/" + session.ID + "/messages", base + "/sessions/" + session.ID + "/workspace-snapshots", base + "/runs/" + first.ID, base + "/runs/" + first.ID + "/trace", base + "/runs/" + first.ID + "/contexts", base + "/runs/" + first.ID + "/metrics", base + "/runs/" + first.ID + "/artifacts", base + "/runs/" + first.ID + "/ui-snapshot"} {
 		r := httptest.NewRequest("GET", "http://mass.test/api/v1"+p, nil)
 		r.Header.Set("Cookie", "mass_session="+token)
 		w := httptest.NewRecorder()

@@ -25,13 +25,15 @@ export async function list<T>(path: string, signal?: AbortSignal): Promise<T[]> 
   return items
 }
 export async function getSystem(): Promise<Schema['SystemInfo']> { return request('/system') }
-export async function payloadText(path: string): Promise<string> {
-  const response = await fetch(`/api/v1${path}`, { credentials: 'same-origin' })
+export async function payloadText(path: string, signal?: AbortSignal): Promise<string> {
+  const response = await fetch(`/api/v1${path}`, { credentials: 'same-origin', signal })
   if (!response.ok) {
     const data = await response.json().catch(() => ({})) as { code?: string }
     if ([401, 403].includes(response.status)) window.dispatchEvent(new CustomEvent('mass-access-lost', { detail: response.status }))
     throw new APIError(response.status, data.code ?? 'unknown')
   }
   if (Number(response.headers.get('Content-Length')) > 1024 * 1024) { await response.body?.cancel(); throw new Error('载荷超过 1 MiB，请下载完整内容查看。') }
-  return response.text()
+  if (!response.body) return ''
+  const reader = response.body.getReader(), decoder = new TextDecoder(); let size = 0, text = ''
+  try { for (;;) { const { value, done } = await reader.read(); if (done) break; size += value.byteLength; if (size > 1024 * 1024) { await reader.cancel(); throw new Error('载荷超过 1 MiB，请下载完整内容查看。') }; text += decoder.decode(value, { stream: true }) }; return text + decoder.decode() } finally { reader.releaseLock() }
 }

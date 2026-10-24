@@ -29,10 +29,15 @@ try {
   await page.getByRole('button', { name: '会话与运行', exact: true }).click(); await page.getByLabel('使用 Agent').selectOption({ label: 'tools-assistant' }); await page.getByLabel('定义版本').selectOption(agentVersion.id); await page.getByLabel('会话名称', { exact: true }).fill('十四工具组合'); await page.getByRole('button', { name: '新建会话', exact: true }).click(); await page.getByRole('heading', { name: '十四工具组合', exact: true }).waitFor()
   const attachmentUpload = page.waitForResponse(r => r.url().endsWith('/attachments') && r.request().method() === 'POST')
   await page.getByLabel('添加任务附件').setInputFiles({ name: 'records.json', mimeType: 'application/json', buffer: Buffer.from('[{"amount":2},{"amount":3}]') }); assert.equal((await attachmentUpload).status(), 201); await page.getByLabel('移除附件 records.json').waitFor()
+  await page.evaluate(() => {
+    const Native = window.EventSource; window.__massToolInterrupted = false
+    window.EventSource = class extends Native { constructor(url, options) { super(url, options); this.addEventListener('message', e => { if (!window.__massToolInterrupted && JSON.parse(e.data).type === 'TOOL_CALL_ARGS') { window.__massToolInterrupted = true; this.close(); this.dispatchEvent(new Event('error')) } }) } }
+  })
   await page.getByLabel('输入任务', { exact: true }).fill('D05 process attachment using all tools')
   const accepted = page.waitForResponse(r => /\/sessions\/[^/]+\/runs$/.test(r.url()) && r.request().method() === 'POST'); await page.getByRole('button', { name: '发送任务', exact: true }).click(); const response = await accepted; assert.equal(response.status(), 202, await response.text()); const run = await response.json()
   await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 60000 }); await page.getByText('十四工具处理完成，汇总结果为 10。', { exact: true }).waitFor()
   await expect(page.getByRole('complementary', { name: '当前运行计划' })).toContainText('修订 2'); await expect(page.getByRole('complementary', { name: '当前运行计划' })).toContainText('已完成 · Create summary')
+  assert.ok(await page.evaluate(() => window.__massToolInterrupted), 'tool parameter stream was not interrupted')
   const names = await page.locator('.run-output > details:not(.trace) > summary').allTextContents(); assert.equal(new Set(names.map(n => n.split(' · ')[0])).size, 14)
   const artifactLink = page.locator('.run-output a').filter({ hasText: 'summary.json' }).first(); const artifact = await context.request.get(new URL(await artifactLink.getAttribute('href'), server.url).href); assert.equal(artifact.status(), 200); assert.equal(await artifact.text(), '{"total":10,"label":"final"}')
   const attachmentLink = page.locator('.chat-history a').filter({ hasText: 'records.json' }).first(); await attachmentLink.waitFor(); const attachment = await context.request.get(new URL(await attachmentLink.getAttribute('href'), server.url).href); assert.equal(attachment.status(), 200); assert.equal(await attachment.text(), '[{"amount":2},{"amount":3}]')

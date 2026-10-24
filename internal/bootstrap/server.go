@@ -83,7 +83,7 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 	server := &http.Server{Handler: httptransport.NewHandler(ui.Assets(), version, logger, httptransport.IdentityOptions{Service: service, Origin: strings.TrimSuffix(c.HTTP.PublicURL, "/"), Secure: c.Auth.CookieSecure, Storage: storageOptions, Catalog: catalogue, Runtime: runtimeOptions}), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	result := make(chan error, 1)
 	go func() { result <- server.Serve(listener) }()
-	logger.Info("MASS listening", "address", listener.Addr().String(), "stage", "D06")
+	logger.Info("MASS listening", "address", listener.Addr().String(), "stage", "D08")
 	select {
 	case err := <-result:
 		if errors.Is(err, http.ErrServerClosed) {

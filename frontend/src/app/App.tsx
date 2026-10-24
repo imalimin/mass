@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { APIError, list, request, type Schema } from '../lib/api'
 import { Sessions } from '../features/sessions/Sessions'
 import { Catalog } from '../features/catalog/Catalog'
@@ -51,6 +51,8 @@ function Spaces({ selected, onSelect }: { selected: Schema['Space'] | null; onSe
 }
 
 function SpaceWorkspace({ space, user, onLeave }: { space: Schema['Space']; user: Schema['User']; onLeave: () => void }) {
-  const [tab, setTab] = useState(new URLSearchParams(location.search).get('session') ? 'runs' : 'manage')
+  const page = useLocation()
+  const [tab, setTab] = useState(new URLSearchParams(page.search).get('session') ? 'runs' : 'manage')
+  useEffect(() => { if (new URLSearchParams(page.search).get('session')) setTab('runs') }, [page.search])
   return <><div className="actions workspace-tabs"><button className={tab === 'manage' ? 'selected' : 'secondary'} onClick={() => setTab('manage')}>成员与模型</button><button className={tab === 'catalog' ? 'selected' : 'secondary'} onClick={() => setTab('catalog')}>Agent 与 Skill</button><button className={tab === 'runs' ? 'selected' : 'secondary'} onClick={() => setTab('runs')}>会话与运行</button></div>{tab === 'manage' ? <SpaceDetail space={space} user={user} onLeave={onLeave} /> : tab === 'catalog' ? <Catalog space={space} /> : <Sessions space={space.id} />}</>
 }

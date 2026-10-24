@@ -1281,6 +1281,18 @@ TEXT_MESSAGE_CONTENT 按 messageId 追加，工具参数按 toolCallId 聚合，
 
 调试页同时展示原始日志、投影 Manifest、实际模型请求、epoch/前缀变化、真实缓存统计和载荷引用；摘要调用放在 Trace 区而非聊天助手回复中。普通 AG-UI 消息流不能冒充完整模型原文。空间切换立即关闭订阅并清空私有视图，大历史通过水位一致的 ui-snapshot 恢复并采用窗口展示。
 
+### T12.3 D08 工作台实现
+
+Catalog 的固定版本直接创建幂等调试 Session 并导航到对话；保留创建调试快照/发布版本与手动选择 Session 的原入口。草稿编辑不改变已固定版本，离开编辑器取消未完成的调试导航请求。
+
+AguiRunClient 管理 GET 快照、EventSource 生命周期和单一重连计时器。快照经 Zod 校验协议、会话、状态、唯一实体及产物空间/会话/Run/下载路径，游标校验独立于 Session 日志水位。帧先过 @ag-ui/core/custom Schema 与 reducer，成功后才确认游标；重复忽略、缺口/应用错误关闭旧连接，经权限查询后使用最后应用的 after 重连。500ms—5s 有界退避，连续失败超过五次转为手动同步；401/403 清除私有状态并停止。只有标准 RUN_FINISHED/RUN_ERROR 或 closed 快照停止订阅，CUSTOM 状态不能提前跳过标准终态。旧连接及卸载后的回调不能更新新作用域。
+
+Trace 与安全 Markdown 延迟加载；原文查看是可取消的空间查询，按实际流字节限制为 1 MiB，不依赖 Content-Length。运行消息/工具各按最近 50 条展示，可逐窗展开；旧消息和 Trace 保留分页。Trace 分类不改变固定日志水位，每页空结果明确显示。上下文检查继续导航到源事件和实际请求，工具参数、结果、代码与 I/O 均可从原始事件载荷下载。
+
+新增 `GET /api/v1/spaces/{space_id}/runs/{run_id}/metrics`，按固定 Run 配置、task/summary 及 prefix_change_reason 聚合缓存覆盖率/命中率/输入占比、结束尝试数和可用耗时；零分母为 null，查询水位明确展示。统计最多读取 20000 个已授权事件；无隐式模型调用或当前草稿读取。公共 ui-snapshot 不暴露内部 SummaryAttempts；该字段仍用于后端跨批次回放。
+
+D08 页面使用本地真实 Eino/HTTP 与 TOS 协议夹具验收，不依赖真实云凭证；D07 的真实供应商验证尚待授权，不因 D08 页面完成而自动通过。
+
 ## T13 M13 单服务组装、前端嵌入与配置
 
 依赖：net/http、ServeMux、slog、embed、database/sql、Eino、TOS SDK。一个 `cmd/mass` 入口构造数据库、TOS、模型组件、调度与 API，不启动独立前端、Worker 或 LLM 代理进程。

@@ -1,7 +1,7 @@
 import type { Schema } from '../../lib/api'
 import { parseEvent } from '../../lib/agui'
 export type UIState = Schema['UIState']
-export function reduceEvent(previous: UIState, input: unknown, session: string, run: string): UIState {
+export function reduceEvent(previous: UIState, input: unknown, session: string, run: string, space?: string): UIState {
   const event = parseEvent(input), state = structuredClone(previous)
   if (event.type === 'RUN_STARTED' || event.type === 'RUN_FINISHED') { if (event.threadId !== session || event.runId !== run) throw new Error('stream_scope_mismatch') }
   switch (event.type) {
@@ -22,9 +22,9 @@ export function reduceEvent(previous: UIState, input: unknown, session: string, 
         case 'mass.run.status.v1': if (typeof v.status === 'string') state.status = v.status; if (typeof v.cancelRequested === 'boolean') state.cancel_requested = v.cancelRequested; break
         case 'mass.message.status.v1': { const m = state.messages.find(m => m.id === v.messageId); if (m && v.status === 'incomplete') m.incomplete = true; break }
         case 'mass.tool.status.v1': { let t = state.tools.find(t => t.id === v.toolCallId); if (!t && typeof v.toolCallId === 'string') { t = { id: v.toolCallId, name: typeof v.toolName === 'string' ? v.toolName : '工具参数见 Trace', arguments: '', result: '', status: '', standard: false }; state.tools.push(t) }; if (t && typeof v.status === 'string') t.status = v.status; break }
-        case 'mass.plan.v1': { const plan = v.plan as Schema['RuntimePlan']; if (!plan || !Number.isSafeInteger(plan.revision) || plan.revision < 1 || !Array.isArray(plan.steps) || plan.steps.length > 100 || !plan.steps.every(s => typeof s.id === 'string' && typeof s.title === 'string' && ['pending', 'in_progress', 'completed', 'skipped'].includes(s.status))) throw new Error('invalid_plan'); state.plan = plan; break }
-        case 'mass.artifact.v1': { const a = v.artifact as Schema['RuntimeArtifact']; if (!a || typeof a.id !== 'string' || a.run_id !== run || !a.download_url.startsWith('/api/v1/spaces/')) throw new Error('invalid_artifact'); if (!state.artifacts.some(x => x.id === a.id)) state.artifacts.push(a); break }
-        case 'mass.usage.v1': { const usage = v.usage as Schema['RuntimeUsage']; if (!usage || !['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens'].every(k => usage[k as keyof typeof usage] === null || typeof usage[k as keyof typeof usage] === 'number')) throw new Error('invalid_usage'); state.usage = usage; break }
+        case 'mass.plan.v1': { const plan = v.plan as Schema['RuntimePlan']; if (!plan || !Number.isSafeInteger(plan.revision) || plan.revision < 1 || !Array.isArray(plan.steps) || plan.steps.length > 100 || !plan.steps.every(s => typeof s.id === 'string' && typeof s.title === 'string' && ['pending', 'in_progress', 'completed', 'skipped'].includes(s.status))) throw new Error('invalid_plan'); if (state.plan && plan.revision < state.plan.revision) throw new Error('plan_revision_regressed'); state.plan = plan; break }
+        case 'mass.artifact.v1': { const a = v.artifact as Schema['RuntimeArtifact']; if (!a || typeof a.id !== 'string' || a.run_id !== run || a.session_id !== session || (space !== undefined && a.space_id !== space) || a.download_url !== `/api/v1/spaces/${a.space_id}/artifacts/${a.id}/download`) throw new Error('invalid_artifact'); if (!state.artifacts.some(x => x.id === a.id)) state.artifacts.push(a); break }
+        case 'mass.usage.v1': { const usage = v.usage as Schema['RuntimeUsage']; if (!usage || !['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens'].every(k => usage[k as keyof typeof usage] === null || (Number.isSafeInteger(usage[k as keyof typeof usage]) && (usage[k as keyof typeof usage] as number) >= 0))) throw new Error('invalid_usage'); state.usage = usage; break }
       }
       break
     }

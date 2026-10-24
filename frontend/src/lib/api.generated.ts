@@ -756,6 +756,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/spaces/{space_id}/runs/{run_id}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRunMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/spaces/{space_id}/runs/{run_id}/contexts": {
         parameters: {
             query?: never;
@@ -1083,7 +1099,7 @@ export interface components {
             name: "MASS";
             version: string;
             /** @enum {string} */
-            stage: "D00" | "D02" | "D03" | "D04" | "D05" | "D06";
+            stage: "D00" | "D02" | "D03" | "D04" | "D05" | "D06" | "D08";
             /** @constant */
             protocol_profile: "mass-agui-v1";
         };
@@ -1245,6 +1261,26 @@ export interface components {
             temperature: number;
             enabled: boolean;
             revision: number;
+        };
+        RunModelMetrics: {
+            model_id: string;
+            model_revision: number;
+            through_sequence: string;
+            groups: {
+                purpose: string;
+                phase: string;
+                average_ms: number | null;
+                average_first_token_ms: number | null;
+                cache: {
+                    attempts: number;
+                    with_cache_read: number;
+                    cache_hits: number;
+                    paired_usage: number;
+                    hit_rate: number | null;
+                    cache_input_ratio: number | null;
+                    coverage: number | null;
+                };
+            }[];
         };
         ContextInspection: {
             projection: {
@@ -5209,6 +5245,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JournalPage"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getRunMetrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunModelMetrics"];
                 };
             };
             /** @description Request rejected or dependency unavailable. */

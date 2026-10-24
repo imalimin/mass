@@ -283,6 +283,19 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		return nil
 	})
 
+	register("GET "+base+"/runs/{run_id}/metrics", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		v, err := runtime.Repo.RuntimeRun(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("run_id"))
+		if err != nil {
+			return err
+		}
+		groups, through, err := modelMetrics(r.Context(), runtime.Repo, u.ID, v.SpaceID, v.ID)
+		if err != nil {
+			return err
+		}
+		writeJSON(w, 200, map[string]any{"model_id": v.Definition.Model.ModelID, "model_revision": v.Definition.Model.Revision, "through_sequence": strconv.FormatInt(through, 10), "groups": groups})
+		return nil
+	})
+
 	register("GET "+base+"/runs/{run_id}/artifacts", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		items, err := svc.Repo.RuntimeArtifacts(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("run_id"))
 		if err != nil {
@@ -393,6 +406,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if err != nil {
 			return err
 		}
+		cp.SummaryAttempts = nil // Internal replay metadata is not part of the public checkpoint.
 		writeJSON(w, 200, cp)
 		return nil
 	})

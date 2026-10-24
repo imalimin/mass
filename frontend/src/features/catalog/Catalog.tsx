@@ -1,4 +1,5 @@
-import { lazy, Suspense, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -31,6 +32,9 @@ function DefinitionEditor(props: { space: string; kind: Kind; id: string; onCopi
   return <EditorForm {...props} initial={query.data} />
 }
 function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: string; kind: Kind; id: string; initial: Draft; refresh: () => void; onCopied: (id: string) => void }) {
+  const debugAbort = useRef(new AbortController())
+  useEffect(() => { const controller = new AbortController(); debugAbort.current = controller; return () => controller.abort() }, [])
+  const navigate = useNavigate(), debugRequest = useRef<{ version: string; key: string } | null>(null)
   const base = `/spaces/${space}/${kind}s/${id}`
   const [draft, setDraft] = useState(initial), [doc, setDoc] = useState<Doc>(initial.document), [label, setLabel] = useState('v1'), [notice, setNotice] = useState('')
   const [conflict, setConflict] = useState<Draft | null>(null), [copyName, setCopyName] = useState(''), [versionID, setVersionID] = useState(''), [fromID, setFromID] = useState('')
@@ -47,6 +51,11 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
   const failed = async (e: Error) => { if (e instanceof APIError && e.code === 'draft_conflict') { try { setConflict(await request<Draft>(`${base}/draft`)) } catch { /* request handles revoked access */ } } }
   const save = useMutation({ mutationFn: () => request<Draft>(`${base}/draft`, 'PUT', { expected_revision: draft.revision, document: doc }), onSuccess: d => { accept(d); setNotice('草稿已保存') }, onError: failed })
   const publish = useMutation({ mutationFn: (debug: boolean) => request<Version>(`${base}/${debug ? 'debug-snapshots' : 'versions'}`, 'POST', { expected_revision: draft.revision, label: debug ? '' : label }), onSuccess: v => { refresh(); setVersionID(v.id); setNotice(v.debug ? '调试快照已固定，可在会话与运行中选择它。' : `已发布 ${v.label}`) }, onError: failed })
+  const debug = useMutation({ mutationFn: async () => {
+    if (!detail.data || detail.data.archived) throw new Error('请选择可用的固定版本')
+    if (debugRequest.current?.version !== detail.data.id) debugRequest.current = { version: detail.data.id, key: crypto.randomUUID() }
+    return request<Schema['RuntimeSession']>(`/spaces/${space}/sessions`, 'POST', { agent_id: id, version_id: detail.data.id, title: `调试 · ${draft.name}`, idempotency_key: debugRequest.current.key }, debugAbort.current.signal)
+  }, onSuccess: session => { if (debugAbort.current.signal.aborted) return; navigate(`/spaces?space=${space}&session=${session.id}`) } })
   const mutateState = useMutation({ mutationFn: ({ suffix, body }: { suffix: string; body: unknown }) => request(`${base}/${suffix}`, 'PUT', body), onSuccess: async () => { accept(await request<Draft>(`${base}/draft`)); setNotice('状态已更新') } })
   const copy = useMutation({ mutationFn: () => request<Draft>(`${base}/copy`, 'POST', { name: copyName }), onSuccess: d => { refresh(); onCopied(d.id) } })
   const upload = useMutation({ mutationFn: async () => {
@@ -66,8 +75,8 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
     <div className="form-grid"><label>资源路径<input value={path} onChange={e => setPath(e.target.value)} /></label><label>资源文件（最多 8 MiB）<input type="file" onChange={e => { const f = e.target.files?.[0] ?? null; setFile(f); if (f) setPath(`assets/${f.name}`) }} /></label><button disabled={pending || changed || !file || draft.archived} onClick={() => upload.mutate()}>上传资源</button><p className="muted">先保存正文修改再上传。移除草稿资源后，历史版本仍保留原文件。</p></div>
     <h3>发布</h3><div className="inline-form"><label>发布版本号<input value={label} onChange={e => setLabel(e.target.value)} maxLength={64} /></label><button disabled={pending || changed || draft.archived} onClick={() => publish.mutate(false)}>发布版本</button>{kind === 'agent' && <button className="secondary" disabled={pending || changed || draft.archived} onClick={() => publish.mutate(true)}>创建调试快照</button>}</div>
     <h3>版本与差异</h3><div className="form-grid"><label>查看版本<select value={versionID} onChange={e => { setVersionID(e.target.value); setFromID('') }}><option value="">选择历史版本</option>{all.map(v => <option key={v.id} value={v.id}>{displayVersion(v)}{v.archived ? '（已归档）' : ''}{draft.default_version_id === v.id ? '（默认）' : ''}</option>)}</select></label><label>对比基准<select value={fromID} onChange={e => setFromID(e.target.value)}><option value="">不比较</option>{all.filter(v => v.id !== versionID).map(v => <option key={v.id} value={v.id}>{displayVersion(v)}</option>)}</select></label></div>
-    {detail.data && <div className="version-detail"><h3>不可变版本：{displayVersion(detail.data)}</h3><p className="muted">SHA-256：{detail.data.sha256}</p><pre data-testid="version-markdown">{detail.data.bundle.document.markdown}</pre><pre data-testid="version-config">{detail.data.bundle.document.config_yaml}</pre>{detail.data.bundle.bindings.map(b => <p key={b.skill_id}>Skill {b.skill_id} → {b.version} · {b.version_id}</p>)}{detail.data.bundle.document.assets.map(a => <p key={a.path}><a download href={`/api/v1/spaces/${space}/payloads/${a.object_id}`}>{a.path}</a></p>)}
-      <div className="actions">{kind === 'agent' && !detail.data.debug && !detail.data.archived && <button disabled={pending || draft.archived} onClick={() => mutateState.mutate({ suffix: 'default-version', body: { version_id: versionID } })}>设为默认版本</button>}<button className="secondary" disabled={pending} onClick={() => mutateState.mutate({ suffix: `versions/${versionID}/archive`, body: { archived: !detail.data!.archived } })}>{detail.data.archived ? '恢复版本选择' : '归档此版本'}</button></div>
+    {debug.error && <p role="alert">{debug.error.message}</p>}{detail.data && <div className="version-detail"><h3>不可变版本：{displayVersion(detail.data)}</h3><p className="muted">SHA-256：{detail.data.sha256}</p><pre data-testid="version-markdown">{detail.data.bundle.document.markdown}</pre><pre data-testid="version-config">{detail.data.bundle.document.config_yaml}</pre>{detail.data.bundle.bindings.map(b => <p key={b.skill_id}>Skill {b.skill_id} → {b.version} · {b.version_id}</p>)}{detail.data.bundle.document.assets.map(a => <p key={a.path}><a download href={`/api/v1/spaces/${space}/payloads/${a.object_id}`}>{a.path}</a></p>)}
+      <div className="actions">{kind === 'agent' && !detail.data.archived && <button disabled={debug.isPending} onClick={() => debug.mutate()}>使用此版本开始调试</button>}{kind === 'agent' && !detail.data.debug && !detail.data.archived && <button disabled={pending || draft.archived} onClick={() => mutateState.mutate({ suffix: 'default-version', body: { version_id: versionID } })}>设为默认版本</button>}<button className="secondary" disabled={pending} onClick={() => mutateState.mutate({ suffix: `versions/${versionID}/archive`, body: { archived: !detail.data!.archived } })}>{detail.data.archived ? '恢复版本选择' : '归档此版本'}</button></div>
       {kind === 'skill' && <div><h4>引用此版本的 Agent</h4>{references.data?.map(r => <p key={r.id}>{r.name} · {r.debug ? '调试快照' : r.label}</p>)}{references.data?.length === 0 && <p className="muted">暂无引用</p>}</div>}
     </div>}
     {diff.data && <Suspense fallback={<p>载入版本差异…</p>}><CodeEditor key={`${fromID}-${versionID}`} label="版本差异" language="yaml" original={JSON.stringify(diff.data.from.bundle, null, 2)} value={JSON.stringify(diff.data.to.bundle, null, 2)} /></Suspense>}

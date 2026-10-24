@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: MASS API
   version: 0.5.0
-  description: D06 deterministic context projection, stage summaries and request provenance, with complete built-in tools.
+  description: D08 fixed-version debug workbench, controlled AG-UI reconnect, request provenance and model metrics.
 servers:
   - url: /
 paths:
@@ -3156,6 +3156,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/runs/{run_id}/metrics:
+    get:
+      operationId: getRunMetrics
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunModelMetrics'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/runs/{run_id}/contexts:
     get:
       operationId: getRuncontexts
@@ -3978,6 +4009,7 @@ components:
             - D04
             - D05
             - D06
+            - D08
         protocol_profile:
           type: string
           const: mass-agui-v1
@@ -4442,6 +4474,51 @@ components:
           type: integer
           minimum: 1
           maximum: 9007199254740991
+    RunModelMetrics:
+      type: object
+      additionalProperties: false
+      required: [model_id, model_revision, through_sequence, groups]
+      properties:
+        model_id:
+          type: string
+        model_revision:
+          type: integer
+        through_sequence:
+          type: string
+        groups:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [purpose, phase, cache, average_ms, average_first_token_ms]
+            properties:
+              purpose:
+                type: string
+              phase:
+                type: string
+              average_ms:
+                type: [number, 'null']
+              average_first_token_ms:
+                type: [number, 'null']
+              cache:
+                type: object
+                additionalProperties: false
+                required: [attempts, with_cache_read, cache_hits, paired_usage, hit_rate, cache_input_ratio, coverage]
+                properties:
+                  attempts:
+                    type: integer
+                  with_cache_read:
+                    type: integer
+                  cache_hits:
+                    type: integer
+                  paired_usage:
+                    type: integer
+                  hit_rate:
+                    type: [number, 'null']
+                  cache_input_ratio:
+                    type: [number, 'null']
+                  coverage:
+                    type: [number, 'null']
     ContextInspection:
       type: object
       additionalProperties: false
