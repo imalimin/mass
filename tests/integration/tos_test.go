@@ -119,5 +119,6 @@ func TestRealTOSStorage(t *testing.T) {
 			}
 		}
 		exerciseRuntime(t, tracked, prefix+"real-model/", false, true)
+		exerciseD07(t, tracked, prefix+"d07/")
 	}
 }

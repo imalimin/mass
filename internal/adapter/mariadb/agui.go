@@ -17,7 +17,13 @@ func (s *Store) LoadStream(ctx context.Context, actor, space, id string) (v agui
 		if err != nil {
 			return err
 		}
-		return json.Unmarshal(raw, &v.State)
+		var saved persistedUIState
+		if err := json.Unmarshal(raw, &saved); err != nil {
+			return err
+		}
+		v.State = saved.State
+		v.SummaryAttempts = saved.SummaryAttempts
+		return nil
 	})
 	return
 }
@@ -43,7 +49,7 @@ func (s *Store) CommitStream(ctx context.Context, actor, space, id string, old, 
 				return err
 			}
 		}
-		raw, _ := json.Marshal(next.State)
+		raw, _ := json.Marshal(persistedUIState{State: next.State, SummaryAttempts: next.SummaryAttempts})
 		_, err := tx.ExecContext(ctx, "UPDATE agui_streams SET source_sequence=?,last_ui_sequence=?,state=?,closed=? WHERE space_id=? AND run_id=?", next.Source, next.Cursor, raw, next.Closed, space, id)
 		return err
 	})
@@ -133,4 +139,10 @@ func (r *UIRepository) ReadEvents(ctx context.Context, a, s, id string, after in
 }
 func (r *UIRepository) ReadFrames(ctx context.Context, a, s, id string, after int64, limit int) ([]agui.Frame, bool, error) {
 	return r.store.ReadFrames(ctx, a, s, id, after, limit)
+}
+
+// Internal checkpoint metadata is persisted but never exposed as AG-UI state.
+type persistedUIState struct {
+	agui.State
+	SummaryAttempts map[string]bool `json:"_summary_attempts,omitempty"`
 }

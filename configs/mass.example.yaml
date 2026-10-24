@@ -23,6 +23,8 @@ auth:
   session_ttl: "24h"
   cookie_secure: false # Loopback development only; HTTPS deployments use true.
 llm:
+  # Explicit platform attempts per logical call; SDK retries remain disabled.
+  max_attempts: 1
   framework: "eino"
   provider: "ark"
   base_url_env: "MASS_LLM_MODEL_BASE_URL" # Approved compatible endpoint; old configs without this field use Ark.

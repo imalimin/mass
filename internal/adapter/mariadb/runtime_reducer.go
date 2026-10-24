@@ -190,6 +190,16 @@ func reduceRuntime(ctx context.Context, tx *sql.Tx, space, session string, e jou
 		if purpose != d.Purpose {
 			return storage.ErrInvalid
 		}
+
+		if d.RetryOf != "" {
+			var status, projection, priorPurpose string
+			if err := tx.QueryRowContext(ctx, "SELECT status,projection_event_id,purpose FROM model_attempts WHERE space_id=? AND run_id=? AND id=?", space, e.RunID, d.RetryOf).Scan(&status, &projection, &priorPurpose); err != nil {
+				return err
+			}
+			if status != "failed" || projection != d.ProjectionEventID || priorPurpose != d.Purpose {
+				return storage.ErrInvalid
+			}
+		}
 		_, err := tx.ExecContext(ctx, "INSERT INTO model_attempts(space_id,session_id,run_id,id,projection_event_id,message_id,purpose,source,status) VALUES(?,?,?,?,?,?,?,?,'started')", space, session, e.RunID, d.ID, d.ProjectionEventID, d.MessageID, d.Purpose, d.Source)
 		return err
 	case "model.request.recorded", "model.response.recorded":

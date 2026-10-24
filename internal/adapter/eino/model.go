@@ -33,18 +33,27 @@ func (t *ModelTransport) Source() string {
 
 type wireRecorder struct {
 	modelgateway.Recorder
-	raw bytes.Buffer
+	raw    bytes.Buffer
+	status int
+	failed error
 }
 
+func (w *wireRecorder) Status(status int) { w.status = status }
+func (w *wireRecorder) Request(ctx context.Context, b []byte) error {
+	err := w.Recorder.Request(ctx, b)
+	w.failed = err
+	return err
+}
 func (w *wireRecorder) Response(ctx context.Context, status int, b []byte) error {
 	if err := w.Recorder.Response(ctx, status, b); err != nil {
+		w.failed = err
 		return err
 	}
+	w.status = status
 	w.raw.Write(b)
 	return nil
 }
-func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepared, key string, record modelgateway.Recorder, delta func(string) error) (run.Reply, error) {
-	var reply run.Reply
+func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepared, key string, record modelgateway.Recorder, delta func(string) error) (reply run.Reply, retErr error) {
 	messages := make([]*schema.Message, 0, len(p.Messages))
 	for _, m := range p.Messages {
 		var out schema.Message
@@ -77,6 +86,23 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 	}
 	var chat model.ToolCallingChatModel
 	wire := &wireRecorder{Recorder: record}
+	started := time.Now()
+	observation := &run.ModelObservation{Component: "eino-ark-v0.1.71"}
+	if t.Fake != nil {
+		observation.Component = "eino-fake"
+	}
+	defer func() {
+		observation.DurationMS = time.Since(started).Milliseconds()
+		observation.HTTPStatus = wire.status
+		reply.Observation = observation
+		if t.Fake == nil {
+			reply.Usage = wireUsage(wire.raw.Bytes())
+		}
+		if retErr != nil && wire.failed == nil && (wire.status == 429 || wire.status == 502 || wire.status == 503 || wire.status == 504) {
+			retErr = &run.ModelFailure{Code: "model_http_failed", Status: wire.status, Retryable: true}
+		}
+	}()
+
 	if t.Fake != nil {
 		chat = t.Fake
 		raw, _ := json.Marshal(struct {
@@ -140,6 +166,10 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 		}
 		chunks = append(chunks, chunk)
 		if chunk.Content != "" {
+			if observation.FirstTokenMS == nil {
+				ms := time.Since(started).Milliseconds()
+				observation.FirstTokenMS = &ms
+			}
 			if err = delta(chunk.Content); err != nil {
 				return reply, err
 			}

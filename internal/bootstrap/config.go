@@ -47,11 +47,12 @@ type Config struct {
 		CookieSecure bool          `yaml:"cookie_secure"`
 	} `yaml:"auth"`
 	LLM struct {
-		BaseURLEnv string `yaml:"base_url_env"`
-		Framework  string `yaml:"framework"`
-		Provider   string `yaml:"provider"`
-		ModelEnv   string `yaml:"model_env"`
-		APIKeyEnv  string `yaml:"api_key_env"`
+		MaxAttempts int    `yaml:"max_attempts"`
+		BaseURLEnv  string `yaml:"base_url_env"`
+		Framework   string `yaml:"framework"`
+		Provider    string `yaml:"provider"`
+		ModelEnv    string `yaml:"model_env"`
+		APIKeyEnv   string `yaml:"api_key_env"`
 	} `yaml:"llm"`
 	Secrets struct {
 		MasterKeyEnv string `yaml:"master_key_env"`
@@ -179,6 +180,9 @@ func (c Config) validate(getenv func(string) string) error {
 		if err != nil || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Scheme != "https" && !(endpoint.Scheme == "http" && (endpoint.Hostname() == "localhost" || isLoopback(endpoint.Hostname())))) {
 			return errors.New("llm.base_url_env requires an HTTP(S) endpoint; HTTP is allowed only for loopback tests")
 		}
+	}
+	if c.LLM.MaxAttempts < 0 || c.LLM.MaxAttempts > 3 {
+		return errors.New("llm.max_attempts must be between 1 and 3 (0 uses 1)")
 	}
 	if c.LLM.Framework != "eino" || c.LLM.Provider != "ark" {
 		return errors.New("only the verified eino/ark provider is supported")

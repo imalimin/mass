@@ -53,6 +53,7 @@ type Skill struct {
 	Resources []SkillResource `json:"resources,omitempty"`
 }
 type Definition struct {
+	ModelAttempts   int         `json:"model_attempts,omitempty"`
 	VersionID       string      `json:"version_id"`
 	AgentID         string      `json:"agent_id"`
 	Debug           bool        `json:"debug"`
@@ -133,12 +134,13 @@ type Message struct {
 	Native     json.RawMessage `json:"native,omitempty"`
 }
 type Reply struct {
-	MessageID       string  `json:"message_id"`
-	Message         Message `json:"message"`
-	FinishReason    string  `json:"finish_reason"`
-	Usage           Usage   `json:"usage"`
-	Source          string  `json:"source"`
-	ResponseEventID string  `json:"response_event_id"`
+	Observation     *ModelObservation `json:"observation,omitempty"`
+	MessageID       string            `json:"message_id"`
+	Message         Message           `json:"message"`
+	FinishReason    string            `json:"finish_reason"`
+	Usage           Usage             `json:"usage"`
+	Source          string            `json:"source"`
+	ResponseEventID string            `json:"response_event_id"`
 }
 type ProjectionSpec struct {
 	EffectiveConfigEventID string            `json:"effective_config_event_id,omitempty"`

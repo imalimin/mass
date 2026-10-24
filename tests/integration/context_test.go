@@ -231,6 +231,15 @@ func TestContextStages(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
+		restored, e := db.Store.LoadStream(ctx, actor.ID, space.ID, v.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		for id := range cp.SummaryAttempts {
+			if !restored.SummaryAttempts[id] {
+				t.Fatal("summary checkpoint lost across database reload")
+			}
+		}
 		if len(cp.State.Messages) != 1 || strings.Contains(cp.State.Messages[0].Text, "Saved facts:") {
 			t.Fatal("summary polluted AGUI")
 		}

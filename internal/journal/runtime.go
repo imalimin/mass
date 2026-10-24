@@ -40,6 +40,7 @@ type ProjectionData struct {
 	Epoch       int    `json:"epoch"`
 }
 type AttemptData struct {
+	RetryOf            string `json:"retry_of,omitempty"`
 	ID                 string `json:"id"`
 	ProjectionEventID  string `json:"projection_event_id"`
 	MessageID          string `json:"message_id"`
@@ -59,19 +60,21 @@ type DeltaData struct {
 	Text      string `json:"text"`
 }
 type ResponseData struct {
-	AttemptID    string     `json:"attempt_id"`
-	MessageID    string     `json:"message_id"`
-	ContentID    string     `json:"content_id"`
-	FinishReason string     `json:"finish_reason"`
-	Usage        run.Usage  `json:"usage"`
-	Calls        []run.Call `json:"calls"`
-	Preview      string     `json:"preview"`
+	Observation  *run.ModelObservation `json:"observation,omitempty"`
+	AttemptID    string                `json:"attempt_id"`
+	MessageID    string                `json:"message_id"`
+	ContentID    string                `json:"content_id"`
+	FinishReason string                `json:"finish_reason"`
+	Usage        run.Usage             `json:"usage"`
+	Calls        []run.Call            `json:"calls"`
+	Preview      string                `json:"preview"`
 }
 type AttemptFailedData struct {
-	AttemptID string    `json:"attempt_id"`
-	MessageID string    `json:"message_id"`
-	Error     string    `json:"error"`
-	Usage     run.Usage `json:"usage"`
+	Observation *run.ModelObservation `json:"observation,omitempty"`
+	AttemptID   string                `json:"attempt_id"`
+	MessageID   string                `json:"message_id"`
+	Error       string                `json:"error"`
+	Usage       run.Usage             `json:"usage"`
 }
 type ToolData struct {
 	CallID          string `json:"call_id"`
@@ -128,7 +131,7 @@ func validateRuntime(e Proposed) (bool, error) {
 		}
 	case "model.attempt.started":
 		var d AttemptData
-		if Decode(e.Data, &d) != nil || !storage.ValidID(d.ID) || !storage.ValidID(d.ProjectionEventID) || !storage.ValidID(d.MessageID) || (d.Purpose != "task" && d.Purpose != "summary") || (d.Source != "ark" && d.Source != "fake") || d.CredentialRevision < 0 {
+		if Decode(e.Data, &d) != nil || (d.RetryOf != "" && !storage.ValidID(d.RetryOf)) || !storage.ValidID(d.ID) || !storage.ValidID(d.ProjectionEventID) || !storage.ValidID(d.MessageID) || (d.Purpose != "task" && d.Purpose != "summary") || (d.Source != "ark" && d.Source != "fake") || d.CredentialRevision < 0 {
 			return bad()
 		}
 	case "model.request.recorded", "model.response.recorded":
@@ -163,12 +166,12 @@ func validateRuntime(e Proposed) (bool, error) {
 			}
 			seen[c.ID] = true
 		}
-		if !validUsage(d.Usage) {
+		if !validUsage(d.Usage) || !validObservation(d.Observation) {
 			return bad()
 		}
 	case "model.attempt.failed":
 		var d AttemptFailedData
-		if Decode(e.Data, &d) != nil || !storage.ValidID(d.AttemptID) || !storage.ValidID(d.MessageID) || d.Error == "" || len(d.Error) > 64 || !validUsage(d.Usage) {
+		if Decode(e.Data, &d) != nil || !storage.ValidID(d.AttemptID) || !storage.ValidID(d.MessageID) || d.Error == "" || len(d.Error) > 64 || !validUsage(d.Usage) || !validObservation(d.Observation) {
 			return bad()
 		}
 	case "tool.execution.started", "tool.execution.completed":
@@ -199,4 +202,11 @@ func validUsage(u run.Usage) bool {
 		}
 	}
 	return true
+}
+
+func validObservation(o *run.ModelObservation) bool {
+	if o == nil {
+		return true
+	}
+	return o.DurationMS >= 0 && o.HTTPStatus >= 0 && o.HTTPStatus <= 599 && len(o.Component) > 0 && len(o.Component) <= 64 && (o.FirstTokenMS == nil || *o.FirstTokenMS >= 0 && *o.FirstTokenMS <= o.DurationMS)
 }

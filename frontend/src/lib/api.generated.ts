@@ -1346,6 +1346,7 @@ export interface components {
             resources?: components["schemas"]["SkillResource"][];
         };
         RuntimeDefinition: {
+            model_attempts?: number;
             /** @enum {string} */
             compression?: "summary" | "reject";
             /** Format: uuid */

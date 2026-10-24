@@ -759,6 +759,16 @@ FakeChatModel 实现同一个 Eino 模型接口；本地假 HTTP 供应商验证
 
 Gateway 统一接受显式 purpose=task/summary 的 Prepared 输入，summary 必须禁用工具；D04 仅编排 task。每个 attempt 先记录固定 projection、message、purpose、来源及 credential revision。完整聚合必须包含 SSE 结束标记和合法 finish_reason；工具参数必须为完整 JSON、单次至多 16 个调用，部分输出/截断不升级为 completed。最终完整回复对象保存 Eino Native 字段、原始 usage 和准确 response_event_id；工具只接受该完成事件中的调用 ID、名称及参数摘要。用量缺失与明确 0 分开处理，缓存字段不可用时为未知。本阶段没有自动模型重试、摘要调用或缓存命中推断。
 
+### T08.6 D07 实现进展
+
+每个新 Run 固定 `model_attempts`，由部署配置 `llm.max_attempts`（1—3，省略为 1）提供。SDK RetryTimes 仍显式为 0；平台仅在未输出文本、失败与用量结算已经持久化、状态为 HTTP 429/502/503/504 时，按 250ms/500ms 有界等待重试。每次尝试独立 attempt/message、retry_of、凭证 revision、原文和预算；重试复用同一固定投影。部分输出、协议错误、取消、存储失败不自动重试。Journal reducer 校验 retry_of 为同一 Run/投影/用途的失败尝试。
+
+每个完成/失败响应附 observation，保存耗时、首个模型文本片段延迟（无文本为 null）、HTTP 状态（尚无响应为 0）与组件版本。响应捕获对空非成功正文也保存状态；错误 JSON 可使解析提前停止，只保留已实际接收的字节前缀，不为填满原文而无界继续消费。失败流从已保存原文恢复实际 usage，null usage 帧不覆盖此前统计。请求及失败响应正文仍以同一 TOS/Journal 路径保存，不保存认证头。
+
+MeasureCache 单独统计 attempts、可用 cache_read 覆盖数、命中数及同口径 input/cache 配对数；零分母返回 null。缓存输入占比只使用配对完整的样本，未知不补 0。真实冒烟最多 8 次模型请求，报告按 task/summary 及 initial/append/history_compressed 分组保留实际 usage 与耗时；真实验证尚待授权执行，不能以单元统计测试或前缀比较代替云端命中证据。
+
+D07 回归发现 D06 的 SummaryAttempts 只留在内存、跨事件批次时丢失。现在该内部标记随 agui_streams 检查点持久化，HTTP/AG-UI State 不暴露内部字段，防止摘要片段成为任务助手输出；兼容读取旧状态 JSON。
+
 ## T09 M09 内置工具、计算与产物交付
 
 ### T09.1 工具目录与版本

@@ -49,6 +49,9 @@ func (t *CaptureTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	if err != nil {
 		return nil, err
 	}
+	if sink, ok := t.Recorder.(interface{ Status(int) }); ok {
+		sink.Status(response.StatusCode)
+	}
 	response.Body = &capturedBody{ReadCloser: response.Body, ctx: req.Context(), recorder: t.Recorder, status: response.StatusCode, remaining: t.MaxResponseBytes}
 	return response, nil
 }
@@ -59,6 +62,7 @@ type capturedBody struct {
 	recorder  Recorder
 	status    int
 	remaining int64
+	recorded  bool
 	failed    error
 }
 
@@ -82,7 +86,8 @@ func (b *capturedBody) Read(p []byte) (int, error) {
 		_ = b.Close()
 		return 0, b.failed
 	}
-	if n > 0 {
+	if n > 0 || !b.recorded && err != nil {
+		b.recorded = true
 		if saveErr := b.recorder.Response(b.ctx, b.status, bytes.Clone(p[:n])); saveErr != nil {
 			b.failed = saveErr
 			_ = b.Close()

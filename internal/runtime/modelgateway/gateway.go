@@ -70,7 +70,35 @@ func (r *recording) Response(ctx context.Context, status int, raw []byte) error 
 	r.responseOrdinal++
 	return nil
 }
-func (g *Gateway) Call(ctx context.Context, s run.Snapshot, p run.Prepared) (reply run.Reply, err error) {
+
+type attemptState struct {
+	id       string
+	retryOf  string
+	recorded bool
+	partial  bool
+}
+
+func (g *Gateway) Call(ctx context.Context, s run.Snapshot, p run.Prepared) (run.Reply, error) {
+	previous := ""
+	for ordinal := 0; ordinal < min(3, max(1, s.Definition.ModelAttempts)); ordinal++ {
+		state := &attemptState{id: uuid.NewString(), retryOf: previous}
+		reply, err := g.callOnce(ctx, s, p, state)
+		var failure *run.ModelFailure
+		if err == nil || !state.recorded || state.partial || !errors.As(err, &failure) || !failure.Retryable || ordinal+1 >= min(3, max(1, s.Definition.ModelAttempts)) {
+			return reply, err
+		}
+		previous = state.id
+		timer := time.NewTimer(time.Duration(ordinal+1) * 250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return reply, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return run.Reply{}, run.ErrProtocol
+}
+func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, state *attemptState) (reply run.Reply, err error) {
 	if err = g.Control.Check(ctx); err != nil {
 		return reply, err
 	}
@@ -87,11 +115,11 @@ func (g *Gateway) Call(ctx context.Context, s run.Snapshot, p run.Prepared) (rep
 			key[i] = 0
 		}
 	}()
-	attempt, message := uuid.NewString(), uuid.NewString()
+	attempt, message := state.id, uuid.NewString()
 	if err = g.Control.Reserve(ctx, attempt, "model", int64(p.InputTokens+s.Definition.OutputTokens)); err != nil {
 		return reply, err
 	}
-	started := journal.New(s.ActorID, "model.attempt.started", s.ID, journal.AttemptData{ID: attempt, ProjectionEventID: p.EventID, MessageID: message, Purpose: purpose, Source: g.Transport.Source(), CredentialRevision: revision})
+	started := journal.New(s.ActorID, "model.attempt.started", s.ID, journal.AttemptData{RetryOf: state.retryOf, ID: attempt, ProjectionEventID: p.EventID, MessageID: message, Purpose: purpose, Source: g.Transport.Source(), CredentialRevision: revision})
 	started.CausationID = p.EventID
 	started.OperationID = attempt
 	if _, err = resource.AppendRun(ctx, g.Journal, s, started); err != nil {
@@ -110,14 +138,17 @@ func (g *Gateway) Call(ctx context.Context, s run.Snapshot, p run.Prepared) (rep
 			if ctx.Err() != nil {
 				code = "model_interrupted"
 			}
-			e := journal.New(s.ActorID, "model.attempt.failed", s.ID, journal.AttemptFailedData{AttemptID: attempt, MessageID: message, Error: code, Usage: reply.Usage})
+			e := journal.New(s.ActorID, "model.attempt.failed", s.ID, journal.AttemptFailedData{Observation: reply.Observation, AttemptID: attempt, MessageID: message, Error: code, Usage: reply.Usage})
 			e.OperationID = attempt
 			_, saveErr := resource.AppendRun(closeCtx, g.Journal, s, e)
 			err = errors.Join(err, saveErr)
-			_ = g.Control.Settle(attempt, reply.Usage)
+			settleErr := g.Control.Settle(attempt, reply.Usage)
+			state.recorded = saveErr == nil && settleErr == nil
+			err = errors.Join(err, settleErr)
 		}
 	}()
 	reply, err = g.Transport.Stream(ctx, s, p, string(key), rec, func(delta string) error {
+		state.partial = true
 		for len(delta) > 0 {
 			n := min(len(delta), 8192)
 			for n > 0 && !utf8.ValidString(delta[:n]) {
@@ -186,7 +217,7 @@ func (g *Gateway) Call(ctx context.Context, s run.Snapshot, p run.Prepared) (rep
 			inlineBytes -= len(encoded)
 		}
 	}
-	e := journal.New(s.ActorID, "model.response.completed", s.ID, journal.ResponseData{AttemptID: attempt, MessageID: message, ContentID: o.ID, FinishReason: reply.FinishReason, Usage: reply.Usage, Calls: calls, Preview: preview}, storage.Ref{Role: "response", ObjectID: o.ID, SHA256: o.SHA256})
+	e := journal.New(s.ActorID, "model.response.completed", s.ID, journal.ResponseData{Observation: reply.Observation, AttemptID: attempt, MessageID: message, ContentID: o.ID, FinishReason: reply.FinishReason, Usage: reply.Usage, Calls: calls, Preview: preview}, storage.Ref{Role: "response", ObjectID: o.ID, SHA256: o.SHA256})
 	e.EventID = reply.ResponseEventID
 	e.OperationID = attempt
 	e.CausationID = started.EventID

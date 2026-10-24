@@ -153,7 +153,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		cancel()
 		return nil, nil, err
 	}
-	service := &sessionapp.Service{ToolPolicy: policy, Repo: store, Catalog: catalogue, Identity: auth, Content: content, Build: build, Ready: schedulerService.Ready, Notify: schedulerService.Notify, ResolveTools: registryService.Describe}
+	service := &sessionapp.Service{ModelAttempts: max(1, c.LLM.MaxAttempts), ToolPolicy: policy, Repo: store, Catalog: catalogue, Identity: auth, Content: content, Build: build, Ready: schedulerService.Ready, Notify: schedulerService.Notify, ResolveTools: registryService.Describe}
 	options = &httptransport.RuntimeOptions{Service: service, Repo: store, UI: &agui.Projector{Repo: store}, Workspaces: workspaceService, Snapshots: snapshots, Finisher: finisher, Cancel: supervisorService.Cancel}
 	lifecycle = &runtimeLifecycle{lease: lease, supervisor: supervisorService, cancel: cancel}
 	lifecycle.wg.Add(2)

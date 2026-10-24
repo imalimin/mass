@@ -34,15 +34,16 @@ type Repository interface {
 	RuntimeArtifact(context.Context, string, string, string) (run.Artifact, error)
 }
 type Service struct {
-	ToolPolicy   run.ToolPolicy
-	ResolveTools func([]run.ToolSpec) ([]run.ToolSpec, error)
-	Repo         Repository
-	Catalog      *catalog.Service
-	Identity     *identity.Service
-	Content      *resource.ContentStore
-	Build        string
-	Ready        func(context.Context) error
-	Notify       func()
+	ModelAttempts int
+	ToolPolicy    run.ToolPolicy
+	ResolveTools  func([]run.ToolSpec) ([]run.ToolSpec, error)
+	Repo          Repository
+	Catalog       *catalog.Service
+	Identity      *identity.Service
+	Content       *resource.ContentStore
+	Build         string
+	Ready         func(context.Context) error
+	Notify        func()
 }
 type CreateInput struct {
 	Key              string `json:"idempotency_key"`
@@ -239,6 +240,7 @@ func (s *Service) Submit(ctx context.Context, actor, space, sessionID string, in
 	}
 	message := journal.New(actor, "user.message.accepted", "", journal.UserMessageData{ID: uuid.NewString(), ContentID: o.ID, Attachments: attachments}, refs...)
 	definition.ToolPolicy = s.ToolPolicy
+	definition.ModelAttempts = max(1, s.ModelAttempts)
 	id = uuid.NewString()
 	definition.Instructions = ""
 	definition.Platform = ""
