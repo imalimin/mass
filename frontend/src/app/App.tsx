@@ -47,9 +47,9 @@ export function App() {
   }
   return <div className="layout"><aside className="app-sidebar"><Link className="brand" to="/spaces">M<span className="brand-dot">A</span>SS<span className="brand-sub">AGENT WORKSPACE</span></Link>
     <nav aria-label="主导航"><NavLink className="all-spaces" to="/spaces" end>我的空间</NavLink></nav>
-    {space && <><label className="space-switcher">当前空间<select value={space.id} onChange={e => navigate(spacePath(e.target.value))}>{spaces.data?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
+    {space && <><div className="sidebar-space-name">{space.name}</div>
       <nav aria-label="空间导航">{['工作空间', '定义与资源', '空间管理'].map(group => <div key={group}><div className="nav-caption">{group}</div>{workspaceSections.filter(s => s.group === group && (!('ownerOnly' in s) || space.is_owner)).map(s => <NavLink key={s.path} to={spacePath(space.id, s.path)} end={!s.path}>{s.label}</NavLink>)}</div>)}</nav></>}
-    <div className="sidebar-footer"><span>{me.data.username}</span><button onClick={() => logout.mutate()} disabled={logout.isPending}>退出登录</button></div></aside>
+    <AccountSettings username={me.data.username} spaces={spaces.data ?? []} spaceID={space?.id} pending={logout.isPending} onLogout={() => logout.mutate()} /></aside>
     <main id="main-content"><nav className="breadcrumbs" aria-label="面包屑"><Link to="/spaces">我的空间</Link>{space && <><span aria-hidden="true">/</span><Link to={spacePath(space.id)}>{space.name}</Link>{section && <><span aria-hidden="true">/</span><span aria-current="page">{page?.label ?? '页面未找到'}</span></>}</>}</nav>
       <header><div><div className="eyebrow">{space ? space.name : 'WORKSPACE'}</div><h1>{space ? page?.label ?? '页面未找到' : '我的空间'}</h1></div><span className="service-status">已连接 MASS 服务</span></header>
       <p className="intro">{space ? page?.description : '选择一个空间，开始协作与任务。'}</p>
@@ -60,6 +60,33 @@ export function App() {
         <Route path="*" element={<NotFound />} /></Routes>
       <footer>会话固定定义版本，运行记录与文件快照持续保存。</footer>
     </main></div>
+}
+function AccountSettings({ username, spaces, spaceID, pending, onLogout }: { username: string; spaces: Schema['Space'][]; spaceID?: string; pending: boolean; onLogout: () => void }) {
+  const [open, setOpen] = useState(false), root = useRef<HTMLDivElement>(null), trigger = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null)
+  const navigate = useNavigate(), location = useLocation()
+  useEffect(() => { setOpen(false) }, [location.pathname])
+  useEffect(() => {
+    if (!open) return
+    panel.current?.focus()
+    const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false) }
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setOpen(false); trigger.current?.focus() } }
+    document.addEventListener('pointerdown', outside)
+    document.addEventListener('keydown', escape)
+    return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape) }
+  }, [open])
+  return <div className="sidebar-footer account-settings" ref={root} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false) }}>
+    <span className="account-name" title={username}>{username}</span>
+    <button className="settings-toggle" type="button" ref={trigger} aria-label="账号设置" title="账号设置" aria-expanded={open} aria-controls={open ? 'account-settings-panel' : undefined} aria-haspopup="dialog" onClick={() => setOpen(value => !value)}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9.2 3-.6 2.2-1.4.8L5 5.5 2.3 10l1.6 1.7v1.6L2.3 15 5 19.5l2.2-.5 1.4.8.6 2.2h5.2l.6-2.2 1.4-.8 2.2.5 2.7-4.5-1.6-1.7v-1.6l1.6-1.7-2.7-4.5-2.2.5-1.4-.8-.6-2.2Z" /><circle cx="11.8" cy="12.5" r="3.2" /></svg>
+    </button>
+    {open && <div className="account-popover" id="account-settings-panel" role="dialog" aria-label="账号设置" ref={panel} tabIndex={-1}>
+      <div className="account-popover-title">账号设置</div>
+      <label className="space-switcher">切换空间<select value={spaceID ?? ''} onChange={event => { navigate(spacePath(event.target.value)); setOpen(false); trigger.current?.focus() }} disabled={spaces.length === 0}><option value="" disabled>选择空间</option>{spaces.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
+      {spaces.length === 0 && <p className="muted">暂无可切换的空间。</p>}
+      <div className="account-popover-divider" />
+      <button className="logout-action" type="button" disabled={pending} onClick={onLogout}>{pending ? '正在退出…' : '退出登录'}</button>
+    </div>}
+  </div>
 }
 function Login({ onSuccess }: { onSuccess: () => void }) {
   const [username, setUsername] = useState(''), [password, setPassword] = useState('')

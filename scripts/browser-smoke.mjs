@@ -54,7 +54,7 @@ try {
   await a.getByRole('button', { name: '编辑 协作模型 v2', exact: true }).waitFor()
   assert.ok(await a.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile layout overflow')
   await a.screenshot({ path: '.cache/d02-mobile.png', fullPage: true })
-  await a.getByRole('button', { name: '退出登录', exact: true }).click(); await a.getByRole('heading', { name: '登录 MASS' }).waitFor()
+  await a.getByRole('button', { name: '账号设置', exact: true }).click(); await a.getByRole('button', { name: '退出登录', exact: true }).click(); await a.getByRole('heading', { name: '登录 MASS' }).waitFor()
   await a.reload(); await a.getByRole('heading', { name: '登录 MASS' }).waitFor()
   const response = await alice.request.get(server.url + '/api/v1/spaces'); assert.equal(response.status(), 401)
   assert.deepEqual(errors, [])
