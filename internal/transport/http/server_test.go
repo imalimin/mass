@@ -48,6 +48,12 @@ func TestRoutingBoundaries(t *testing.T) {
 		contentType  string
 	}{
 		{"GET", "/", 200, "text/html"}, {"GET", "/spaces", 200, "text/html"}, {"GET", "/assets/app.js", 200, "javascript"},
+		{"GET", "/spaces/example", 200, "text/html"},
+		{"GET", "/spaces/example/members", 200, "text/html"}, {"GET", "/spaces/example/models", 200, "text/html"}, {"GET", "/spaces/example/credentials", 200, "text/html"},
+		{"GET", "/spaces/example/agents", 200, "text/html"}, {"GET", "/spaces/example/agents/definition", 200, "text/html"},
+		{"GET", "/spaces/example/skills/definition", 200, "text/html"}, {"GET", "/spaces/example/sessions/session?run=run", 200, "text/html"},
+		{"HEAD", "/spaces/example/sessions/session", 200, "text/html"}, {"GET", "/spaces/example/unknown", 404, "application/json"},
+		{"GET", "/spaces/example/agents/id/missing.js", 404, "application/json"}, {"POST", "/spaces/example/members", 405, "application/json"},
 		{"GET", "/assets/missing.js", 404, "application/json"}, {"GET", "/unknown", 404, "application/json"}, {"GET", "/api/v1/missing", 404, "application/json"}, {"GET", "/health/missing", 404, "application/json"}, {"POST", "/spaces", 405, "application/json"},
 		{"GET", "/health/live", 200, "application/json"}, {"GET", "/health/ready", 503, "application/json"}, {"GET", "/api/v1/system", 200, "application/json"},
 	} {

@@ -11,7 +11,7 @@ BUILD_TIME := $(SOURCE_DATE_EPOCH)
 export NPM_CONFIG_CACHE := $(CURDIR)/.cache/npm
 export PLAYWRIGHT_BROWSERS_PATH := $(CURDIR)/.cache/playwright
 
-.PHONY: setup setup-browser generate generate-check fmt lint typecheck test-unit test-race test-e2e build-frontend dev build verify-d00 verify-d01 verify-d02 verify-d03 verify-d04 verify-d05 verify-d06 verify-d08 verify-d09-local test-fault-e2e test-debug-e2e test-context-e2e test-tools-e2e smoke-real smoke-tos test-runtime-e2e test-catalog-e2e test-integration verify release test-delivery verify-d10-local check-toolchain test-recovery smoke-recovery verify-live
+.PHONY: test-navigation setup setup-browser generate generate-check fmt lint typecheck test-unit test-race test-e2e build-frontend dev build verify-d00 verify-d01 verify-d02 verify-d03 verify-d04 verify-d05 verify-d06 verify-d08 verify-d09-local test-fault-e2e test-debug-e2e test-context-e2e test-tools-e2e smoke-real smoke-tos test-runtime-e2e test-catalog-e2e test-integration verify release test-delivery verify-d10-local check-toolchain test-recovery smoke-recovery verify-live
 setup:
 	node scripts/check-toolchain.mjs
 	$(GO) mod download
@@ -73,7 +73,11 @@ verify-d10-local: export MASS_TEST_REAL_MODEL := 0
 verify-d10-local: verify-d09-local test-delivery test-recovery
 	git diff --check
 
+test-navigation: build-frontend
+	node scripts/navigation-browser-smoke.mjs
+
 test-e2e: build
+	node scripts/navigation-browser-smoke.mjs
 	node scripts/smoke.mjs
 	node scripts/browser-smoke.mjs
 

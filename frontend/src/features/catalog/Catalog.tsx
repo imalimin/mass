@@ -1,4 +1,5 @@
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { sessionPath } from '../../app/routes'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Markdown from 'react-markdown'
@@ -10,19 +11,21 @@ type Draft = Schema['DefinitionDraft']; type Doc = Schema['DefinitionDocument'];
 const tools = ['list_files', 'read_file', 'write_file', 'edit_file', 'glob_files', 'search_files', 'move_file', 'delete_file', 'list_skill_resources', 'read_skill_resource', 'read_attachment', 'run_code', 'update_plan', 'publish_artifact']
 const errorText = (e: unknown) => e instanceof Error ? e.message : '操作未完成'
 const displayVersion = (v: Version) => v.debug ? `调试快照 ${v.id.slice(0, 8)}` : v.label
-export function Catalog({ space }: { space: Schema['Space'] }) {
-  const [kind, setKind] = useState<Kind>('skill'), [selected, setSelected] = useState(''), [name, setName] = useState('')
+export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind }) {
+  const { definitionId: selected = '' } = useParams(), navigate = useNavigate()
+  const [name, setName] = useState('')
   const client = useQueryClient(), base = `/spaces/${space.id}/${kind}s`
   const query = useQuery({ queryKey: ['private', space.id, kind, 'list'], queryFn: ({ signal }) => list<Schema['Definition']>(base, signal), refetchInterval: q => q.state.error ? false : 5000 })
   const refresh = () => { void client.invalidateQueries({ queryKey: ['private', space.id] }) }
-  const create = useMutation({ mutationFn: () => request<Draft>(base, 'POST', { name }), onSuccess: d => { setSelected(d.id); setName(''); refresh() } })
-  return <section className="panel catalog"><div className="actions"><button className={kind === 'skill' ? 'selected' : 'secondary'} onClick={() => { setKind('skill'); setSelected('') }}>Skills</button><button className={kind === 'agent' ? 'selected' : 'secondary'} onClick={() => { setKind('agent'); setSelected('') }}>Agents</button></div>
-    <h2>{kind === 'skill' ? 'Skill 方法库' : 'Agent 定义'}</h2><p className="muted">保存草稿后发布独立版本。Agent 始终绑定指定的 Skill 版本。当前支持全部十四个内置工具。</p>
+  const select = (id: string) => navigate(`${base}/${id}`)
+  const create = useMutation({ mutationFn: () => request<Draft>(base, 'POST', { name }), onSuccess: d => { select(d.id); setName(''); refresh() } })
+  return <section className="panel catalog">{selected ? <><Link className="text-link back-link" to={base}>← 返回 {kind === 'skill' ? 'Skills' : 'Agents'} 列表</Link><DefinitionEditor key={`${kind}-${selected}`} space={space.id} kind={kind} id={selected} onCopied={select} refresh={refresh} /></> : <>
+    <h2>{kind === 'skill' ? 'Skill 方法库' : 'Agent 定义'}</h2><p className="muted">保存草稿后发布独立版本。Agent 始终绑定指定的 Skill 版本。</p>
     <form className="inline-form" onSubmit={e => { e.preventDefault(); create.mutate() }}><label>定义名称<input value={name} onChange={e => setName(e.target.value)} pattern="[a-z][a-z0-9-]{0,63}" placeholder="例如 report-writer" required /></label><button disabled={create.isPending}>创建 {kind === 'skill' ? 'Skill' : 'Agent'}</button></form>
     {[query.error, create.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}
-    <div className="definition-list">{query.data?.map(d => <button className={d.id === selected ? 'selected' : 'secondary'} key={d.id} onClick={() => setSelected(d.id)}>{d.name}{d.archived ? '（已归档）' : ''}</button>)}</div>
-    {selected && <DefinitionEditor key={`${kind}-${selected}`} space={space.id} kind={kind} id={selected} onCopied={setSelected} refresh={refresh} />}
-  </section>
+    <div className="definition-list">{query.data?.map(d => <Link className="resource-link" key={d.id} to={`${base}/${d.id}`}>{d.name}{d.archived ? '（已归档）' : ''}<span aria-hidden="true"> →</span></Link>)}</div>
+    {query.isPending && <p role="status">正在读取定义…</p>}{query.data?.length === 0 && <p className="muted">还没有 {kind === 'skill' ? 'Skill' : 'Agent'}，创建第一个定义开始使用。</p>}
+  </>}</section>
 }
 function DefinitionEditor(props: { space: string; kind: Kind; id: string; onCopied: (id: string) => void; refresh: () => void }) {
   const { space, kind, id } = props
@@ -55,7 +58,7 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
     if (!detail.data || detail.data.archived) throw new Error('请选择可用的固定版本')
     if (debugRequest.current?.version !== detail.data.id) debugRequest.current = { version: detail.data.id, key: crypto.randomUUID() }
     return request<Schema['RuntimeSession']>(`/spaces/${space}/sessions`, 'POST', { agent_id: id, version_id: detail.data.id, title: `调试 · ${draft.name}`, idempotency_key: debugRequest.current.key }, debugAbort.current.signal)
-  }, onSuccess: session => { if (debugAbort.current.signal.aborted) return; navigate(`/spaces?space=${space}&session=${session.id}`) } })
+  }, onSuccess: session => { if (debugAbort.current.signal.aborted) return; navigate(sessionPath(space, session.id)) } })
   const mutateState = useMutation({ mutationFn: ({ suffix, body }: { suffix: string; body: unknown }) => request(`${base}/${suffix}`, 'PUT', body), onSuccess: async () => { accept(await request<Draft>(`${base}/draft`)); setNotice('状态已更新') } })
   const copy = useMutation({ mutationFn: () => request<Draft>(`${base}/copy`, 'POST', { name: copyName }), onSuccess: d => { refresh(); onCopied(d.id) } })
   const upload = useMutation({ mutationFn: async () => {

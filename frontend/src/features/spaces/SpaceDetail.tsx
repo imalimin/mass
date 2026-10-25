@@ -3,23 +3,23 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { list, request, type Schema } from '../../lib/api'
 
 type Space = Schema['Space']; type Credential = Schema['Credential']; type Model = Schema['Model']
-export function SpaceDetail({ space, user, onLeave }: { space: Space; user: Schema['User']; onLeave: () => void }) {
+export function Members({ space, user, onLeave }: { space: Space; user: Schema['User']; onLeave: () => void }) {
   const client = useQueryClient(), base = `/spaces/${space.id}`, [username, setUsername] = useState('')
   const members = useQuery({ queryKey: ['private', space.id, 'members'], queryFn: ({ signal }) => list<Schema['Member']>(`${base}/members`, signal), refetchInterval: q => q.state.error ? false : 5000 })
   const refresh = () => { void client.invalidateQueries({ queryKey: ['private', space.id] }); void client.invalidateQueries({ queryKey: ['spaces'] }) }
   const add = useMutation({ mutationFn: () => request(`${base}/members`, 'POST', { username }), onSuccess: () => { setUsername(''); refresh() } })
   const remove = useMutation({ mutationFn: (id: string) => request(`${base}/members/${id}`, 'DELETE'), onSuccess: (_, id) => { if (id === user.id) { client.removeQueries({ queryKey: ['private', space.id] }); onLeave() }; refresh() } })
-  return <><section className="panel"><h2>空间成员</h2><p className="muted">管理员管理成员与模型。普通成员可使用空间内资源，也可退出空间。</p>
+  return <><section className="panel"><h2>成员列表</h2><p className="muted">管理员可邀请已有账号加入空间。普通成员可查看成员，也可退出空间。</p>
     {members.data?.map(m => <div className="resource-row" key={m.id}><span>{m.username} <small>{m.is_owner ? '管理员 · 不可移除' : '成员'}</small></span>{!m.is_owner && (space.is_owner || user.id === m.id) && <button className="secondary" disabled={remove.isPending} onClick={() => remove.mutate(m.id)}>{user.id === m.id ? '退出空间' : `移除 ${m.username}`}</button>}</div>)}
     {space.is_owner && <form className="inline-form" onSubmit={e => { e.preventDefault(); add.mutate() }}><label>已有账号用户名<input value={username} onChange={e => setUsername(e.target.value)} required /></label><button disabled={add.isPending}>添加成员</button></form>}
     {[members.error, add.error, remove.error].filter(Boolean).map((e, i) => <p key={i} role="alert">{e?.message}</p>)}</section>
-    {space.is_owner && <Credentials space={space} />}<Models space={space} /></>
+    </>
 }
-function Credentials({ space }: { space: Space }) {
+export function Credentials({ space }: { space: Space }) {
   const client = useQueryClient(), base = `/spaces/${space.id}/credentials`
   const query = useQuery({ queryKey: ['private', space.id, 'credentials'], queryFn: ({ signal }) => list<Credential>(base, signal) })
   const [editing, setEditing] = useState<Credential | null>(null)
-  return <section className="panel"><h2>供应商凭证</h2><p className="muted">凭证加密保存，保存后不会再次显示密钥。</p>{query.data?.map(c => <div className="resource-row" key={c.id}><span>{c.name} <small>{c.enabled ? '已启用' : '已禁用'}</small></span><button className="secondary" onClick={() => setEditing(c)}>管理 {c.name}</button></div>)}{query.error && <p role="alert">{query.error.message}</p>}
+  return <section className="panel"><h2>凭证列表</h2><p className="muted">凭证加密保存，保存后不会再次显示密钥。</p>{query.data?.map(c => <div className="resource-row" key={c.id}><span>{c.name} <small>{c.enabled ? '已启用' : '已禁用'}</small></span><button className="secondary" onClick={() => setEditing(c)}>管理 {c.name}</button></div>)}{query.error && <p role="alert">{query.error.message}</p>}
     <CredentialForm key={editing ? `${editing.id}-${editing.revision}` : 'new'} base={base} editing={editing} onSaved={() => { setEditing(null); void client.invalidateQueries({ queryKey: ['private', space.id] }) }} onCancel={() => setEditing(null)} />
   </section>
 }
@@ -28,14 +28,14 @@ function CredentialForm({ base, editing, onSaved, onCancel }: { base: string; ed
   const save = useMutation({ mutationFn: () => request(base + (editing ? `/${editing.id}` : ''), editing ? 'PUT' : 'POST', { name, secret, enabled, ...(editing ? { revision: editing.revision } : {}) } satisfies Schema['CredentialInput']), onSuccess: () => { setSecret(''); setName(''); onSaved() } })
   return <form className="form-grid" onSubmit={e => { e.preventDefault(); save.mutate() }}><h3>{editing ? '修改凭证' : '新增凭证'}</h3><label>凭证名称<input value={name} onChange={e => setName(e.target.value)} maxLength={100} required /></label><label>{editing ? '替换密钥（留空保留）' : 'API 密钥'}<input type="password" autoComplete="new-password" value={secret} onChange={e => setSecret(e.target.value)} required={!editing} maxLength={8192} /></label><label className="checkbox"><input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />启用凭证</label><div className="actions"><button disabled={save.isPending}>{editing ? '保存凭证' : '创建凭证'}</button>{editing && <button className="secondary" type="button" onClick={onCancel}>取消修改</button>}</div>{save.error && <p role="alert">{save.error.message}</p>}</form>
 }
-function Models({ space }: { space: Space }) {
+export function Models({ space }: { space: Space }) {
   const client = useQueryClient(), base = `/spaces/${space.id}`
   const query = useQuery({ queryKey: ['private', space.id, 'models'], queryFn: ({ signal }) => list<Model>(`${base}/models${space.is_owner ? '' : '?available=true'}`, signal) })
   const credentials = useQuery({ queryKey: ['private', space.id, 'credentials'], queryFn: ({ signal }) => list<Credential>(`${base}/credentials`, signal), enabled: space.is_owner })
   const capabilities = useQuery({ queryKey: ['private', space.id, 'capabilities'], queryFn: ({ signal }) => request<Schema['ModelCapabilities']>(`${base}/model-capabilities`, 'GET', undefined, signal) })
   const [editing, setEditing] = useState<Model | null>(null)
   const disable = useMutation({ mutationFn: (m: Model) => request(`${base}/models/${m.id}`, 'DELETE', { revision: m.revision }), onSuccess: () => { setEditing(null); void client.invalidateQueries({ queryKey: ['private', space.id, 'models'] }) } })
-  return <section className="panel"><h2>{space.is_owner ? '模型配置' : '可用模型'}</h2><p className="muted">Ark · 文本输入 · 工具调用 · 流式输出。填写已开通且支持这些能力的模型 ID；实际调用在运行阶段验证。</p>
+  return <section className="panel"><h2>{space.is_owner ? '模型列表' : '可用模型'}</h2><p className="muted">Ark · 文本输入 · 工具调用 · 流式输出。填写已开通且支持这些能力的模型 ID；实际调用在运行阶段验证。</p>
     {query.data?.map(m => <div className="resource-row" key={m.id}><span>{m.name}<small>{m.model_id} · {m.enabled ? '已启用' : '已停用'}</small></span>{space.is_owner && <div className="actions"><button className="secondary" onClick={() => setEditing(m)}>编辑 {m.name}</button>{m.enabled && <button className="secondary" disabled={disable.isPending} onClick={() => disable.mutate(m)}>停用 {m.name}</button>}</div>}</div>)}
     {query.data?.length === 0 && <p className="muted">尚无可用模型配置。</p>}{[query.error, credentials.error, capabilities.error, disable.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{e?.message}</p>)}
     {space.is_owner && capabilities.data && <ModelForm key={editing ? `${editing.id}-${editing.revision}` : 'new'} base={base} editing={editing} credentials={credentials.data ?? []} capabilities={capabilities.data} onSaved={() => { setEditing(null); void client.invalidateQueries({ queryKey: ['private', space.id, 'models'] }) }} onCancel={() => setEditing(null)} />}</section>

@@ -63,7 +63,7 @@ func NewHandler(assets fs.FS, version string, logger *slog.Logger, options ...Id
 			writeError(w, 405, "method_not_allowed", "Method not allowed")
 			return
 		}
-		if r.URL.Path == "/" || r.URL.Path == "/spaces" || r.URL.Path == "/login" {
+		if isUIRoute(r.URL.Path) {
 			index, err := fs.ReadFile(assets, "index.html")
 			if err != nil {
 				writeError(w, 503, "ui_unavailable", "UI build is unavailable")
@@ -103,6 +103,29 @@ func NewHandler(assets fs.FS, version string, logger *slog.Logger, options ...Id
 		}()
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// Only known application routes fall back to the SPA; missing assets and API
+// endpoints retain their JSON 404 responses.
+func isUIRoute(urlPath string) bool {
+	if urlPath == "/" || urlPath == "/spaces" || urlPath == "/login" {
+		return true
+	}
+	parts := strings.Split(strings.Trim(urlPath, "/"), "/")
+	if len(parts) < 2 || parts[0] != "spaces" || parts[1] == "" {
+		return false
+	}
+	if len(parts) == 2 {
+		return true
+	}
+	switch parts[2] {
+	case "members", "models", "credentials":
+		return len(parts) == 3
+	case "sessions", "agents", "skills":
+		return len(parts) == 3 || len(parts) == 4 && parts[3] != ""
+	default:
+		return false
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
