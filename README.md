@@ -138,7 +138,7 @@ bin/mass serve --config mass.yaml
 
 可按以下流程体验：
 
-1. 在「我的空间」创建空间，进入空间概览；分别在「供应商凭证」和「模型配置」中配置 Ark 凭证及可用模型。
+1. 在昵称右侧的「账号设置」中点击「创建空间」，通过对话框创建并进入空间概览；分别在「供应商凭证」和「模型配置」中配置 Ark 凭证及可用模型。
 2. 进入「Skills」，创建 Skill、编辑 `SKILL.md`、上传资源并发布 v1。
 3. 进入「Agents」创建 Agent，编辑 `AGENTS.md`，选择模型和准确的 Skill 版本，应用配置、保存草稿并发布 v1。
 4. 修改 Skill 并发布 v2；旧 Agent v1 继续引用原 Skill v1。
@@ -148,7 +148,9 @@ bin/mass serve --config mass.yaml
 8. 在同一会话发送“读取 notes.txt 的内容”验证跨轮文件延续。每轮停止后保存快照；关闭页面不取消后台任务，取消按钮会等待实际执行停止。
 9. 使用启用了 `read_attachment`、`run_code`、`update_plan`、`publish_artifact` 的 Agent 新建会话，添加 UTF-8 JSON/CSV 附件后发送：“先更新计划，读取附件，用 JavaScript 汇总 amount，保存 summary.json 并发布产物，最后完成计划。”上传后须发送任务才接受附件；页面可查看计划、附件原文、工具结果及代码 I/O Trace。
 
-空间内各功能使用独立路由，左侧导航和面包屑显示当前位置；手机端可横向滚动功能导航。空间列表为 `/spaces`，空间概览为 `/spaces/:space_id`，成员、模型、凭证、Agent、Skill、会话分别位于该空间下的 `/members`、`/models`、`/credentials`、`/agents`、`/skills`、`/sessions`。定义编辑和会话详情在列表路径后追加资源 ID；会话中可用 `?run=:run_id` 固定查看某次运行。刷新或浏览器前进后退会保持位置，旧的 `/spaces?space=…&session=…&run=…` 链接会自动跳转到新地址。凭证入口仅对空间管理员显示。
+登录后或进入 `/spaces` 时，若用户已有空间，默认选中创建时间最早的一个；没有空间时显示工作台空状态。左栏下拉菜单只列出实际空间，用于直接切换；昵称右侧的「账号设置」中提供「创建空间」对话框及退出登录。原「我的空间」列表页已移除，`/spaces?view=all` 也自动进入默认空间。
+
+空间内各功能使用独立路由，左侧导航和面包屑显示当前位置；手机端可横向滚动功能导航。默认入口为 `/spaces`，空间概览为 `/spaces/:space_id`，成员、模型、凭证、Agent、Skill、会话分别位于该空间下的 `/members`、`/models`、`/credentials`、`/agents`、`/skills`、`/sessions`。定义编辑和会话详情在列表路径后追加资源 ID；会话中可用 `?run=:run_id` 固定查看某次运行。刷新或浏览器前进后退会保持位置，旧的 `/spaces?space=…&session=…&run=…` 链接会自动跳转到新地址。凭证入口仅对空间管理员显示。
 
 会话固定创建时的 Agent/Skill 定义，后续修改默认版本不会改变已有会话。容量不足会明确报错，当前不自动压缩或截断上下文。文件写入/编辑限每文件 1 MiB UTF-8，读取返回至多 64 KiB 范围及摘要；附件每个最多 8 MiB，工具解析支持 UTF-8 文本、JSON、CSV。写入、编辑、移动、删除通过 `expected_sha256` 防止冲突；发布的产物保持原版本，即使源文件被删除也可下载。
 

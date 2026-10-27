@@ -111,7 +111,7 @@ func (s *Service) CreateSpace(ctx context.Context, actor, name string) (Space, e
 	if !validName(name) {
 		return Space{}, ErrInvalid
 	}
-	v := Space{uuid.NewString(), name, true}
+	v := Space{ID: uuid.NewString(), Name: name, IsOwner: true, CreatedAt: time.Now().UTC().Truncate(time.Microsecond)}
 	return v, s.Repo.CreateSpace(ctx, actor, v)
 }
 func (s *Service) AddMember(ctx context.Context, actor, space, name string) error {

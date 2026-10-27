@@ -11,7 +11,7 @@ try {
   browser = await chromium.launch({ headless: true, channel: 'chromium' })
   const context = await browser.newContext({ viewport: { width: 1440, height: 1100 } }); page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message))
   await page.goto(server.url); await page.getByLabel('用户名', { exact: true }).fill('alice'); await page.getByLabel('密码', { exact: true }).fill('correct-password-alice'); await page.getByRole('button', { name: '登录', exact: true }).click()
-  await page.getByLabel('新空间名称').fill('运行验收'); await page.getByRole('button', { name: '创建空间', exact: true }).click()
+  await page.getByRole('button', { name: '账号设置', exact: true }).click(); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await page.getByLabel('新空间名称').fill('运行验收'); await page.getByRole('button', { name: '创建空间', exact: true }).click()
   await page.locator('.app-sidebar').getByRole('link', { name: '供应商凭证', exact: true }).click()
   await page.getByLabel('凭证名称').fill('运行凭证'); await page.getByLabel('API 密钥', { exact: true }).fill('fixture-provider-key'); await page.getByRole('button', { name: '创建凭证', exact: true }).click(); await page.getByRole('button', { name: '管理 运行凭证', exact: true }).waitFor()
   await page.locator('.app-sidebar').getByRole('link', { name: '模型配置', exact: true }).click()

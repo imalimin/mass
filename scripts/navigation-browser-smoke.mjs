@@ -7,12 +7,12 @@ import { resolve, extname } from 'node:path'
 import { once } from 'node:events'
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve('.cache/playwright')
 const require = createRequire(new URL('../frontend/package.json', import.meta.url)), { chromium, expect } = require('@playwright/test')
-const spaces = [{ id: 'space-one', name: '研究空间', is_owner: true }, { id: 'space-two', name: '协作空间', is_owner: false }]
+const spaces = [{ id: 'space-one', name: '研究空间', is_owner: true, created_at: '2026-10-26T00:00:00Z' }, { id: 'space-two', name: '协作空间', is_owner: false, created_at: '2026-10-24T00:00:00Z' }]
 const sessions = [{ id: 'session-one', space_id: 'space-one', title: '周报会话', version_id: 'version-one', workspace_error: '' }, { id: 'session-two', space_id: 'space-one', title: '分析会话', version_id: 'version-one', workspace_error: '' }]
 const usage = { input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_write_tokens: null }
 const runs = ['run-one', 'run-two'].map((id, i) => ({ id, session_id: 'session-one', created_at: `2026-10-25T00:00:0${i}Z`, status: 'succeeded', usage, error: '', workspace_snapshot_id: '' }))
 const pageOf = items => ({ items, next_cursor: null, has_more: false, next_after: '0' })
-let signedIn = true
+let signedIn = true, createdSpaces = 0
 const requests = [], unexpected = []
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost'), path = url.pathname
@@ -22,7 +22,14 @@ const server = createServer(async (req, res) => {
     if (path === '/api/v1/auth/me') return json(signedIn ? { id: 'alice', username: 'alice' } : { code: 'unauthenticated' }, signedIn ? 200 : 401)
     if (path === '/api/v1/auth/login') { signedIn = true; return json({ id: 'alice', username: 'alice' }) }
     if (path === '/api/v1/auth/logout') { signedIn = false; res.writeHead(204); return res.end() }
-    if (path === '/api/v1/spaces') return json(pageOf(spaces))
+    if (path === '/api/v1/spaces' && req.method === 'POST') {
+      let body = ''; for await (const chunk of req) body += chunk
+      const { name } = JSON.parse(body)
+      if (name === 'rejected-space') return json({ code: 'invalid_request' }, 400)
+      const space = { id: `created-space-${++createdSpaces}`, name, is_owner: true, created_at: `2026-10-28T00:00:0${createdSpaces}Z` }
+      spaces.push(space); return json(space, 201)
+    }
+    if (path === '/api/v1/spaces') return json({ ...pageOf(url.searchParams.has('cursor') ? spaces.slice(1) : spaces.slice(0, 1)), next_cursor: !url.searchParams.has('cursor') && spaces.length > 1 ? 'older-page' : null })
     if (path.endsWith('/members')) return json(pageOf([{ id: 'alice', username: 'alice', is_owner: true }]))
     if (path.endsWith('/credentials') || path.endsWith('/models')) return json(pageOf([]))
     if (path.endsWith('/model-capabilities')) return json({ provider: 'ark', endpoint: 'https://example.test', input_types: ['text'], streaming: true, tool_calling: true })
@@ -53,14 +60,18 @@ try {
   const errors = []; page.on('pageerror', e => errors.push(e.message))
   const nav = label => page.locator('.app-sidebar').getByRole('link', { name: label, exact: true })
   const heading = text => expect(page.getByRole('heading', { level: 1 })).toHaveText(text)
+  // The oldest space is deliberately on the second API page and has a later ID.
+  await page.goto(url + '/'); await heading('空间概览'); await expect(page).toHaveURL(url + '/spaces/space-two')
+  await expect(page.getByLabel('切换空间')).toHaveValue('space-two')
+  await page.goto(url + '/login'); await expect(page).toHaveURL(url + '/spaces/space-two')
   await page.goto(url + '/spaces?space=space-one')
   await expect(page).toHaveURL(url + '/spaces/space-one'); await heading('空间概览')
   await expect(page.getByLabel('新空间名称')).toHaveCount(0)
   await expect(page.getByLabel('已有账号用户名')).toHaveCount(0)
   const settings = page.getByRole('button', { name: '账号设置', exact: true })
   await expect(page.getByRole('button', { name: '退出登录', exact: true })).toHaveCount(0)
-  await expect(page.getByLabel('切换空间')).toHaveCount(0)
-  await settings.click(); await expect(page.getByRole('dialog', { name: '账号设置' })).toBeVisible()
+  await expect(page.getByLabel('切换空间')).toBeVisible()
+  await settings.click(); await expect(page.getByRole('dialog', { name: '账号设置' })).toBeVisible(); await expect(page.getByRole('dialog', { name: '账号设置' }).getByLabel('切换空间')).toHaveCount(0)
   await page.keyboard.press('Escape'); await expect(settings).toBeFocused(); await expect(settings).toHaveAttribute('aria-expanded', 'false')
   await settings.click(); await page.getByRole('heading', { level: 1 }).click(); await expect(page.getByRole('dialog', { name: '账号设置' })).toHaveCount(0)
   await nav('空间成员').click(); await heading('空间成员')
@@ -86,29 +97,55 @@ try {
   await expect(page).toHaveURL(url + '/spaces/space-one/sessions/session-one?run=run-two'); await expect(page.getByLabel('查看运行')).toHaveValue('run-two')
   await page.getByRole('link', { name: '← 返回会话列表', exact: true }).click(); await page.getByRole('link', { name: '分析会话', exact: true }).click()
   await page.getByRole('heading', { name: '分析会话', exact: true }).waitFor(); await expect(page).not.toHaveURL(/\?run=/)
-  await page.getByRole('button', { name: '账号设置', exact: true }).click(); await page.getByLabel('切换空间').selectOption('space-two'); await heading('空间概览'); await expect(page.getByRole('heading', { name: '分析会话', exact: true })).toHaveCount(0)
+  await page.getByLabel('切换空间').selectOption('space-two'); await heading('空间概览'); await expect(page.getByRole('heading', { name: '分析会话', exact: true })).toHaveCount(0)
   await expect(nav('供应商凭证')).toHaveCount(0)
   await page.goto(url + '/spaces/space-two/credentials'); await page.getByRole('heading', { name: '需要管理员权限' }).waitFor()
   assert.ok(!requests.includes('/api/v1/spaces/space-two/credentials'), 'member requested owner credentials')
-  await page.getByRole('button', { name: '账号设置', exact: true }).click(); await page.getByLabel('切换空间').selectOption('space-one'); await heading('空间概览')
+  await page.getByLabel('切换空间').selectOption('space-one'); await heading('空间概览')
+  await page.goto(url + '/spaces?view=all'); await heading('空间概览'); await expect(page).toHaveURL(url + '/spaces/space-two')
+  await expect(page.getByRole('region', { name: '空间列表' })).toHaveCount(0)
+  await expect(page.getByLabel('切换空间').locator('option')).toHaveCount(2)
+  await expect(page.getByLabel('切换空间')).not.toContainText('我的空间')
+  await page.getByLabel('切换空间').selectOption('space-one'); await heading('空间概览')
   await mkdir('.cache', { recursive: true }); await page.screenshot({ path: '.cache/navigation-desktop.png', fullPage: true })
   await page.setViewportSize({ width: 390, height: 844 }); await page.reload(); await heading('空间概览')
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile overview overflow')
   await nav('模型配置').click(); await expect(page.getByLabel('模型名称', { exact: true })).toBeVisible()
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile models overflow')
   await page.screenshot({ path: '.cache/navigation-mobile.png', fullPage: true })
-  await settings.click(); await expect(page.getByLabel('切换空间')).toBeVisible()
+  await settings.click(); await expect(page.getByRole('dialog', { name: '账号设置' }).getByRole('button', { name: '退出登录', exact: true })).toBeVisible()
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile settings overflow')
   await page.screenshot({ path: '.cache/account-settings-mobile.png', fullPage: true })
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '账号设置', exact: true }).click(); await page.getByRole('button', { name: '退出登录', exact: true }).click(); await page.getByRole('heading', { name: '登录 MASS' }).waitFor()
+  await page.getByLabel('用户名', { exact: true }).fill('alice'); await page.getByLabel('密码', { exact: true }).fill('synthetic-navigation-password'); await page.getByRole('button', { name: '登录', exact: true }).click()
+  await heading('空间概览'); await expect(page).toHaveURL(url + '/spaces/space-two')
+  await settings.click(); await page.getByRole('button', { name: '退出登录', exact: true }).click(); await page.getByRole('heading', { name: '登录 MASS' }).waitFor()
   await page.goto(url + '/spaces/space-one/sessions/session-two'); await page.getByRole('heading', { name: '登录 MASS' }).waitFor()
   await page.getByLabel('用户名', { exact: true }).fill('alice'); await page.getByLabel('密码', { exact: true }).fill('synthetic-navigation-password'); await page.getByRole('button', { name: '登录', exact: true }).click()
   await page.getByRole('heading', { name: '分析会话', exact: true }).waitFor(); await expect(page).toHaveURL(url + '/spaces/space-one/sessions/session-two')
   spaces.shift() // Revoke membership while a detail page is open.
   await page.getByText('空间访问权限已失效，已关闭当前空间。', { exact: false }).waitFor({ timeout: 15000 })
-  await expect(page).toHaveURL(url + '/spaces'); await expect(page.getByLabel('输入任务', { exact: true })).toHaveCount(0)
+  await expect(page).toHaveURL(url + '/spaces/space-two'); await expect(page.getByLabel('输入任务', { exact: true })).toHaveCount(0)
+  spaces.splice(0) // A user with no spaces can still create their first one.
+  await page.goto(url + '/spaces'); await heading('工作台'); await expect(page.getByLabel('新空间名称')).toHaveCount(0)
+  await expect(page.getByLabel('切换空间')).toBeDisabled()
+  const openCreate = async () => { await settings.click(); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await expect(page.getByRole('dialog', { name: '创建空间', exact: true })).toBeVisible() }
+  await openCreate(); await expect(page.getByLabel('新空间名称')).toBeFocused()
+  await page.keyboard.press('Escape'); await expect(page.getByRole('dialog', { name: '创建空间', exact: true })).toHaveCount(0); await expect(settings).toBeFocused()
+  await openCreate(); await page.getByRole('button', { name: '取消', exact: true }).click(); await expect(settings).toBeFocused()
+  await openCreate(); await page.getByLabel('新空间名称').fill('   '); await expect(page.getByRole('button', { name: '创建空间', exact: true })).toBeDisabled()
+  await page.getByLabel('新空间名称').fill('rejected-space'); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await expect(page.getByRole('dialog', { name: '创建空间' }).getByRole('alert')).toBeVisible()
+  await page.getByLabel('新空间名称').fill('第一个空间'); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await expect(page).toHaveURL(url + '/spaces/created-space-1')
+  await expect(page.getByRole('dialog', { name: '创建空间', exact: true })).toHaveCount(0); await expect(page.getByLabel('切换空间')).toHaveValue('created-space-1')
+  await openCreate(); await page.getByLabel('新空间名称').fill('第二个空间'); await page.screenshot({ path: '.cache/create-space-mobile.png', fullPage: true })
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile create dialog overflow')
+  await page.setViewportSize({ width: 1440, height: 1000 }); await page.screenshot({ path: '.cache/create-space-desktop.png', fullPage: true })
+  await page.getByRole('button', { name: '创建空间', exact: true }).click(); await expect(page).toHaveURL(url + '/spaces/created-space-2')
+  await page.goto(url + '/spaces?view=all'); await expect(page).toHaveURL(url + '/spaces/created-space-1')
+  await page.getByLabel('切换空间').selectOption('created-space-2'); await expect(page).toHaveURL(url + '/spaces/created-space-2')
+  await expect(page.getByLabel('切换空间').locator('option')).toHaveCount(2)
   assert.deepEqual(errors, []); assert.deepEqual(unexpected, [])
-  console.log('Navigation browser flow passed: separate pages, deep links, reload, browser history, legacy links, session/run scoping, role-aware navigation, membership revocation, login return and mobile layout. In-memory API only.')
+  console.log('Navigation browser flow passed: separate pages, deep links, reload, browser history, legacy links, session/run scoping, role-aware navigation, membership revocation, modal space creation, login return and mobile layout. In-memory API only.')
 } catch (e) { await mkdir('.cache', { recursive: true }); await page?.screenshot({ path: '.cache/navigation-failure.png', fullPage: true }); throw e }
 finally { await browser?.close(); server.closeAllConnections(); await new Promise(done => server.close(done)) }

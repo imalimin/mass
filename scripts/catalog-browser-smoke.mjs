@@ -12,7 +12,7 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1100 } })
   page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message))
   await page.goto(server.url); await page.getByLabel('用户名', { exact: true }).fill('alice'); await page.getByLabel('密码', { exact: true }).fill('correct-password-alice'); await page.getByRole('button', { name: '登录', exact: true }).click()
-  await page.getByLabel('新空间名称').fill('定义验收'); await page.getByRole('button', { name: '创建空间', exact: true }).click()
+  await page.getByRole('button', { name: '账号设置', exact: true }).click(); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await page.getByLabel('新空间名称').fill('定义验收'); await page.getByRole('button', { name: '创建空间', exact: true }).click()
   await page.locator('.app-sidebar').getByRole('link', { name: '供应商凭证', exact: true }).click()
   await page.getByLabel('凭证名称').fill('测试凭证'); await page.getByLabel('API 密钥', { exact: true }).fill('fixture-provider-key'); await page.getByRole('button', { name: '创建凭证', exact: true }).click()
   await page.getByRole('button', { name: '管理 测试凭证', exact: true }).waitFor()
@@ -48,7 +48,7 @@ try {
   await page.getByRole('button', { name: '设为默认版本', exact: true }).click(); await expect(page.getByLabel('查看版本').locator('option:checked')).toHaveText('v2（默认）')
   await page.getByLabel('查看版本').selectOption(agent1.id); await expect(page.getByTestId('version-markdown')).toHaveText('# Assistant v1')
   // A second browser editor changes the same draft; the first must retain its work.
-  const second = await context.newPage(); await second.goto(server.url); await second.getByRole('link', { name: '定义验收', exact: false }).click(); await second.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await second.getByRole('link', { name: 'assistant', exact: true }).click()
+  const second = await context.newPage(); await second.goto(server.url); await second.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await second.getByRole('link', { name: 'assistant', exact: true }).click()
   await edit('AGENTS.md', '# Concurrent server change', second); await save(second)
   await edit('AGENTS.md', '# My unsaved content'); const conflict = page.waitForResponse(r => r.url().endsWith('/draft') && r.request().method() === 'PUT'); await page.getByRole('button', { name: '保存草稿', exact: true }).click(); assert.equal((await conflict).status(), 409); await page.getByText('草稿已被其他编辑者修改。', { exact: false }).waitFor(); await page.locator('[data-editor="草稿冲突差异"] .monaco-diff-editor').waitFor()
   await page.getByRole('button', { name: '载入服务器草稿', exact: true }).click(); await second.close()

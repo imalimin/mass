@@ -4081,6 +4081,7 @@ components:
         - id
         - name
         - is_owner
+        - created_at
       properties:
         id:
           $ref: '#/components/schemas/ResourceID'
@@ -4090,6 +4091,9 @@ components:
           maxLength: 100
         is_owner:
           type: boolean
+        created_at:
+          type: string
+          format: date-time
     Member:
       type: object
       additionalProperties: false

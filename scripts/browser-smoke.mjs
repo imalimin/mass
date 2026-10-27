@@ -22,13 +22,13 @@ try {
   }
   await login(a, 'alice'); await login(b, 'bob')
   const nav = (page, name) => page.locator('.app-sidebar').getByRole('link', { name, exact: true })
-  const createSpace = async (page, name) => { await page.getByLabel('新空间名称').fill(name); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await page.getByRole('heading', { name, exact: true }).waitFor(); await nav(page, '空间成员').click() }
+  const createSpace = async (page, name) => { await page.getByRole('button', { name: '账号设置', exact: true }).click(); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await page.getByLabel('新空间名称').fill(name); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await page.getByRole('heading', { name, exact: true }).waitFor(); await nav(page, '空间成员').click() }
   await createSpace(a, '研究空间'); await createSpace(b, '独立空间')
   await expect(a.getByText('alice', { exact: false }).filter({ hasText: '不可移除' })).toBeVisible()
   await expect(a.getByRole('button', { name: '移除 alice', exact: true })).toHaveCount(0)
   await a.getByLabel('已有账号用户名').fill('bob'); await a.getByRole('button', { name: '添加成员', exact: true }).click()
   await a.getByRole('button', { name: '移除 bob', exact: true }).waitFor()
-  await nav(b, '我的空间').click(); await b.getByRole('link', { name: '研究空间', exact: false }).click(); await nav(b, '空间成员').click()
+  await b.getByLabel('切换空间').selectOption({ label: '研究空间' }); await nav(b, '空间成员').click()
   await b.getByRole('heading', { name: '空间成员', level: 1 }).waitFor()
   await expect(b.getByLabel('已有账号用户名')).toHaveCount(0)
   await expect(b.getByRole('heading', { name: '供应商凭证', exact: true })).toHaveCount(0)

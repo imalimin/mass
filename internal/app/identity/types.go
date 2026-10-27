@@ -20,9 +20,10 @@ type User struct {
 	Username string `json:"username"`
 }
 type Space struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	IsOwner bool   `json:"is_owner"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	IsOwner   bool      `json:"is_owner"`
+	CreatedAt time.Time `json:"created_at"`
 }
 type Member struct {
 	User

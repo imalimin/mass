@@ -1,3 +1,5 @@
+export const workspaceHomePath = '/spaces'
+
 export const workspaceSections = [
   { path: '', label: '空间概览', description: '查看空间入口，开始任务或管理协作资源。', group: '工作空间' },
   { path: 'sessions', label: '会话与运行', description: '选择 Agent 开始对话，查看运行记录与文件产物。', group: '工作空间' },

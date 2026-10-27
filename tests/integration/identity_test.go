@@ -116,10 +116,18 @@ func TestIdentityDatabaseAndHTTP(t *testing.T) {
 		w := api("POST", "/spaces", cookie, map[string]string{"name": name}, 201)
 		var s identity.Space
 		json.Unmarshal(w.Body.Bytes(), &s)
+		if s.CreatedAt.IsZero() {
+			t.Fatal("space creation timestamp missing")
+		}
 		return s
 	}
 	a, b := space(aCookie, "Alice space"), space(bCookie, "Bob space")
 	aBase, bBase := "/spaces/"+a.ID, "/spaces/"+b.ID
+	var listed identity.Page[identity.Space]
+	json.Unmarshal(api("GET", "/spaces", aCookie, nil, 200).Body.Bytes(), &listed)
+	if len(listed.Items) != 1 || listed.Items[0].ID != a.ID || !listed.Items[0].CreatedAt.Equal(a.CreatedAt) {
+		t.Fatal("space creation time changed between create and list", listed.Items)
+	}
 	api("GET", aBase+"/members", bCookie, nil, 403)
 	api("POST", aBase+"/members", bCookie, map[string]string{"username": "bob"}, 403)
 	api("POST", aBase+"/members", aCookie, map[string]string{"username": "bob"}, 204)

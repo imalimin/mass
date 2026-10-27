@@ -11,7 +11,7 @@ try {
   browser = await chromium.launch({ headless: true, channel: 'chromium' })
   const context = await browser.newContext({ viewport: { width: 1440, height: 1100 } }); page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message))
   await page.goto(server.url); await page.getByLabel('用户名', { exact: true }).fill('alice'); await page.getByLabel('密码', { exact: true }).fill('correct-password-alice'); await page.getByRole('button', { name: '登录', exact: true }).click()
-  await page.getByLabel('新空间名称').fill('运行验收'); await page.getByRole('button', { name: '创建空间', exact: true }).click()
+  await page.getByRole('button', { name: '账号设置', exact: true }).click(); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await page.getByLabel('新空间名称').fill('运行验收'); await page.getByRole('button', { name: '创建空间', exact: true }).click()
   await page.locator('.app-sidebar').getByRole('link', { name: '供应商凭证', exact: true }).click()
   await page.getByLabel('凭证名称').fill('运行凭证'); await page.getByLabel('API 密钥', { exact: true }).fill('fixture-provider-key'); await page.getByRole('button', { name: '创建凭证', exact: true }).click(); await page.getByRole('button', { name: '管理 运行凭证', exact: true }).waitFor()
   await page.locator('.app-sidebar').getByRole('link', { name: '模型配置', exact: true }).click()
@@ -44,7 +44,7 @@ try {
   await mkdir('.cache', { recursive: true }); await page.getByText('Trace 与上下文', { exact: true }).scrollIntoViewIfNeeded(); await page.screenshot({ path: '.cache/d08-desktop.png', fullPage: true }); await page.setViewportSize({ width: 390, height: 844 }); await inspection.scrollIntoViewIfNeeded(); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await page.screenshot({ path: '.cache/d08-mobile.png' })
   const calls = server.modelCalls(); await page.reload(); await page.getByText('已完成写入、读取和发布 notes.txt', { exact: true }).waitFor(); assert.equal(server.modelCalls(), calls)
   // A new space must unmount the old private transcript and all subscriptions.
-  await page.locator('.app-sidebar').getByRole('link', { name: '我的空间', exact: true }).click(); await page.getByLabel('新空间名称').fill('other-space'); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await expect(page.getByRole('heading', { level: 1 })).toHaveText('空间概览'); await expect(page.getByText('已完成写入、读取和发布 notes.txt', { exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: '账号设置', exact: true }).click(); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await page.getByLabel('新空间名称').fill('other-space'); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await expect(page.getByRole('heading', { level: 1 })).toHaveText('空间概览'); await expect(page.getByText('已完成写入、读取和发布 notes.txt', { exact: true })).toHaveCount(0)
   const oldCount = subscriptions.length; await page.waitForTimeout(1200); assert.equal(subscriptions.length, oldCount)
   // Watch a running shared Session as Bob, then revoke access while SSE is open.
   const membership = await context.request.post(`${server.url}/api/v1/spaces/${session.space_id}/members`, { headers: { Origin: server.url }, data: { username: 'bob' } }); assert.equal(membership.status(), 204); const members = await (await context.request.get(`${server.url}/api/v1/spaces/${session.space_id}/members`)).json(); const member = members.items.find(m => m.username === 'bob'); assert.ok(member)

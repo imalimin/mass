@@ -34,7 +34,7 @@ func (s *Store) DeleteSession(ctx context.Context, hash []byte) error {
 }
 func (s *Store) CreateSpace(ctx context.Context, actor string, space identity.Space) error {
 	return s.transaction(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO spaces(id,name) VALUES(?,?)", space.ID, space.Name); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO spaces(id,name,created_at) VALUES(?,?,?)", space.ID, space.Name, space.CreatedAt); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, "INSERT INTO space_members(space_id,user_id,is_owner) VALUES(?,?,TRUE)", space.ID, actor); err != nil {
@@ -45,14 +45,14 @@ func (s *Store) CreateSpace(ctx context.Context, actor string, space identity.Sp
 }
 func (s *Store) Spaces(ctx context.Context, actor string, q identity.Query) ([]identity.Space, error) {
 	items := []identity.Space{}
-	rows, err := s.DB.QueryContext(ctx, "SELECT s.id,s.name,m.is_owner FROM spaces s JOIN space_members m ON m.space_id=s.id WHERE m.user_id=? AND s.id>? ORDER BY s.id LIMIT ?", actor, q.After, q.Limit)
+	rows, err := s.DB.QueryContext(ctx, "SELECT s.id,s.name,m.is_owner,s.created_at FROM spaces s JOIN space_members m ON m.space_id=s.id WHERE m.user_id=? AND s.id>? ORDER BY s.id LIMIT ?", actor, q.After, q.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var v identity.Space
-		if err = rows.Scan(&v.ID, &v.Name, &v.IsOwner); err != nil {
+		if err = rows.Scan(&v.ID, &v.Name, &v.IsOwner, &v.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, v)

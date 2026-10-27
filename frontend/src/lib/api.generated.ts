@@ -1133,6 +1133,8 @@ export interface components {
             id: components["schemas"]["ResourceID"];
             name: string;
             is_owner: boolean;
+            /** Format: date-time */
+            created_at: string;
         };
         Member: {
             id: components["schemas"]["ResourceID"];
