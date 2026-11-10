@@ -162,8 +162,8 @@ func TestTOSRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := map[string]string{"PATH": "", "MASS_MARIADB_DSN": source.DSN, "MASS_MARIADB_MIGRATION_DSN": source.MigrationDSN, "MASS_TOS_ENDPOINT": endpoint, "MASS_TOS_REGION": region, "MASS_TOS_BUCKET": bucket, "MASS_TOS_ACCESS_KEY": access, "MASS_TOS_SECRET_KEY": secret, "MASS_MASTER_KEY": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32)), "MASS_LLM_MODEL_BASE_URL": provider}
-	cfg, err := bootstrap.ParseConfig(template, func(name string) string { return env[name] })
+	env := map[string]string{"PATH": "", "MASS_MARIADB_DSN": source.DSN, "MASS_MARIADB_MIGRATION_DSN": source.MigrationDSN, "MASS_TOS_ENDPOINT": endpoint, "MASS_TOS_REGION": region, "MASS_TOS_BUCKET": bucket, "MASS_TOS_ACCESS_KEY": access, "MASS_TOS_SECRET_KEY": secret, "MASS_MASTER_KEY": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))}
+	cfg, err := bootstrap.ParseConfig(template)
 	if err != nil {
 		t.Fatal(err)
 	}

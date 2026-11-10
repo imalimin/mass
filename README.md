@@ -100,7 +100,7 @@ set +a
 
 也可以通过部署平台直接注入同名环境变量。若现有 TOS 变量名是 `TOS_ACCESS_KEY` / `TOS_SECRET_KEY`，可修改 `mass.yaml` 中对应的 `access_key_env` / `secret_key_env` 来复用。
 
-当前 `check-config`、`migrate` 和 `user create` 共用完整配置校验，因此也需要提供应用 DSN、TOS 和主密钥变量；`migrate` 本身只连接 MariaDB。模型服务的 `base_url` 与 `api_key` 在每条模型配置中填写，运行时从对应模型读取，不使用 YAML 全局地址或密钥。Base URL 须使用 HTTPS，本机测试允许回环 HTTP 地址。模型 ID 与 API key 在每个空间的页面中配置并加密保存，运行不会自动导入环境凭证。`MASS_LLM_MODEL_ID` / `MASS_LLM_MODEL_KEY` 仅供显式真实模型冒烟使用。
+`check-config` 校验完整服务配置。`migrate` 只要求迁移 DSN，`user create` 与成员管理命令使用应用 DSN。模型服务的 `base_url` 与 `api_key` 在每条模型配置中填写，运行时从对应模型读取，不使用 YAML 全局地址或密钥。Base URL 须使用 HTTPS，本机测试允许回环 HTTP 地址。模型 ID 与 API key 在每个空间的页面中配置并加密保存，运行不会自动导入环境凭证。`MASS_LLM_MODEL_ID` / `MASS_LLM_MODEL_KEY` 仅供显式真实模型冒烟使用。
 
 ### 4. 初始化表结构
 

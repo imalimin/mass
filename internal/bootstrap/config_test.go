@@ -13,12 +13,20 @@ func fixtureEnv(name string) string {
 	}
 	return "offline-fixture"
 }
+func validateServiceConfig(data []byte, getenv func(string) string) error {
+	c, err := ParseConfig(data)
+	if err != nil {
+		return err
+	}
+	return c.ValidateService(getenv)
+}
+
 func TestConfig(t *testing.T) {
 	data, err := os.ReadFile("../../configs/mass.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ParseConfig(data, fixtureEnv); err != nil {
+	if err := validateServiceConfig(data, fixtureEnv); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -39,7 +47,7 @@ func TestConfig(t *testing.T) {
 		{"oversize", strings.Repeat("#", (1<<20)+1), fixtureEnv},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := ParseConfig([]byte(tc.data), tc.env); err == nil {
+			if err := validateServiceConfig([]byte(tc.data), tc.env); err == nil {
 				t.Fatal("accepted invalid configuration")
 			} else if strings.Contains(err.Error(), "not-base64") {
 				t.Fatal("secret disclosed in error")
@@ -57,14 +65,14 @@ func TestD02ConfigurationDefaults(t *testing.T) {
 	start := strings.Index(source, "storage:")
 	end := strings.Index(source[start:], "auth:") + start
 	source = source[:start] + source[end:]
-	config, err := ParseConfig([]byte(source), fixtureEnv)
+	config, err := ParseConfig([]byte(source))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if config.Storage.MaxObjectBytes != 256<<20 || config.Storage.MaxWorkspaceBytes != 128<<20 || config.Storage.MaxFileBytes != 32<<20 || config.Storage.MaxEntries != 10000 {
 		t.Fatal("incompatible legacy defaults")
 	}
-	if _, err = ParseConfig([]byte(strings.Replace(string(data), "max_object_bytes: 268435456", "max_object_bytes: -1", 1)), fixtureEnv); err == nil {
+	if err = validateServiceConfig([]byte(strings.Replace(string(data), "max_object_bytes: 268435456", "max_object_bytes: -1", 1)), fixtureEnv); err == nil {
 		t.Fatal("negative storage limit accepted")
 	}
 }

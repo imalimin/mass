@@ -30,6 +30,7 @@ const server = createServer(async (req, res) => {
       spaces.push(space); return json(space, 201)
     }
     if (path === '/api/v1/spaces') return json({ ...pageOf(url.searchParams.has('cursor') ? spaces.slice(1) : spaces.slice(0, 1)), next_cursor: !url.searchParams.has('cursor') && spaces.length > 1 ? 'older-page' : null })
+    if (path.endsWith('/members') && req.method === 'POST') return json({ code: 'forbidden' }, 403)
     if (path.endsWith('/members')) return json(pageOf([{ id: 'alice', username: 'alice', is_owner: true }]))
     if (/\/models(?:\/[^/]+)?$/.test(path)) {
       if (req.method === 'GET') return json(pageOf(models))
@@ -89,6 +90,10 @@ try {
   await settings.click(); await page.getByRole('heading', { level: 1 }).click(); await expect(page.getByRole('dialog', { name: '账号设置' })).toHaveCount(0)
   await nav('空间成员').click(); await heading('空间成员')
   await expect(page).toHaveURL(url + '/spaces/space-one/members'); await expect(page.getByLabel('已有账号用户名')).toBeVisible()
+  await page.getByLabel('已有账号用户名').fill('bob')
+  await page.getByRole('button', { name: '添加成员', exact: true }).click()
+  await expect(page.getByRole('alert')).toHaveText('没有访问权限，或成员资格已被撤销。')
+  await expect(page).toHaveURL(url + '/spaces/space-one/members')
   await expect(page.getByLabel('凭证名称')).toHaveCount(0)
   await expect(nav('供应商凭证')).toHaveCount(0)
   await nav('模型配置').click(); await heading('模型配置'); await expect(page.getByLabel('模型名称', { exact: true })).toBeVisible()

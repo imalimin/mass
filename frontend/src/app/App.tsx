@@ -22,27 +22,23 @@ export function App() {
     window.scrollTo(0, 0)
   }, [location.pathname, space, page])
   useEffect(() => {
-    const lost = (event: Event) => {
-      const status = (event as CustomEvent<number>).detail
-      void client.cancelQueries(); client.removeQueries({ queryKey: ['private'] })
-      setNotice(status === 403 ? '空间访问权限已失效，已关闭当前空间。' : '登录已失效，请重新登录。')
-      if (status === 401) { client.removeQueries({ queryKey: ['me'] }); void client.invalidateQueries({ queryKey: ['me'] }) }
-      else {
-        client.setQueryData<Schema['Space'][]>(['spaces'], previous => previous?.filter(s => s.id !== spaceID) ?? [])
-        void client.invalidateQueries({ queryKey: ['spaces'] })
-      }
+    const expireSession = () => {
+      setNotice('登录已失效，请重新登录。')
+      void client.resetQueries({ queryKey: ['me'] })
       navigate(workspaceHomePath)
     }
-    window.addEventListener('mass-access-lost', lost); return () => window.removeEventListener('mass-access-lost', lost)
-  }, [client, navigate, spaceID])
+    window.addEventListener('mass-session-expired', expireSession)
+    return () => window.removeEventListener('mass-session-expired', expireSession)
+  }, [client, navigate])
   useEffect(() => { if (me.error instanceof APIError && me.error.status === 401) { void client.cancelQueries({ queryKey: ['private'] }); client.removeQueries({ queryKey: ['private'] }); client.removeQueries({ queryKey: ['spaces'] }) } }, [me.error, client])
   useEffect(() => {
     if (space) { lastSpace.current = space.id; return }
     if (spaceID && spaces.isSuccess && lastSpace.current === spaceID) {
       lastSpace.current = null
-      window.dispatchEvent(new CustomEvent('mass-access-lost', { detail: 403 }))
+      setNotice('空间访问权限已失效，已关闭当前空间。')
+      navigate(workspaceHomePath, { replace: true })
     } else if (!spaceID || lastSpace.current !== spaceID) lastSpace.current = null
-  }, [space, spaceID, spaces.isSuccess])
+  }, [space, spaceID, spaces.isSuccess, navigate])
   const logout = useMutation({ mutationFn: () => request('/auth/logout', 'POST'), onSuccess: async () => { await client.cancelQueries(); client.clear(); navigate('/login') } })
   if (me.isPending) return <div className="loading" role="status">正在读取登录状态…</div>
   if (me.isError) {
@@ -51,7 +47,7 @@ export function App() {
   }
   return <div className="layout"><aside className="app-sidebar"><Link className="brand" to={workspaceHomePath}>M<span className="brand-dot">A</span>SS<span className="brand-sub">AGENT WORKSPACE</span></Link>
     <nav aria-label="主导航"><label className="workspace-picker">空间<select aria-label="切换空间" value={space?.id ?? spaces.data?.[0]?.id ?? ''} disabled={!spaces.data?.length} onChange={event => navigate(spacePath(event.target.value))}>{!spaces.data?.length && <option value="" disabled>{spaces.isPending ? '正在读取空间…' : '暂无空间'}</option>}{spaces.data?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label></nav>
-    {space && <nav aria-label="空间导航">{['工作空间', '定义与资源', '空间管理'].map(group => <div key={group}><div className="nav-caption">{group}</div>{workspaceSections.filter(s => s.group === group && (!('ownerOnly' in s) || space.is_owner)).map(s => <NavLink key={s.path} to={spacePath(space.id, s.path)} end={!s.path}>{s.label}</NavLink>)}</div>)}</nav>}
+    {space && <nav aria-label="空间导航">{['工作空间', '定义与资源', '空间管理'].map(group => <div key={group}><div className="nav-caption">{group}</div>{workspaceSections.filter(s => s.group === group).map(s => <NavLink key={s.path} to={spacePath(space.id, s.path)} end={!s.path}>{s.label}</NavLink>)}</div>)}</nav>}
     <AccountSettings username={me.data.username} pending={logout.isPending} onLogout={() => logout.mutate()} /></aside>
     <main id="main-content"><nav className="breadcrumbs" aria-label="面包屑"><Link to={space ? spacePath(space.id) : workspaceHomePath}>{space?.name ?? '工作台'}</Link>{space && <>{section && <><span aria-hidden="true">/</span><span aria-current="page">{page?.label ?? '页面未找到'}</span></>}</>}</nav>
       <header><div><div className="eyebrow">{space ? space.name : 'WORKSPACE'}</div><h1>{space ? page?.label ?? '页面未找到' : '工作台'}</h1></div><span className="service-status">已连接 MASS 服务</span></header>
@@ -146,6 +142,6 @@ function SpaceWorkspace({ space, user, pending, error }: { space?: Schema['Space
 }
 function SpaceOverview({ space }: { space: Schema['Space'] }) {
   return <><section className="panel overview-welcome"><div className="eyebrow">{space.is_owner ? '管理员' : '空间成员'}</div><h2>{space.name}</h2><p className="muted">从会话开始工作，在定义与资源中组织能力，在空间管理中配置协作环境。</p><Link className="primary-link" to={spacePath(space.id, 'sessions')}>进入会话与运行 →</Link></section>
-    {['定义与资源', '空间管理'].map(group => <section className="overview-group" key={group}><h2>{group}</h2><div className="overview-grid">{workspaceSections.filter(s => s.group === group && (!('ownerOnly' in s) || space.is_owner)).map(s => <Link className="overview-card" key={s.path} to={spacePath(space.id, s.path)}><h3>{s.label}</h3><p>{s.description}</p><span className="card-link">进入 →</span></Link>)}</div></section>)}</>
+    {['定义与资源', '空间管理'].map(group => <section className="overview-group" key={group}><h2>{group}</h2><div className="overview-grid">{workspaceSections.filter(s => s.group === group).map(s => <Link className="overview-card" key={s.path} to={spacePath(space.id, s.path)}><h3>{s.label}</h3><p>{s.description}</p><span className="card-link">进入 →</span></Link>)}</div></section>)}</>
 }
 function NotFound() { return <section className="panel"><h2>页面未找到</h2><p className="muted">请从导航选择功能，或返回空间概览。</p><Link className="text-link" to={workspaceHomePath}>返回工作台</Link></section> }

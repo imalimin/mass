@@ -138,8 +138,6 @@ auth:
 llm:
   framework: "eino"
   provider: "ark" # 可替换的首个组件示例，不代表已确定实际模型供应商
-  model_env: "MASS_LLM_MODEL"
-  api_key_env: "MASS_LLM_API_KEY"
 secrets:
   master_key_env: "MASS_MASTER_KEY"
 runtime:
@@ -208,7 +206,7 @@ Cookie 使用 SameSite=Lax，HTTPS 下 Secure；本地回环地址开发可显�
 
 模型 HTTP、代码网络请求、文件循环和 VM 接收取消；等待实际退出后才释放会话占用。正在传输的请求或已经发生的副作用不能追溯撤销，但之后不启动新动作。服务使用独立有界收尾 context 保存已收到的结果、权限失败和已有文件快照；这是系统收尾权限，不允许被移除主体借此读取内容或继续执行。数据库无法验证权限时拒绝继续，以实际存储错误结束，不伪称 403。
 
-SSE/下载已发送响应头后无法改 HTTP 状态：停止后续数据并关闭连接，前端通过普通 API 复核；得到 401/403 后清空私有视图、显示对应错误并停止重连。订阅者失去权限只终止其连接；只有 Run 发起者失去权限才终止该 Run，其他授权成员可查询失败事实。
+SSE/下载已发送响应头后无法改 HTTP 状态：停止后续数据并关闭连接，前端通过普通 API 复核；得到 401/403 后清空私有视图、显示对应错误并停止重连。订阅者失去权限只终止其连接；只有 Run 发起者失去权限才终止该 Run，其他授权成员可查询失败事实。普通操作收到 403 时在原页面显示错误。空间列表复核确认当前空间已不可访问后，才退出空间并清理该空间的私有查询。
 
 ### T01.1 D02 已实现的身份与空间契约
 
@@ -291,11 +289,11 @@ func (s *CatalogService) PublishAgent(ctx context.Context, in PublishInput) (Ver
 
 新增迁移 00004_definitions，不改动已发布的前三份迁移；D03 使用 schema 4；当前 serve 要求 schema 6。Agent 与 Skill 的元数据、草稿和版本复用 definitions / definition_drafts / definition_versions，以 kind 区分，外部 API 仍为 /agents 和 /skills。全部关联含 space_id；definition_dependencies 保存有序、准确的 Skill 内部版本 ID，数据库外键限制删除被引用版本。版本 label 在单一定义内区分大小写且唯一；latest（不区分大小写）及范围表达式不被接受。debug=true 的不可变快照无发布 label，不改变默认版本。
 
-定义名称为 1—64 字节的小写字母/数字/连字符标识，首字符为字母。agent.yaml 的 model 和 skills[].id 分别使用本空间模型配置 ID 与 Skill ID，version 是准确显示版本；name 必须与定义名称一致。严格拒绝未知字段、重复键、多 YAML 文档、alias/anchor、合并键、非法类型、未知工具、重复 Skill/工具及越界限额。草稿允许空正文和空配置便于新建；非空配置保存时校验结构，发布和调试快照进一步要求非空正文、完整配置、可用模型/凭证和未归档的准确依赖。输入/输出预留总量不得超过模型上下文容量，输出预留不超过模型上限。平台上限为 1000 步、3600 秒；这里是配置校验，D04 已接入运行限额，D05 继续扩展工具。
+定义名称为 1—64 字节的小写字母/数字/连字符标识，首字符为字母。agent.yaml 的 model 和 skills[].id 分别使用本空间模型配置 ID 与 Skill ID，version 是准确显示版本；name 必须与定义名称一致。严格拒绝未知字段、重复键、多 YAML 文档、alias/anchor、合并键、非法类型、未知工具、重复 Skill/工具及越界限额。草稿允许空正文和空配置便于新建；非空配置保存时校验结构，发布和调试快照进一步要求非空正文、完整配置、已启用的模型和未归档的准确依赖。输入/输出预留总量不得超过模型上下文容量，输出预留不超过模型上限。平台上限为 1000 步、3600 秒；这里是配置校验，D04 已接入运行限额，D05 继续扩展工具。
 
 Document 包含 Markdown 原文、配置原文和资源清单；正文上限 256 KiB、配置 64 KiB、资源最多 100 个、单资源 8 MiB。资源路径只允许 assets/ 下的规范相对路径，拒绝穿越、绝对路径、大小写冲突及文件/目录前缀冲突。JSON 上传接口使用 data_base64，HTTP 请求上限 12 MiB；资源上传自动推进草稿 revision。上传先经 ContentStore 写 TOS 并验证 ready，再在普通管理事务中提交草稿与引用；失败的未引用对象不能下载。草稿移除资源只移除当前引用，历史版本引用仍有效。
 
-发布准备阶段在授权事务中读取草稿、解析依赖和当前模型非秘密有效配置；随后在事务外将完整 Bundle 保存为 TOS 不可变对象，内容含原文、资源摘要、有序依赖 ID/label/hash、模型和凭证引用，不含秘密。最终事务再次检查成员、归档状态、草稿 revision、模型/依赖和 Bundle 摘要，再原子写入版本、依赖、对象引用、审计及 Agent 首次默认指针。准备后模型或草稿变化返回 draft_conflict，不发布混合内容；唯一版本冲突返回 version_conflict。网络写入不占用 SQL 事务，SQL 回滚保留不可见孤立对象，无 GC。
+发布准备阶段在授权事务中读取草稿、解析依赖和当前模型非秘密有效配置；随后在事务外将完整 Bundle 保存为 TOS 不可变对象，内容含原文、资源摘要、有序依赖 ID/label/hash 和非秘密模型配置，不含密钥。最终事务再次检查成员、归档状态、草稿 revision、模型/依赖和 Bundle 摘要，再原子写入版本、依赖、对象引用、审计及 Agent 首次默认指针。准备后模型或草稿变化返回 draft_conflict，不发布混合内容；唯一版本冲突返回 version_conflict。网络写入不占用 SQL 事务，SQL 回滚保留不可见孤立对象，无 GC。
 
 调试快照走相同准备/发布链，读取版本时验证 TOS 完整摘要并在远端读取后复核成员。默认版本切换只改指针；当前默认版本必须先切换后才能归档。归档阻止新的发布/依赖选择，已发布依赖与历史内容可继续读取。DELETE 版本不会物理删除；被引用返回 version_referenced，其他返回 invalid_definition，生命周期通过归档管理。复制定义创建独立新草稿，重写 Agent 配置 name，资源复用不可变对象。资源下载复用 D01 payloads 鉴权读取。
 
@@ -303,23 +301,19 @@ Document 包含 Markdown 原文、配置原文和资源清单；正文上限 256
 
 ## T03 M03 模型配置与凭证
 
-依赖：database/sql、AES-GCM、crypto/rand。模型配置包含 provider、model_id、能力与容量、非秘密参数、批准端点和 credential_ref。一般空间用户从批准端点选择，不直接指定任意网络地址。
-
-凭证密文关联 space_id、credential_id 和 key_id 作为附加认证数据；每次加密生成唯一 nonce。主密钥通过服务配置的秘密文件或环境注入，不提交仓库，不与密文一起作为数据库字段保存。明确密钥轮换和旧备份解密的要求。
-
-Run 固定非秘密有效配置和凭证引用；每次实际调用重新验证权限及凭证有效性，记录非秘密凭证版本标识。凭证轮换不要求历史快照保存旧秘密。
+依赖：database/sql、AES-GCM、crypto/rand。每条模型配置拥有自己的 provider、model_id、Base URL、API Key、容量和生成参数。空间管理员通过模型配置接口维护这些数据。
 
 参数能力在发布/调试和实际调用前校验。Provider 不支持工具、流式或输入类型时返回明确错误，不静默降级。费用记录同时保存价格来源及版本；无价格时只展示 usage。
 
-接口组：模型配置 CRUD、可用模型能力查询、凭证创建/替换/禁用；凭证响应永不回显秘密。
+### T03.1 模型连接与密钥
 
-### T03.1 D02 最小模型配置
+当前模型组件固定为 Ark；model-capabilities 查询给出 text、streaming、tool_calling 支持范围。Base URL 使用 HTTPS，本机回环测试允许 HTTP，拒绝 userinfo、query 和 fragment。旧 YAML 的 llm.model_env 与 llm.api_key_env 仅为配置兼容而接受，服务不读取其中引用的环境变量。
 
-批准端点默认 https://ark.cn-beijing.volces.com/api/v3，可通过 llm.base_url_env 指向部署批准的兼容 Base URL；旧配置缺省保留默认值。自定义地址要求 HTTPS，仅回环测试允许 HTTP，拒绝 userinfo/query/fragment。组件固定 D00 已验证的 Ark；model-capabilities 查询给出 text、streaming、tool_calling 支持范围。owner 填写已开通的模型 ID、context_window、max_output_tokens 和 temperature，后端检查模型 ID 格式、端点、容量和参数边界，不允许任意 URL。可用模型列表只返回模型和凭证均启用的配置。D04 已接入实际模型文本调用，多工具/缓存等能力继续在 D07 验证；D02 的配置保存不发起收费调用，也不声称测试用 ep-test 真实存在。
+模型支持创建、列表、详情、修改和停用。DELETE 是保留历史引用的软停用，修改须携带 revision，过期 revision 返回 409。新增时必须提供 API Key，编辑时留空保留旧值。AES-256-GCM 使用随机 nonce，附加认证数据绑定 space_id、模型 ID 和 key_id。响应和审计不包含密钥、密文或主密钥。
 
-模型支持创建、列表、详情、修改、停用；DELETE 是保留引用的软停用。凭证支持创建、修改/替换/禁用；修改必须携带 revision，旧 revision 返回 409。响应和审计不包含秘密、密文或主密钥。AES-256-GCM 使用 Go 随机 nonce AEAD，AAD 为版本化的 space_id/credential_id/key_id 元组；key_id 为主密钥 SHA-256 的前 16 字节标识。主密钥由已有 base64 32 字节配置来源加载，缺失或不匹配不能解密。
+Run 固定模型 ID 和非秘密执行参数。每次实际调用重新检查当前权限和模型启用状态，并从对应模型读取当前地址、密钥及修订号。schema 9 将已有密文和地址迁入 model_configs，删除独立凭证表。迁移密文保留旧加密绑定，首次替换密钥时改用模型 ID。历史快照仍可读取。
 
-当前只有一个有效主密钥；不得直接更换主密钥后丢弃旧值。主密钥迁移/密钥环未实现，备份恢复须保留与密文对应的旧主密钥；D07 再扩展完整轮换流程。供应商 API 密钥替换已支持，使用新随机 nonce 并增加 revision。服务端 ModelSecret 重新检查成员、模型/凭证启用状态后才能解密，HTTP 不暴露此方法；D04 每次调用重新解析 Run 固定的 credential_id，并检查当前模型及该凭证启用状态；凭证替换使用当前 revision，模型改绑不会悄悄改用其他凭证。通知与心跳配合停止检查，不缓存授权结果。llm.model_env/api_key_env 只用于显式真实冒烟，不自动向空间导入凭证。
+当前使用一个通过环境注入的 base64 编码 32 字节主密钥。API Key 可独立替换，主密钥轮换与旧备份解密流程仍见工程文档 E19.3。
 
 ## T04 M04 会话、消息与 Run
 
@@ -384,7 +378,7 @@ Run context 派生自服务执行生命周期，不使用提交请求的 context
 
 bootstrap.StartRuntime 组装串行 Scheduler、Supervisor、Executor、Planner、Gateway 与工具 Dispatcher。Scheduler 每 300ms 轮询并接受内存通知，先获取全局名额，再按空间最多 min(全局, 2) 准入，事务追加 run.started 后交接。数据库写入沿用空间授权锁 → Session → Run 顺序。GET_LOCK 独占连接保留至所有执行实际退出，普通请求取消不会关闭该连接。
 
-Supervisor 以服务生命周期创建有界 Run context，每 500ms 复核主体、固定凭证和模型启用状态并更新心跳。取消、撤权、超时、panic 均等待实际执行退出，再调用 resource.Finisher。运行通知不承担权限授予，撤权后的普通查询/动作仍被 Repository 拒绝。
+Supervisor 以服务生命周期创建有界 Run context，每 500ms 在同一授权事务中复核成员资格、Run 归属与取消状态以及绑定模型的启用状态，并更新心跳。模型地址和密钥在实际调用时读取。取消、撤权、超时、panic 均等待实际执行退出，再调用 resource.Finisher。运行通知不承担权限授予，撤权后的普通查询/动作仍被 Repository 拒绝。
 
 Finisher 的系统身份是一个绑定已认领 Run、主体、空间/Session 和 owner 的窄 Repository 能力，仅允许收尾/核实事实及该 Run 的归档/Manifest；调用方伪造 actor.kind=system 不能绕过鉴权。成功提交再次检查成员资格和取消标记；竞态发生时复用相同归档改为失败/取消收尾。收尾计划和稳定 UUID/时间写入数据库，以便核实未知提交；SQL 失败保留占用并停止接单，快照上传失败则提交明确失败和文件阻塞状态。
 

@@ -10,7 +10,7 @@ export async function request<T>(path: string, method = 'GET', body?: unknown, s
   if (!response.ok) {
     const data = await response.json().catch(() => ({})) as { code?: string }
     const error = new APIError(response.status, data.code ?? 'unknown')
-    if ((response.status === 401 || response.status === 403) && !path.startsWith('/auth/')) window.dispatchEvent(new CustomEvent('mass-access-lost', { detail: response.status }))
+    if (response.status === 401 && !path.startsWith('/auth/')) window.dispatchEvent(new Event('mass-session-expired'))
     throw error
   }
   return response.status === 204 ? undefined as T : await response.json() as T
@@ -24,12 +24,11 @@ export async function list<T>(path: string, signal?: AbortSignal): Promise<T[]> 
   } while (cursor)
   return items
 }
-export async function getSystem(): Promise<Schema['SystemInfo']> { return request('/system') }
 export async function payloadText(path: string, signal?: AbortSignal): Promise<string> {
   const response = await fetch(`/api/v1${path}`, { credentials: 'same-origin', signal })
   if (!response.ok) {
     const data = await response.json().catch(() => ({})) as { code?: string }
-    if ([401, 403].includes(response.status)) window.dispatchEvent(new CustomEvent('mass-access-lost', { detail: response.status }))
+    if (response.status === 401) window.dispatchEvent(new Event('mass-session-expired'))
     throw new APIError(response.status, data.code ?? 'unknown')
   }
   if (Number(response.headers.get('Content-Length')) > 1024 * 1024) { await response.body?.cancel(); throw new Error('载荷超过 1 MiB，请下载完整内容查看。') }

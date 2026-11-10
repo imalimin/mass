@@ -243,7 +243,7 @@ func exerciseCatalog(t *testing.T, blobs storage.BlobStore, prefix string) {
 	hooked.hook = func() {
 		m := model
 		m.Name = "changed model"
-		_, e = auth.SaveModel(ctx, u.ID, space.ID, model.ID, m)
+		model, e = auth.SaveModel(ctx, u.ID, space.ID, model.ID, m)
 		if e != nil {
 			t.Fatal(e)
 		}

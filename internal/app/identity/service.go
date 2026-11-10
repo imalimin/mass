@@ -180,9 +180,6 @@ func (s *Service) SaveModel(ctx context.Context, actor, space, id string, m Mode
 	if err != nil || len(m.APIKey) > 8192 || strings.ContainsAny(m.APIKey, "\x00\r\n") || (create && strings.TrimSpace(m.APIKey) == "") {
 		return Model{}, ErrInvalid
 	}
-	if err := s.Repo.CheckAccess(ctx, actor, space, true); err != nil {
-		return Model{}, err
-	}
 	m.BaseURL = baseURL
 	// Never accept persisted encryption metadata from an input value.
 	m.KeyID, m.Ciphertext, m.SecretBindingID = "", nil, ""

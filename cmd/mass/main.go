@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -95,9 +96,15 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) error {
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
-	c, err := bootstrap.LoadConfig(*configPath, os.Getenv)
+	c, err := bootstrap.LoadConfig(*configPath)
 	if err != nil {
 		return err
+	}
+	databaseCommand := args[0] == "migrate" || args[0] == "user-create" || member
+	if !databaseCommand {
+		if err := c.ValidateService(os.Getenv); err != nil {
+			return err
+		}
 	}
 	if args[0] == "check-config" {
 		_, err = fmt.Fprintln(out, "configuration valid")
@@ -114,8 +121,11 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) error {
 		if *sourceConfig == "" || *expectedDatabase == "" {
 			return errors.New("restore-storage requires --source-config and --expect-database")
 		}
-		source, err := bootstrap.LoadConfig(*sourceConfig, os.Getenv)
+		source, err := bootstrap.LoadConfig(*sourceConfig)
 		if err != nil {
+			return err
+		}
+		if err := source.ValidateService(os.Getenv); err != nil {
 			return err
 		}
 		result, err := bootstrap.RestoreStorage(ctx, source, c, *expectedDatabase)
@@ -125,13 +135,14 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) error {
 		_, err = fmt.Fprintf(out, "verified and relocated %d objects; preserved %d unreferenced uploading intents (not copied)\n", result.Relocated, result.UnreferencedUploads)
 		return err
 	}
-	if args[0] == "migrate" || args[0] == "user-create" || member {
-		dsn := os.Getenv(c.Database.DSNEnv)
+	if databaseCommand {
+		field, env := "database.dsn_env", c.Database.DSNEnv
 		if args[0] == "migrate" {
-			if c.Database.MigrationDSNEnv == "" || os.Getenv(c.Database.MigrationDSNEnv) == "" {
-				return errors.New("database.migration_dsn_env requires a nonempty environment value")
-			}
-			dsn = os.Getenv(c.Database.MigrationDSNEnv)
+			field, env = "database.migration_dsn_env", c.Database.MigrationDSNEnv
+		}
+		dsn := os.Getenv(env)
+		if strings.TrimSpace(dsn) == "" {
+			return fmt.Errorf("%s requires a nonempty environment value", field)
 		}
 		store, err := mariadb.Open(ctx, dsn)
 		if err != nil {

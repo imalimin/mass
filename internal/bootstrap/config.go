@@ -50,8 +50,9 @@ type Config struct {
 		MaxAttempts int    `yaml:"max_attempts"`
 		Framework   string `yaml:"framework"`
 		Provider    string `yaml:"provider"`
-		ModelEnv    string `yaml:"model_env"`
-		APIKeyEnv   string `yaml:"api_key_env"`
+		// Accepted for older configuration files. Model settings now live in the database.
+		ModelEnv  string `yaml:"model_env"`
+		APIKeyEnv string `yaml:"api_key_env"`
 	} `yaml:"llm"`
 	Secrets struct {
 		MasterKeyEnv string `yaml:"master_key_env"`
@@ -76,7 +77,7 @@ type Config struct {
 	} `yaml:"tools"`
 }
 
-func LoadConfig(path string, getenv func(string) string) (Config, error) {
+func LoadConfig(path string) (Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return Config{}, fmt.Errorf("open configuration: %w", err)
@@ -89,10 +90,10 @@ func LoadConfig(path string, getenv func(string) string) (Config, error) {
 	if len(data) > 1<<20 {
 		return Config{}, errors.New("configuration exceeds 1 MiB")
 	}
-	return ParseConfig(data, getenv)
+	return ParseConfig(data)
 }
 
-func ParseConfig(data []byte, getenv func(string) string) (Config, error) {
+func ParseConfig(data []byte) (Config, error) {
 	var c Config
 	if len(data) > 1<<20 {
 		return c, errors.New("configuration exceeds 1 MiB")
@@ -129,9 +130,6 @@ func ParseConfig(data []byte, getenv func(string) string) (Config, error) {
 	if c.Storage.MaxEntries == 0 {
 		c.Storage.MaxEntries = 10000
 	}
-	if err := c.validate(getenv); err != nil {
-		return Config{}, err
-	}
 	return c, nil
 }
 
@@ -147,7 +145,7 @@ func validateNode(n *yaml.Node, depth int) error {
 	return nil
 }
 
-func (c Config) validate(getenv func(string) string) error {
+func (c Config) ValidateService(getenv func(string) string) error {
 	if _, _, err := net.SplitHostPort(c.HTTP.Listen); err != nil {
 		return errors.New("http.listen must be host:port")
 	}

@@ -27,8 +27,6 @@ llm:
   max_attempts: 1
   framework: "eino"
   provider: "ark"
-  model_env: "MASS_LLM_MODEL_ID" # Used only by explicit real-model smoke tests.
-  api_key_env: "MASS_LLM_MODEL_KEY" # Legacy setting; runtime keys are encrypted in each model configuration.
 secrets:
   master_key_env: "MASS_MASTER_KEY"
 runtime:

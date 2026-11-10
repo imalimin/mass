@@ -122,33 +122,42 @@ func (l *RuntimeLease) Claim(ctx context.Context, s run.Snapshot) (run.View, err
 	}
 	return l.store.RuntimeRun(ctx, s.ActorID, s.SpaceID, s.ID)
 }
+
+// checkRun reads only the facts needed to authorize continued execution.
+func (l *RuntimeLease) checkRun(ctx context.Context, tx *sql.Tx, s run.Snapshot) error {
+	var status, owner string
+	var cancelled bool
+	if err := tx.QueryRowContext(ctx, "SELECT status,COALESCE(owner_id,''),cancel_requested FROM runs WHERE space_id=? AND id=? AND snapshot IS NOT NULL", s.SpaceID, s.ID).Scan(&status, &owner, &cancelled); err != nil {
+		return err
+	}
+	if status != "running" || owner != l.ID {
+		return run.ErrState
+	}
+	if cancelled {
+		return run.ErrCancelled
+	}
+	var id string
+	return tx.QueryRowContext(ctx, "SELECT id FROM model_configs WHERE space_id=? AND id=? AND enabled=TRUE", s.SpaceID, s.Definition.Model.ID).Scan(&id)
+}
+
 func (l *RuntimeLease) CheckRun(ctx context.Context, s run.Snapshot) error {
 	if !l.alive.Load() {
 		return run.ErrUnavailable
 	}
-	v, err := l.store.RuntimeRun(ctx, s.ActorID, s.SpaceID, s.ID)
-	if err != nil {
-		return err
-	}
-	if v.Status != "running" || v.OwnerID != l.ID {
-		return run.ErrState
-	}
-	if v.CancelRequested {
-		return run.ErrCancelled
-	}
-	_, err = l.store.ResolveModelSecret(ctx, s.ActorID, s.SpaceID, s.Definition.Model.ID)
-	return err
+	return l.store.scoped(ctx, s.ActorID, s.SpaceID, false, func(tx *sql.Tx) error {
+		return l.checkRun(ctx, tx, s)
+	})
 }
+
 func (l *RuntimeLease) Heartbeat(ctx context.Context, s run.Snapshot) error {
-	if err := l.CheckRun(ctx, s); err != nil {
-		return err
+	if !l.alive.Load() {
+		return run.ErrUnavailable
 	}
 	return l.store.scoped(ctx, s.ActorID, s.SpaceID, false, func(tx *sql.Tx) error {
-		var last int64
-		if err := tx.QueryRowContext(ctx, "SELECT last_sequence FROM sessions WHERE space_id=? AND id=? FOR UPDATE", s.SpaceID, s.SessionID).Scan(&last); err != nil {
+		if err := l.checkRun(ctx, tx, s); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE runs SET heartbeat_at=UTC_TIMESTAMP(6) WHERE space_id=? AND id=? AND status='running' AND owner_id=?", s.SpaceID, s.ID, l.ID)
+		_, err := tx.ExecContext(ctx, "UPDATE runs SET heartbeat_at=UTC_TIMESTAMP(6) WHERE space_id=? AND id=?", s.SpaceID, s.ID)
 		return err
 	})
 }
