@@ -178,11 +178,7 @@ func newFaultRig(t *testing.T) *faultRig {
 		t.Fatal(err)
 	}
 	r.space = space.ID
-	cred, err := r.auth.SaveCredential(ctx, r.actor, r.space, "", identity.CredentialInput{Name: "fixture", Secret: "D09-not-a-real-key", Enabled: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	model, err := r.auth.SaveModel(ctx, r.actor, r.space, "", identity.Model{Name: "fixture", Provider: "ark", Endpoint: identity.ArkEndpoint, ModelID: "fixture", CredentialID: cred.ID, ContextWindow: 32768, MaxOutputTokens: 2048, Enabled: true})
+	model, err := r.auth.SaveModel(ctx, r.actor, r.space, "", identity.Model{Name: "fixture", Provider: "ark", BaseURL: identity.ArkEndpoint, ModelID: "fixture", APIKey: "D09-not-a-real-key", ContextWindow: 32768, MaxOutputTokens: 2048, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

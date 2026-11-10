@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/imalimin/mass/db/migrations"
 	"github.com/imalimin/mass/tests/testdb"
 	"io"
 	"net"
@@ -21,7 +22,7 @@ func main() {
 	}
 }
 func run() error {
-	version := int64(7)
+	version := migrations.CurrentVersion
 	if os.Getenv("MASS_TEST_EMPTY_DATABASE") == "1" {
 		version = 0
 	}

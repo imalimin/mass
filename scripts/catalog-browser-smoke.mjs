@@ -13,11 +13,8 @@ try {
   page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message))
   await page.goto(server.url); await page.getByLabel('用户名', { exact: true }).fill('alice'); await page.getByLabel('密码', { exact: true }).fill('correct-password-alice'); await page.getByRole('button', { name: '登录', exact: true }).click()
   await page.getByRole('button', { name: '账号设置', exact: true }).click(); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await page.getByLabel('新空间名称').fill('定义验收'); await page.getByRole('button', { name: '创建空间', exact: true }).click()
-  await page.locator('.app-sidebar').getByRole('link', { name: '供应商凭证', exact: true }).click()
-  await page.getByLabel('凭证名称').fill('测试凭证'); await page.getByLabel('API 密钥', { exact: true }).fill('fixture-provider-key'); await page.getByRole('button', { name: '创建凭证', exact: true }).click()
-  await page.getByRole('button', { name: '管理 测试凭证', exact: true }).waitFor()
   await page.locator('.app-sidebar').getByRole('link', { name: '模型配置', exact: true }).click()
-  await page.getByLabel('模型名称', { exact: true }).fill('发布模型'); await page.getByLabel('Ark 模型 ID').fill('ep-fixture'); await page.getByLabel('使用凭证').selectOption({ label: '测试凭证' }); await page.getByRole('button', { name: '创建模型', exact: true }).click()
+  await page.getByLabel('模型名称', { exact: true }).fill('发布模型'); await page.getByLabel('Ark 模型 ID').fill('ep-fixture'); await page.getByLabel('Base URL', { exact: true }).fill(server.modelBaseURL); await page.getByLabel('API Key', { exact: true }).fill('fixture-provider-key'); await page.getByRole('button', { name: '创建模型', exact: true }).click()
   await page.getByRole('button', { name: '编辑 发布模型', exact: true }).waitFor()
   await page.locator('.app-sidebar').getByRole('link', { name: 'Skills', exact: true }).click()
   const edit = async (label, value, target = page) => {

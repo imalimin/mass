@@ -58,12 +58,17 @@ func TestD02UpgradeCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cred, err := svc.SaveCredential(ctx, user.ID, space.ID, "", identity.CredentialInput{Name: "Existing credential", Secret: "upgrade-provider-secret", Enabled: true})
+	// Seed the old schema directly; the current application requires schema 9.
+	credID := uuid.NewString()
+	keyID, ciphertext, err := cipher.Seal(space.ID, credID, []byte("upgrade-provider-secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	model, err := svc.SaveModel(ctx, user.ID, space.ID, "", identity.Model{Name: "Existing model", Provider: "ark", Endpoint: identity.ArkEndpoint, ModelID: "ep-upgrade", CredentialID: cred.ID, ContextWindow: 1000, MaxOutputTokens: 100, Enabled: true})
-	if err != nil {
+	if _, err = db.Admin.DB.Exec("INSERT INTO credentials(space_id,id,name,key_id,ciphertext,enabled) VALUES(?,?,?,?,?,TRUE)", space.ID, credID, "Existing credential", keyID, ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	model := identity.Model{ID: uuid.NewString()}
+	if _, err = db.Admin.DB.Exec("INSERT INTO model_configs(space_id,id,name,provider,model_id,endpoint,credential_id,context_window,max_output_tokens,temperature,enabled) VALUES(?,?,?,?,?,?,?,?,?,?,TRUE)", space.ID, model.ID, "Existing model", "ark", "ep-upgrade", "https://legacy.example/api/v3", credID, 1000, 100, 0.7); err != nil {
 		t.Fatal(err)
 	}
 	_, token, _, err := svc.Login(ctx, "upgrade", "upgrade-password")
@@ -78,6 +83,10 @@ func TestD02UpgradeCompatibility(t *testing.T) {
 	}
 	if err = db.Store.CheckSchema(ctx); err != nil {
 		t.Fatal(err)
+	}
+	migrated, err := db.Store.Model(ctx, user.ID, space.ID, model.ID)
+	if err != nil || migrated.BaseURL != "https://legacy.example/api/v3" {
+		t.Fatal("legacy credential endpoint not preserved", err)
 	}
 	current, err := svc.Me(ctx, token)
 	if err != nil || current.ID != user.ID {

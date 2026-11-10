@@ -5,3 +5,6 @@ import "embed"
 
 //go:embed *.sql
 var Files embed.FS
+
+// CurrentVersion is the schema required by the current binary.
+const CurrentVersion int64 = 9

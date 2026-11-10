@@ -91,16 +91,10 @@ func exerciseD07(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credential, err := auth.SaveCredential(ctx, actor.ID, space.ID, "", identity.CredentialInput{Name: "fixture", Secret: os.Getenv("MASS_LLM_MODEL_KEY"), Enabled: true})
+	model, err := auth.SaveModel(ctx, actor.ID, space.ID, "", identity.Model{Name: "fixture", Provider: "ark", BaseURL: os.Getenv("MASS_LLM_MODEL_BASE_URL"), ModelID: os.Getenv("MASS_LLM_MODEL_ID"), APIKey: os.Getenv("MASS_LLM_MODEL_KEY"), ContextWindow: 32768, MaxOutputTokens: 2048, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth.Endpoint = os.Getenv("MASS_LLM_MODEL_BASE_URL")
-	model, err := auth.SaveModel(ctx, actor.ID, space.ID, "", identity.Model{Name: "fixture", Provider: "ark", Endpoint: os.Getenv("MASS_LLM_MODEL_BASE_URL"), ModelID: os.Getenv("MASS_LLM_MODEL_ID"), CredentialID: credential.ID, ContextWindow: 32768, MaxOutputTokens: 2048, Enabled: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth.Endpoint = os.Getenv("MASS_LLM_MODEL_BASE_URL")
 	content := &resource.ContentStore{Repo: db.Store, Blobs: blobs, Prefix: prefix, MaxBytes: 32 << 20}
 	catalogue := &catalog.Service{Repo: db.Store, Content: content}
 	agent, err := catalogue.Create(ctx, actor.ID, space.ID, "agent", "context-agent")

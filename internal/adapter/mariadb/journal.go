@@ -74,12 +74,11 @@ func createRun(ctx context.Context, tx *sql.Tx, actor, space, session string, e 
 			return storage.ErrActive
 		}
 		var revision int64
-		var credential string
-		var enabled, credentialEnabled bool
-		if err := tx.QueryRowContext(ctx, "SELECT m.revision,m.credential_id,m.enabled,c.enabled FROM model_configs m JOIN credentials c ON c.space_id=m.space_id AND c.id=m.credential_id WHERE m.space_id=? AND m.id=?", space, v.Definition.Model.ID).Scan(&revision, &credential, &enabled, &credentialEnabled); err != nil {
+		var enabled bool
+		if err := tx.QueryRowContext(ctx, "SELECT m.revision,m.enabled FROM model_configs m WHERE m.space_id=? AND m.id=?", space, v.Definition.Model.ID).Scan(&revision, &enabled); err != nil {
 			return err
 		}
-		if revision != v.Definition.Model.Revision || credential != v.Definition.Model.CredentialID || !enabled || !credentialEnabled {
+		if revision != v.Definition.Model.Revision || !enabled {
 			return identity.ErrConflict
 		}
 		var def, base sql.NullString

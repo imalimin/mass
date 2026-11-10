@@ -13,7 +13,7 @@ const usage = { input_tokens: null, output_tokens: null, cache_read_tokens: null
 const runs = ['run-one', 'run-two'].map((id, i) => ({ id, session_id: 'session-one', created_at: `2026-10-25T00:00:0${i}Z`, status: 'succeeded', usage, error: '', workspace_snapshot_id: '' }))
 const pageOf = items => ({ items, next_cursor: null, has_more: false, next_after: '0' })
 let signedIn = true, createdSpaces = 0
-const requests = [], unexpected = []
+const requests = [], unexpected = [], models = [], modelKeys = new Map()
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost'), path = url.pathname
   const json = (body, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)) }
@@ -31,8 +31,21 @@ const server = createServer(async (req, res) => {
     }
     if (path === '/api/v1/spaces') return json({ ...pageOf(url.searchParams.has('cursor') ? spaces.slice(1) : spaces.slice(0, 1)), next_cursor: !url.searchParams.has('cursor') && spaces.length > 1 ? 'older-page' : null })
     if (path.endsWith('/members')) return json(pageOf([{ id: 'alice', username: 'alice', is_owner: true }]))
-    if (path.endsWith('/credentials') || path.endsWith('/models')) return json(pageOf([]))
-    if (path.endsWith('/model-capabilities')) return json({ provider: 'ark', endpoint: 'https://example.test', input_types: ['text'], streaming: true, tool_calling: true })
+    if (/\/models(?:\/[^/]+)?$/.test(path)) {
+      if (req.method === 'GET') return json(pageOf(models))
+      let raw = ''; for await (const chunk of req) raw += chunk
+      const body = JSON.parse(raw), id = path.endsWith('/models') ? `model-${models.length + 1}` : path.split('/').at(-1)
+      assert.ok(!('credential_id' in body) && !('endpoint' in body), 'UI retained separate credential binding')
+      const previous = models.find(m => m.id === id)
+      if (!body.base_url || !/^https:\/\//.test(body.base_url) || (!previous && !body.api_key)) return json({ code: 'invalid_request' }, 400)
+      if (previous && previous.revision !== body.revision) return json({ code: 'conflict' }, 409)
+      if (body.api_key) modelKeys.set(id, body.api_key)
+      const { api_key: _key, ...publicModel } = body
+      const value = { ...publicModel, id, base_url: body.base_url.replace(/\/+$/, ''), revision: (previous?.revision ?? 0) + 1 }
+      if (previous) models.splice(models.indexOf(previous), 1, value); else models.push(value)
+      return json(value, previous ? 200 : 201)
+    }
+    if (path.endsWith('/model-capabilities')) return json({ provider: 'ark', input_types: ['text'], streaming: true, tool_calling: true })
     if (/\/(agents|skills)$/.test(path)) return json(pageOf([{ id: 'definition-one', name: path.endsWith('/agents') ? 'report-agent' : 'extract-skill', archived: false }]))
     if (/\/(versions|debug-snapshots)$/.test(path)) return json(pageOf([]))
     if (path.endsWith('/draft')) return json({ id: 'definition-one', kind: path.includes('/agents/') ? 'agent' : 'skill', name: path.includes('/agents/') ? 'report-agent' : 'extract-skill', revision: 1, archived: false, document: { markdown: '# Navigation fixture', config_yaml: '{}', assets: [] } })
@@ -77,11 +90,23 @@ try {
   await nav('空间成员').click(); await heading('空间成员')
   await expect(page).toHaveURL(url + '/spaces/space-one/members'); await expect(page.getByLabel('已有账号用户名')).toBeVisible()
   await expect(page.getByLabel('凭证名称')).toHaveCount(0)
-  await nav('供应商凭证').click(); await heading('供应商凭证'); await expect(page.getByLabel('凭证名称')).toBeVisible()
-  await expect(page.getByLabel('模型名称', { exact: true })).toHaveCount(0)
+  await expect(nav('供应商凭证')).toHaveCount(0)
   await nav('模型配置').click(); await heading('模型配置'); await expect(page.getByLabel('模型名称', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('使用凭证')).toHaveCount(0)
+  await page.getByLabel('模型名称', { exact: true }).fill('primary'); await page.getByLabel('Ark 模型 ID').fill('fixture-model'); await page.getByLabel('Base URL', { exact: true }).fill('https://first.example/v1'); await page.getByLabel('API Key', { exact: true }).fill('synthetic-primary-key'); await page.getByRole('button', { name: '创建模型', exact: true }).click()
+  await page.getByRole('button', { name: '编辑 primary', exact: true }).click(); await expect(page.getByLabel('Base URL', { exact: true })).toHaveValue('https://first.example/v1')
+  await expect(page.getByLabel('API Key（留空保留）')).toHaveValue(''); await page.getByLabel('Base URL', { exact: true }).fill('https://rotated.example/v1'); await page.getByRole('button', { name: '保存模型', exact: true }).click()
+  await page.getByRole('button', { name: '编辑 primary', exact: true }).click(); await expect(page.getByLabel('Base URL', { exact: true })).toHaveValue('https://rotated.example/v1')
+  assert.equal(modelKeys.get('model-1'), 'synthetic-primary-key')
+  await page.getByLabel('API Key（留空保留）').fill('synthetic-rotated-key'); await page.getByRole('button', { name: '保存模型', exact: true }).click(); await page.getByRole('button', { name: '编辑 primary', exact: true }).click()
+  await expect(page.getByLabel('API Key（留空保留）')).toHaveValue(''); assert.equal(modelKeys.get('model-1'), 'synthetic-rotated-key')
+  await mkdir('.cache', { recursive: true }); await page.screenshot({ path: '.cache/model-connection.png', fullPage: true })
+  await page.getByRole('button', { name: '取消修改', exact: true }).click()
+  await page.getByLabel('模型名称', { exact: true }).fill('backup'); await page.getByLabel('Ark 模型 ID').fill('backup-model'); await page.getByLabel('Base URL', { exact: true }).fill('https://backup.example/v1'); await page.getByLabel('API Key', { exact: true }).fill('synthetic-backup-key'); await page.getByRole('button', { name: '创建模型', exact: true }).click(); await page.getByRole('button', { name: '编辑 backup', exact: true }).waitFor()
+  assert.equal(models[0].base_url, 'https://rotated.example/v1'); assert.equal(models[1].base_url, 'https://backup.example/v1'); assert.equal(modelKeys.get('model-2'), 'synthetic-backup-key')
   await page.reload(); await heading('模型配置'); await expect(nav('模型配置')).toHaveAttribute('aria-current', 'page')
-  await page.goBack(); await heading('供应商凭证'); await page.goForward(); await heading('模型配置')
+  await page.goBack(); await heading('空间成员'); await page.goForward(); await heading('模型配置')
+  await page.goto(url + '/spaces/space-one/credentials'); await expect(page).toHaveURL(url + '/spaces/space-one/models'); await heading('模型配置')
   await nav('Skills').click(); await heading('Skills'); await page.getByRole('link', { name: 'extract-skill', exact: true }).click()
   await expect(page).toHaveURL(url + '/spaces/space-one/skills/definition-one'); await page.getByRole('heading', { name: 'extract-skill · Skill' }).waitFor()
   await expect(page.getByLabel('定义名称')).toHaveCount(0)
@@ -99,7 +124,7 @@ try {
   await page.getByRole('heading', { name: '分析会话', exact: true }).waitFor(); await expect(page).not.toHaveURL(/\?run=/)
   await page.getByLabel('切换空间').selectOption('space-two'); await heading('空间概览'); await expect(page.getByRole('heading', { name: '分析会话', exact: true })).toHaveCount(0)
   await expect(nav('供应商凭证')).toHaveCount(0)
-  await page.goto(url + '/spaces/space-two/credentials'); await page.getByRole('heading', { name: '需要管理员权限' }).waitFor()
+  await page.goto(url + '/spaces/space-two/credentials'); await heading('模型配置'); await expect(page).toHaveURL(url + '/spaces/space-two/models'); await expect(page.getByLabel('API Key', { exact: true })).toHaveCount(0)
   assert.ok(!requests.includes('/api/v1/spaces/space-two/credentials'), 'member requested owner credentials')
   await page.getByLabel('切换空间').selectOption('space-one'); await heading('空间概览')
   await page.goto(url + '/spaces?view=all'); await heading('空间概览'); await expect(page).toHaveURL(url + '/spaces/space-two')
@@ -145,7 +170,7 @@ try {
   await page.goto(url + '/spaces?view=all'); await expect(page).toHaveURL(url + '/spaces/created-space-1')
   await page.getByLabel('切换空间').selectOption('created-space-2'); await expect(page).toHaveURL(url + '/spaces/created-space-2')
   await expect(page.getByLabel('切换空间').locator('option')).toHaveCount(2)
-  assert.deepEqual(errors, []); assert.deepEqual(unexpected, [])
-  console.log('Navigation browser flow passed: separate pages, deep links, reload, browser history, legacy links, session/run scoping, role-aware navigation, membership revocation, modal space creation, login return and mobile layout. In-memory API only.')
+  assert.deepEqual(errors, []); assert.deepEqual(unexpected, []); assert.ok(!requests.some(path => path.includes('/credentials')), 'UI called removed credential API')
+  console.log('Navigation browser flow passed: separate pages, deep links, reload, browser history, legacy links, session/run scoping, role-aware navigation, membership revocation, modal space creation, per-model Base URL and API Key, key retention and rotation, login return and mobile layout. In-memory API only.')
 } catch (e) { await mkdir('.cache', { recursive: true }); await page?.screenshot({ path: '.cache/navigation-failure.png', fullPage: true }); throw e }
 finally { await browser?.close(); server.closeAllConnections(); await new Promise(done => server.close(done)) }

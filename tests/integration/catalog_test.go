@@ -83,11 +83,7 @@ func exerciseCatalog(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	cred, e := auth.SaveCredential(ctx, u.ID, space.ID, "", identity.CredentialInput{Name: "fixture", Secret: "fixture-key", Enabled: true})
-	if e != nil {
-		t.Fatal(e)
-	}
-	model, e := auth.SaveModel(ctx, u.ID, space.ID, "", identity.Model{Name: "model", Provider: "ark", ModelID: "ep-test", Endpoint: identity.ArkEndpoint, CredentialID: cred.ID, ContextWindow: 32768, MaxOutputTokens: 4096, Enabled: true})
+	model, e := auth.SaveModel(ctx, u.ID, space.ID, "", identity.Model{Name: "model", Provider: "ark", ModelID: "ep-test", BaseURL: identity.ArkEndpoint, APIKey: "fixture-key", ContextWindow: 32768, MaxOutputTokens: 4096, Enabled: true})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -305,7 +301,7 @@ func exerciseCatalog(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if _, e = svc.Publish(ctx, u.ID, space.ID, "agent", agent.ID, "foreign", agent.Revision, false); !errors.Is(e, identity.ErrNotFound) {
 		t.Fatal("foreign dependency accepted", e)
 	}
-	// Missing dependency and latest are rejected, credentials are rechecked.
+	// Missing dependency and latest are rejected, model availability is rechecked.
 	missing := strings.Replace(config("v2"), s2.ID, uuid.NewString(), 1)
 	agent = save(agent, agent.Document.Markdown, missing)
 	api("POST", path(agent)+"/versions", map[string]any{"expected_revision": agent.Revision, "label": "missing"}, 404)
@@ -313,7 +309,8 @@ func exerciseCatalog(t *testing.T, blobs storage.BlobStore, prefix string) {
 	bad.ConfigYAML = config("latest")
 	api("PUT", path(agent)+"/draft", map[string]any{"expected_revision": agent.Revision, "document": bad}, 400)
 	agent = save(agent, agent.Document.Markdown, config("v2"))
-	if _, e = auth.SaveCredential(ctx, u.ID, space.ID, cred.ID, identity.CredentialInput{Name: cred.Name, Revision: cred.Revision, Enabled: false}); e != nil {
+	model.Enabled = false
+	if _, e = auth.SaveModel(ctx, u.ID, space.ID, model.ID, model); e != nil {
 		t.Fatal(e)
 	}
 	api("POST", path(agent)+"/debug-snapshots", map[string]any{"expected_revision": agent.Revision}, 404)

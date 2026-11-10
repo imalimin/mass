@@ -60,11 +60,7 @@ func TestContextStages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credential, err := auth.SaveCredential(ctx, actor.ID, space.ID, "", identity.CredentialInput{Name: "fixture", Secret: "fixture-key", Enabled: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	model, err := auth.SaveModel(ctx, actor.ID, space.ID, "", identity.Model{Name: "fixture", Provider: "ark", Endpoint: identity.ArkEndpoint, ModelID: "fixture", CredentialID: credential.ID, ContextWindow: 16384, MaxOutputTokens: 2048, Enabled: true})
+	model, err := auth.SaveModel(ctx, actor.ID, space.ID, "", identity.Model{Name: "fixture", Provider: "ark", BaseURL: identity.ArkEndpoint, ModelID: "fixture", APIKey: "fixture-key", ContextWindow: 16384, MaxOutputTokens: 2048, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -80,6 +80,9 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		t.Fatal(err)
 	}
 	defer db.Close()
+	if err = db.Admin.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
 	cipher, _ := secrets.New(bytes.Repeat([]byte{6}, 32))
 	auth, _ := identity.New(db.Store, cipher, time.Hour, []byte("runtime-test"))
 	actor, err := auth.CreateUser(ctx, "alice", "correct-password-alice")
@@ -90,15 +93,7 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 	if err != nil {
 		t.Fatal(err)
 	}
-	credential, err := auth.SaveCredential(ctx, actor.ID, space.ID, "", identity.CredentialInput{Name: "fixture", Secret: func() string {
-		if real {
-			return os.Getenv("MASS_LLM_MODEL_KEY")
-		}
-		return "fixture-secret"
-	}(), Enabled: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	baseURL := identity.ArkEndpoint
 	transportModel := &einoadapter.ModelTransport{}
 	respond := func(ctx context.Context, messages []*schema.Message) ([]*schema.Message, error) {
 		latest := ""
@@ -184,20 +179,25 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", raw)
 		}))
 		defer server.Close()
-		auth.Endpoint = server.URL
+		baseURL = server.URL
 		transportModel.Fake = nil
 	}
 	if real {
 		transportModel.Base = realModelHTTPBudget
-		auth.Endpoint = strings.TrimSuffix(os.Getenv("MASS_LLM_MODEL_BASE_URL"), "/")
+		baseURL = strings.TrimSuffix(os.Getenv("MASS_LLM_MODEL_BASE_URL"), "/")
 		transportModel.Fake = nil
 	}
-	model, err := auth.SaveModel(ctx, actor.ID, space.ID, "", identity.Model{Name: "runtime-model", Provider: "ark", Endpoint: auth.Endpoint, ModelID: func() string {
+	model, err := auth.SaveModel(ctx, actor.ID, space.ID, "", identity.Model{Name: "runtime-model", Provider: "ark", BaseURL: baseURL, ModelID: func() string {
 		if real {
 			return os.Getenv("MASS_LLM_MODEL_ID")
 		}
 		return "fixture"
-	}(), Temperature: 1, CredentialID: credential.ID, ContextWindow: 32768, MaxOutputTokens: 4096, Enabled: true})
+	}(), Temperature: 1, APIKey: func() string {
+		if real {
+			return os.Getenv("MASS_LLM_MODEL_KEY")
+		}
+		return "fixture-secret"
+	}(), ContextWindow: 32768, MaxOutputTokens: 4096, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Upgrade an actual D03 published definition and encrypted model in place.
+	// Repeated migrations preserve the published definition and encrypted model.
 	for i := 0; i < 2; i++ {
 		if err = db.Admin.Migrate(ctx); err != nil {
 			t.Fatal("D03 upgrade", err)

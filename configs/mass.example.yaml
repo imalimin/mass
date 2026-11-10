@@ -1,4 +1,4 @@
-# Copy to mass.yaml; provide the named environment values. D05 needs MariaDB/TOS; runtime uses space model credentials.
+# Copy to mass.yaml; provide the named environment values. D05 needs MariaDB/TOS; runtime uses each model connection configuration.
 # /health/ready checks the schema and TOS bucket with bounded caching.
 http:
   listen: "127.0.0.1:8080"
@@ -27,9 +27,8 @@ llm:
   max_attempts: 1
   framework: "eino"
   provider: "ark"
-  base_url_env: "MASS_LLM_MODEL_BASE_URL" # Approved compatible endpoint; old configs without this field use Ark.
   model_env: "MASS_LLM_MODEL_ID" # Used only by explicit real-model smoke tests.
-  api_key_env: "MASS_LLM_MODEL_KEY" # Runtime credentials are stored encrypted per space.
+  api_key_env: "MASS_LLM_MODEL_KEY" # Legacy setting; runtime keys are encrypted in each model configuration.
 secrets:
   master_key_env: "MASS_MASTER_KEY"
 runtime:

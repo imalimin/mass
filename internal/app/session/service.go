@@ -148,7 +148,7 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 	return s.Repo.RuntimeSession(ctx, actor, space, id)
 }
 func Model(m identity.Model) run.ModelConfig {
-	return run.ModelConfig{ID: m.ID, Provider: m.Provider, ModelID: m.ModelID, Endpoint: m.Endpoint, CredentialID: m.CredentialID, Revision: m.Revision, ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens, Temperature: m.Temperature}
+	return run.ModelConfig{ID: m.ID, Provider: m.Provider, ModelID: m.ModelID, Endpoint: m.BaseURL, Revision: m.Revision, ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens, Temperature: m.Temperature}
 }
 func (s *Service) Definition(ctx context.Context, actor, space string, ref storage.Ref) (run.Definition, error) {
 	var d run.Definition

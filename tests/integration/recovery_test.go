@@ -187,7 +187,6 @@ func TestTOSRecovery(t *testing.T) {
 	delete(env, cfg.Database.MigrationDSNEnv)
 	cipher, _ := secrets.New(bytes.Repeat([]byte{4}, 32))
 	auth, _ := identity.New(source.Store, cipher, time.Hour, []byte("recovery"))
-	auth.Endpoint = provider
 	actor, err := auth.CreateUser(ctx, "alice", "correct-password-alice")
 	if err != nil {
 		t.Fatal(err)
@@ -196,11 +195,7 @@ func TestTOSRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cred, err := auth.SaveCredential(ctx, actor.ID, space.ID, "", identity.CredentialInput{Name: "recovery fixture", Secret: "recovery-fixture-key", Enabled: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	model, err := auth.SaveModel(ctx, actor.ID, space.ID, "", identity.Model{Name: "recovery fixture", Provider: "ark", Endpoint: provider, ModelID: "loopback-fixture", CredentialID: cred.ID, ContextWindow: 32768, MaxOutputTokens: 1024, Enabled: true})
+	model, err := auth.SaveModel(ctx, actor.ID, space.ID, "", identity.Model{Name: "recovery fixture", Provider: "ark", BaseURL: provider, ModelID: "loopback-fixture", APIKey: "recovery-fixture-key", ContextWindow: 32768, MaxOutputTokens: 1024, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

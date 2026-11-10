@@ -25,7 +25,7 @@ type Transport interface {
 	Stream(context.Context, run.Snapshot, run.Prepared, string, Recorder, func(string) error) (run.Reply, error)
 }
 type Credentials interface {
-	ResolveRunSecret(context.Context, string, string, run.ModelConfig) ([]byte, int64, error)
+	ResolveRunSecret(context.Context, string, string, run.ModelConfig) ([]byte, string, int64, error)
 }
 type RunControl interface {
 	Check(context.Context) error
@@ -106,7 +106,7 @@ func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, 
 	if (purpose != "task" && purpose != "summary") || (purpose == "summary" && len(p.Tools) > 0) {
 		return reply, run.ErrProtocol
 	}
-	key, revision, err := g.Credentials.ResolveRunSecret(ctx, s.ActorID, s.SpaceID, s.Definition.Model)
+	key, baseURL, revision, err := g.Credentials.ResolveRunSecret(ctx, s.ActorID, s.SpaceID, s.Definition.Model)
 	if err != nil {
 		return reply, err
 	}
@@ -115,6 +115,8 @@ func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, 
 			key[i] = 0
 		}
 	}()
+	// Resolve the URL and key together from the run's fixed model ID on every attempt.
+	s.Definition.Model.Endpoint = baseURL
 	attempt, message := state.id, uuid.NewString()
 	if err = g.Control.Reserve(ctx, attempt, "model", int64(p.InputTokens+s.Definition.OutputTokens)); err != nil {
 		return reply, err

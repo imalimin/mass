@@ -28,8 +28,8 @@ func (s *Store) RelocateStorage(ctx context.Context, expectedDatabase string, ch
 		return result, errors.New("restore requires the target service to be stopped")
 	}
 	defer lease.Close()
-	// Validate every credential, including disabled ones needed by old backups.
-	rows, err := s.DB.QueryContext(ctx, "SELECT space_id,id,key_id,ciphertext FROM credentials")
+	// Validate every model key, including disabled models needed by old backups.
+	rows, err := s.DB.QueryContext(ctx, "SELECT space_id,secret_binding_id,key_id,ciphertext FROM model_configs")
 	if err != nil {
 		return result, err
 	}
@@ -41,7 +41,7 @@ func (s *Store) RelocateStorage(ctx context.Context, expectedDatabase string, ch
 		}
 		if err != nil {
 			rows.Close()
-			return result, errors.New("restore master key cannot decrypt all credentials")
+			return result, errors.New("restore master key cannot decrypt all model keys")
 		}
 	}
 	err = rows.Err()

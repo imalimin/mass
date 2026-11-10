@@ -48,7 +48,7 @@ export async function startFixtureServer({ storage = false, model = false, binar
     if (storage) tos = await startTOSFixture()
     if (model) provider = await startModelFixture()
     const env = {
-      PATH: '', MASS_LLM_MODEL_BASE_URL: provider?.endpoint ?? 'https://ark.cn-beijing.volces.com/api/v3', MASS_MARIADB_DSN: connection.dsn, MASS_MARIADB_MIGRATION_DSN: connection.migration_dsn,
+      PATH: '', MASS_MARIADB_DSN: connection.dsn, MASS_MARIADB_MIGRATION_DSN: connection.migration_dsn,
       MASS_TOS_ENDPOINT: tos?.endpoint ?? 'offline-fixture', MASS_TOS_REGION: 'offline-fixture', MASS_TOS_BUCKET: 'offline-fixture',
       MASS_TOS_ACCESS_KEY: 'offline-fixture', MASS_TOS_SECRET_KEY: 'offline-fixture', MASS_MASTER_KEY: Buffer.alloc(32, 5).toString('base64'),
     }
@@ -74,6 +74,6 @@ export async function startFixtureServer({ storage = false, model = false, binar
     }
     await startApplication()
     const halt = async () => { if (!child) return; child.kill('SIGTERM'); const [code, signal] = await exited; if (code !== 0 || signal) throw Error(`Unclean maintenance shutdown: ${code} ${signal}`); child = undefined }
-    return { url, stop, modelCalls: () => provider?.calls ?? 0, modelRequests: () => provider?.requests ?? [], restart: async () => { child.kill('SIGKILL'); await exited; errors = ''; await startApplication() }, maintenance: { directory, connection, configPath, env, cli, halt, start: startApplication, tos } }
+    return { url, stop, modelBaseURL: provider?.endpoint ?? 'https://ark.cn-beijing.volces.com/api/v3', modelCalls: () => provider?.calls ?? 0, modelRequests: () => provider?.requests ?? [], restart: async () => { child.kill('SIGKILL'); await exited; errors = ''; await startApplication() }, maintenance: { directory, connection, configPath, env, cli, halt, start: startApplication, tos } }
   } catch (error) { await stop().catch(() => {}); throw error }
 }

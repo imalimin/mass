@@ -156,7 +156,7 @@ func prepareCatalog(ctx context.Context, tx *sql.Tx, space, kind, id string, rev
 	if c == nil {
 		return b, nil
 	}
-	m, err := scanModel(tx.QueryRowContext(ctx, "SELECT "+modelColumns+" FROM model_configs m JOIN credentials c ON c.space_id=m.space_id AND c.id=m.credential_id WHERE m.space_id=? AND m.id=? AND m.enabled=TRUE AND c.enabled=TRUE", space, c.Model).Scan)
+	m, err := scanModel(tx.QueryRowContext(ctx, "SELECT "+modelColumns+" FROM model_configs m WHERE m.space_id=? AND m.id=? AND m.enabled=TRUE", space, c.Model).Scan)
 	if err != nil {
 		return b, err
 	}

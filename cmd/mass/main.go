@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/imalimin/mass/db/migrations"
 	"github.com/imalimin/mass/internal/adapter/mariadb"
 	"github.com/imalimin/mass/internal/app/identity"
 	"github.com/imalimin/mass/internal/bootstrap"
@@ -40,7 +41,7 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) error {
 		if len(args) != 1 {
 			return errors.New("build-info takes no arguments")
 		}
-		return json.NewEncoder(out).Encode(map[string]any{"version": version, "revision": revision, "build_time": buildTime, "go_version": runtime.Version(), "platform": runtime.GOOS + "/" + runtime.GOARCH, "schema": 7})
+		return json.NewEncoder(out).Encode(map[string]any{"version": version, "revision": revision, "build_time": buildTime, "go_version": runtime.Version(), "platform": runtime.GOOS + "/" + runtime.GOARCH, "schema": migrations.CurrentVersion})
 	}
 	if args[0] == "version" {
 		if len(args) != 1 {

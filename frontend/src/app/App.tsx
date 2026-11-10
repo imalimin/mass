@@ -4,7 +4,7 @@ import { Link, NavLink, Navigate, Route, Routes, useLocation, useMatch, useNavig
 import { APIError, list, request, type Schema } from '../lib/api'
 import { Sessions } from '../features/sessions/Sessions'
 import { Catalog } from '../features/catalog/Catalog'
-import { Members, Models, Credentials } from '../features/spaces/SpaceDetail'
+import { Members, Models } from '../features/spaces/SpaceDetail'
 import { sortSpacesByCreation } from '../features/spaces/spaces'
 import { workspaceHomePath, legacySpacePath, spacePath, workspaceSections } from './routes'
 
@@ -135,7 +135,7 @@ function SpaceWorkspace({ space, user, pending, error }: { space?: Schema['Space
   return <Routes><Route index element={<SpaceOverview space={space} />} />
     <Route path="members" element={<Members key={space.id} space={space} user={user} onLeave={() => navigate(workspaceHomePath)} />} />
     <Route path="models" element={<Models key={space.id} space={space} />} />
-    <Route path="credentials" element={space.is_owner ? <Credentials key={space.id} space={space} /> : <section className="panel"><h2>需要管理员权限</h2><p>请联系空间管理员管理供应商凭证。</p><Link className="text-link" to={spacePath(space.id)}>返回空间概览</Link></section>} />
+    <Route path="credentials" element={<Navigate to={spacePath(space.id, 'models')} replace />} />
     <Route path="agents" element={<Catalog key={`${space.id}-agents`} space={space} kind="agent" />} />
     <Route path="agents/:definitionId" element={<Catalog key={`${space.id}-agents`} space={space} kind="agent" />} />
     <Route path="skills" element={<Catalog key={`${space.id}-skills`} space={space} kind="skill" />} />

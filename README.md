@@ -88,7 +88,6 @@ MASS_TOS_SECRET_KEY='REPLACE_SECRET_KEY'
 MASS_MASTER_KEY='REPLACE_WITH_GENERATED_MASTER_KEY'
 
 # 服务端批准的模型兼容地址；使用 Ark 时保持此值。
-MASS_LLM_MODEL_BASE_URL='https://ark.cn-beijing.volces.com/api/v3'
 ```
 
 `.env` 和 `mass.yaml` 已被 Git 忽略。程序**不会自动读取 `.env`**，在执行后续命令的终端中手动加载：
@@ -101,7 +100,7 @@ set +a
 
 也可以通过部署平台直接注入同名环境变量。若现有 TOS 变量名是 `TOS_ACCESS_KEY` / `TOS_SECRET_KEY`，可修改 `mass.yaml` 中对应的 `access_key_env` / `secret_key_env` 来复用。
 
-当前 `check-config`、`migrate` 和 `user create` 共用完整配置校验，因此也需要提供应用 DSN、TOS 和主密钥变量；`migrate` 本身只连接 MariaDB。新模板的 `llm.base_url_env` 引用 `MASS_LLM_MODEL_BASE_URL`，填写兼容模型服务的 Base URL；该地址须使用 HTTPS。旧配置未设置 `base_url_env` 时继续使用默认 Ark 地址。模型 ID 与 API key 在每个空间的页面中配置并加密保存，运行不会自动导入环境凭证。`MASS_LLM_MODEL_ID` / `MASS_LLM_MODEL_KEY` 仅供显式真实模型冒烟使用。
+当前 `check-config`、`migrate` 和 `user create` 共用完整配置校验，因此也需要提供应用 DSN、TOS 和主密钥变量；`migrate` 本身只连接 MariaDB。模型服务的 `base_url` 与 `api_key` 在每条模型配置中填写，运行时从对应模型读取，不使用 YAML 全局地址或密钥。Base URL 须使用 HTTPS，本机测试允许回环 HTTP 地址。模型 ID 与 API key 在每个空间的页面中配置并加密保存，运行不会自动导入环境凭证。`MASS_LLM_MODEL_ID` / `MASS_LLM_MODEL_KEY` 仅供显式真实模型冒烟使用。
 
 ### 4. 初始化表结构
 
@@ -110,7 +109,7 @@ bin/mass check-config --config mass.yaml
 bin/mass migrate --config mass.yaml
 ```
 
-依次看到 `configuration valid` 和 `migrations applied` 即表示配置格式有效、迁移已完成。`check-config` 不验证外部服务连通性。当前 schema 版本为 **7**；迁移文件已嵌入二进制，无需手工执行 SQL 文件。
+依次看到 `configuration valid` 和 `migrations applied` 即表示配置格式有效、迁移已完成。`check-config` 不验证外部服务连通性。当前 schema 版本为 **9**；迁移文件已嵌入二进制，无需手工执行 SQL 文件。
 
 ### 5. 创建登录账号
 
@@ -138,7 +137,7 @@ bin/mass serve --config mass.yaml
 
 可按以下流程体验：
 
-1. 在昵称右侧的「账号设置」中点击「创建空间」，通过对话框创建并进入空间概览；分别在「供应商凭证」和「模型配置」中配置 Ark 凭证及可用模型。
+1. 在昵称右侧的「账号设置」中点击「创建空间」，通过对话框创建并进入空间概览；在「模型配置」中填写模型 ID、Base URL、API Key 及生成参数。
 2. 进入「Skills」，创建 Skill、编辑 `SKILL.md`、上传资源并发布 v1。
 3. 进入「Agents」创建 Agent，编辑 `AGENTS.md`，选择模型和准确的 Skill 版本，应用配置、保存草稿并发布 v1。
 4. 修改 Skill 并发布 v2；旧 Agent v1 继续引用原 Skill v1。
@@ -150,7 +149,7 @@ bin/mass serve --config mass.yaml
 
 登录后或进入 `/spaces` 时，若用户已有空间，默认选中创建时间最早的一个；没有空间时显示工作台空状态。左栏下拉菜单只列出实际空间，用于直接切换；昵称右侧的「账号设置」中提供「创建空间」对话框及退出登录。原「我的空间」列表页已移除，`/spaces?view=all` 也自动进入默认空间。
 
-空间内各功能使用独立路由，左侧导航和面包屑显示当前位置；手机端可横向滚动功能导航。默认入口为 `/spaces`，空间概览为 `/spaces/:space_id`，成员、模型、凭证、Agent、Skill、会话分别位于该空间下的 `/members`、`/models`、`/credentials`、`/agents`、`/skills`、`/sessions`。定义编辑和会话详情在列表路径后追加资源 ID；会话中可用 `?run=:run_id` 固定查看某次运行。刷新或浏览器前进后退会保持位置，旧的 `/spaces?space=…&session=…&run=…` 链接会自动跳转到新地址。凭证入口仅对空间管理员显示。
+空间内各功能使用独立路由，左侧导航和面包屑显示当前位置；手机端可横向滚动功能导航。默认入口为 `/spaces`，空间概览为 `/spaces/:space_id`，成员、模型、Agent、Skill、会话分别位于该空间下的 `/members`、`/models`、`/agents`、`/skills`、`/sessions`。定义编辑和会话详情在列表路径后追加资源 ID；会话中可用 `?run=:run_id` 固定查看某次运行。刷新或浏览器前进后退会保持位置，旧的 `/spaces?space=…&session=…&run=…` 链接会自动跳转到新地址。模型新增、编辑和密钥管理仅对空间管理员开放；旧 `/credentials` 链接跳转至模型配置。
 
 会话固定创建时的 Agent/Skill 定义，后续修改默认版本不会改变已有会话。容量不足会明确报错，当前不自动压缩或截断上下文。文件写入/编辑限每文件 1 MiB UTF-8，读取返回至多 64 KiB 范围及摘要；附件每个最多 8 MiB，工具解析支持 UTF-8 文本、JSON、CSV。写入、编辑、移动、删除通过 `expected_sha256` 防止冲突；发布的产物保持原版本，即使源文件被删除也可下载。
 
@@ -171,7 +170,7 @@ bin/mass user create --config mass.yaml \
 unset MASS_INITIAL_PASSWORD
 ```
 
-服务运行期间也可以创建账号。随后由空间 owner 在「空间成员」输入 `bob` 并添加，即成为该空间的普通成员，可管理 Agent/Skill，不能管理成员和模型凭证。
+服务运行期间也可以创建账号。随后由空间 owner 在「空间成员」输入 `bob` 并添加，即成为该空间的普通成员，可管理 Agent/Skill，不能管理成员和模型配置。
 
 账号没有全局管理员/普通用户角色：空间创建者为该空间的 owner，加入已有空间的账号为普通成员；`bob` 自己创建空间时会成为新空间的 owner。
 
@@ -230,7 +229,7 @@ D07 的真实文本、工具与摘要验收使用 `make smoke-real`，需明确�
 
 连接中断后，前端先检查授权，再从最后成功应用的 UI 游标继续；重复事件不重复应用，自定义成功状态之后仍接收标准终态事件。连续恢复失败五次后停止自动重连，可点击“重新同步事件”取得新的成对快照与游标。空间切换和权限失效清理订阅与私有内容。Markdown 禁止原始 HTML、远端图片和非 HTTP(S) 链接；载荷在线预览最多 1 MiB，运行输出按 50 条窗口展开。
 
-`make verify-d08` 只使用隔离数据库与本地供应商夹具，包含既有阶段回归及调试闭环浏览器测试；不代替仍待授权的 D07 真实云验证。数据库 schema 保持 7，无新增迁移。
+`make verify-d08` 只使用隔离数据库与本地供应商夹具，包含既有阶段回归及调试闭环浏览器测试；不代替仍待授权的 D07 真实云验证。该阶段的数据库 schema 为 7；当前模型配置版本须升级至 schema 9，见下文升级说明。
 
 ### 故障与隔离验收（D09 本地）
 
@@ -240,7 +239,7 @@ D07 的真实文本、工具与摘要验收使用 `make smoke-real`，需明确�
 
 证据索引为 `scripts/acceptance-evidence.json`，检查报告输出到忽略的 `.cache/d09-acceptance.json`。引用检查只核对用例与源文件，不代替功能测试。A21/A31 的 D07 真实模型与缓存观测已于 2026-10-24 补齐；A22 的干净部署/备份还原已在 D10 补齐真实 TOS 验收；A25 使用此前真实 TOS 验收证据，本阶段没有再次调用云资源；A33 显式缓存未启用。因此本地通过不等于全部 MVP 验收完成，当前交付和完整门槛见下文 D10。
 
-数据库 schema 保持 7，无新增迁移。数据库/日志故障导致执行入口停止时，先修复依赖并检查已保存记录，再重启；已有 running 会标记中断，未确认副作用须人工核实。不要直接重放旧 Run。快照保存失败时使用已有“仅重试保存文件”或“恢复最近已提交快照”，后者会放弃未保存文件。
+该阶段的数据库 schema 为 7；当前模型配置版本须升级至 schema 9，见下文升级说明。数据库/日志故障导致执行入口停止时，先修复依赖并检查已保存记录，再重启；已有 running 会标记中断，未确认副作用须人工核实。不要直接重放旧 Run。快照保存失败时使用已有“仅重试保存文件”或“恢复最近已提交快照”，后者会放弃未保存文件。
 
 ## D10 交付包与恢复演练
 
@@ -284,3 +283,11 @@ make verify-d10-local
 
 
 D10 真实恢复入口为 `make smoke-recovery`，读取现有 MASS_TOS_ENDPOINT/REGION/BUCKET/ACCESS_KEY/SECRET_KEY 及专用 MASS_TEST_ADMIN_DSN。命令构建交付包，仅在 `tmp/mass-d10-随机ID/source/` 与 `restored/` 写入合成测试内容，不使用真实模型；从清单逐个清理本次 key/版本并确认不可读，不列出或删除 Bucket 中其他内容。2026-10-24 实测 22 个对象还原成功，57 个独立键完成清理，真实模型请求 0；删除源对象和原临时目录后，交付二进制仍可查看历史、Trace、产物并从快照继续。报告 `.cache/d10-recovery-real.json`、精确清理账本 `.cache/d10-recovery-mass-d10-UUID.json` 被 Git 忽略；异常时保留账本以核对清理，不保存存储客户端或凭证。真实跨 Bucket 恢复仅在本地协议夹具验证，本次云验收是同一 Bucket 的隔离前缀。
+
+### 模型连接配置升级
+
+当前版本为 schema 9。升级前停止旧服务并备份数据库，使用 DDL 账号执行 `bin/mass migrate --config mass.yaml`，再启动新二进制。迁移 `00009_model_connection.sql` 将每个模型对应的 Base URL 与加密 API Key 复制到 `model_configs`，删除其 `credential_id` 外键、旧 `endpoint` 字段及独立的 `credentials` 表。多个模型共用的旧密钥分别复制，此后各模型独立管理；原凭证被禁用的模型继续保持停用状态。未关联模型的凭证随旧表删除。
+
+从 schema 7 升级时先自动经过 schema 8 的地址回填，再迁移到每个模型；schema 8 凭证已明确设置的 Base URL 优先保留，无法确定共享地址时保留每个模型原有 endpoint。迁移保留原密钥的加密绑定信息，继续使用原 `MASS_MASTER_KEY` 即可解密。原 YAML 中的 `llm.base_url_env` 请删除。
+
+新增模型必须填写 Base URL 与 API Key；编辑时密钥留空可保留原密钥，接口不会返回密钥。每次模型调用（包括摘要及重试）都按该运行的模型 ID 重新读取地址、密钥和模型修订号；历史快照中的 `credential_id` 仅用于兼容读取，不再参与运行时查询。底层目前仍使用 Ark SDK，端点需要兼容其协议。

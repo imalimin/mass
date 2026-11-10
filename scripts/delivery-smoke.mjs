@@ -26,7 +26,7 @@ try {
   const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'))
   for (const [name, digest] of Object.entries(manifest.sha256)) assert.equal(hash(await readFile(join(directory, name))), digest, name)
   const binary = join(directory, 'bin/mass'), info = JSON.parse(execFileSync(binary, ['build-info'], { env: { PATH: '' } }))
-  assert.equal(info.schema, 7); assert.equal(info.revision, execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim())
+  assert.equal(info.schema, 9); assert.equal(info.revision, execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim())
   assert.equal((await readFile(archive+'.sha256', 'utf8')).split(' ')[0], originalHash)
   server = await startFixtureServer({ storage: true, model: true, binary, template: join(directory, 'mass.yaml'), emptyDatabase: true })
   const m = server.maintenance
@@ -36,10 +36,8 @@ try {
   page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message))
   await page.goto(server.url); await page.getByLabel('用户名', { exact: true }).fill('alice'); await page.getByLabel('密码', { exact: true }).fill('correct-password-alice'); await page.getByRole('button', { name: '登录', exact: true }).click()
   await page.getByRole('button', { name: '账号设置', exact: true }).click(); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await page.getByLabel('新空间名称').fill('交付恢复验收'); await page.getByRole('button', { name: '创建空间', exact: true }).click()
-  await page.locator('.app-sidebar').getByRole('link', { name: '供应商凭证', exact: true }).click()
-  await page.getByLabel('凭证名称').fill('恢复凭证'); await page.getByLabel('API 密钥', { exact: true }).fill('fixture-provider-key'); await page.getByRole('button', { name: '创建凭证', exact: true }).click(); await page.getByRole('button', { name: '管理 恢复凭证', exact: true }).waitFor()
   await page.locator('.app-sidebar').getByRole('link', { name: '模型配置', exact: true }).click()
-  await page.getByLabel('模型名称', { exact: true }).fill('恢复模型'); await page.getByLabel('Ark 模型 ID').fill('fixture-model'); await page.getByLabel('使用凭证').selectOption({ label: '恢复凭证' }); await page.getByRole('button', { name: '创建模型', exact: true }).click(); await page.getByRole('button', { name: '编辑 恢复模型', exact: true }).waitFor()
+  await page.getByLabel('模型名称', { exact: true }).fill('恢复模型'); await page.getByLabel('Ark 模型 ID').fill('fixture-model'); await page.getByLabel('Base URL', { exact: true }).fill(server.modelBaseURL); await page.getByLabel('API Key', { exact: true }).fill('fixture-provider-key'); await page.getByRole('button', { name: '创建模型', exact: true }).click(); await page.getByRole('button', { name: '编辑 恢复模型', exact: true }).waitFor()
   await page.locator('.app-sidebar').getByRole('link', { name: 'Skills', exact: true }).click()
   const edit = async (label, value) => { await page.locator(`[data-editor="${label}"] .view-lines`).click(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A'); await page.keyboard.insertText(value) }
   const save = async () => { const response = page.waitForResponse(r => r.url().endsWith('/draft') && r.request().method() === 'PUT'); await page.getByRole('button', { name: '保存草稿', exact: true }).click(); assert.equal((await response).status(), 200) }

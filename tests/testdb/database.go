@@ -27,7 +27,7 @@ type Database struct {
 }
 
 func (d *Database) Close()                       { d.cleanup() }
-func New(ctx context.Context) (*Database, error) { return NewVersion(ctx, 7) }
+func New(ctx context.Context) (*Database, error) { return NewVersion(ctx, migrations.CurrentVersion) }
 func NewVersion(ctx context.Context, version int64) (*Database, error) {
 	source := os.Getenv("MASS_TEST_ADMIN_DSN")
 	if source == "" {

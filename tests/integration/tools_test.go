@@ -51,6 +51,9 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	if err = db.Admin.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
 	cipher, _ := secrets.New(bytes.Repeat([]byte{9}, 32))
 	auth, _ := identity.New(db.Store, cipher, time.Hour, []byte("tools-test"))
 	actor, err := auth.CreateUser(ctx, "alice", "correct-password-alice")
@@ -61,11 +64,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credential, err := auth.SaveCredential(ctx, actor.ID, space.ID, "", identity.CredentialInput{Name: "fixture", Secret: "fixture-key", Enabled: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	model, err := auth.SaveModel(ctx, actor.ID, space.ID, "", identity.Model{Name: "fixture", Provider: "ark", Endpoint: identity.ArkEndpoint, ModelID: "fixture", CredentialID: credential.ID, ContextWindow: 262144, MaxOutputTokens: 4096, Enabled: true})
+	model, err := auth.SaveModel(ctx, actor.ID, space.ID, "", identity.Model{Name: "fixture", Provider: "ark", BaseURL: identity.ArkEndpoint, ModelID: "fixture", APIKey: "fixture-key", ContextWindow: 262144, MaxOutputTokens: 4096, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +122,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Upgrade from a real D04 definition, including repeated migration.
+	// Repeated migration preserves the fixed tool definition.
 	for i := 0; i < 2; i++ {
 		if err = db.Admin.Migrate(ctx); err != nil {
 			t.Fatal(err)

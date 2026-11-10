@@ -29,21 +29,16 @@ type Member struct {
 	User
 	IsOwner bool `json:"is_owner"`
 }
-type Credential struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Enabled    bool   `json:"enabled"`
-	Revision   int64  `json:"revision"`
-	KeyID      string `json:"-"`
-	Ciphertext []byte `json:"-"`
-}
 type Model struct {
 	ID              string  `json:"id"`
 	Name            string  `json:"name"`
 	Provider        string  `json:"provider"`
 	ModelID         string  `json:"model_id"`
-	Endpoint        string  `json:"endpoint"`
-	CredentialID    string  `json:"credential_id"`
+	BaseURL         string  `json:"base_url"`
+	APIKey          string  `json:"api_key,omitempty"`
+	SecretBindingID string  `json:"-"`
+	KeyID           string  `json:"-"`
+	Ciphertext      []byte  `json:"-"`
 	ContextWindow   int     `json:"context_window"`
 	MaxOutputTokens int     `json:"max_output_tokens"`
 	Temperature     float64 `json:"temperature"`
@@ -73,12 +68,10 @@ type Repository interface {
 	Members(context.Context, string, string, Query) ([]Member, error)
 	AddMember(context.Context, string, string, string) error
 	RemoveMember(context.Context, string, string, string) error
-	Credentials(context.Context, string, string, Query) ([]Credential, error)
-	SaveCredential(context.Context, string, string, Credential, bool) error
 	Models(context.Context, string, string, Query, bool) ([]Model, error)
 	Model(context.Context, string, string, string) (Model, error)
 	SaveModel(context.Context, string, string, Model, bool) error
-	ResolveCredential(context.Context, string, string, string) (Credential, error)
+	ResolveModelSecret(context.Context, string, string, string) (Model, error)
 }
 
 type Cipher interface {

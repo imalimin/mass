@@ -42,9 +42,6 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 	if err != nil {
 		return err
 	}
-	if c.LLM.BaseURLEnv != "" {
-		service.Endpoint = strings.TrimSuffix(os.Getenv(c.LLM.BaseURLEnv), "/")
-	}
 	blobs, err := tos.New(os.Getenv(c.TOS.EndpointEnv), os.Getenv(c.TOS.RegionEnv), os.Getenv(c.TOS.BucketEnv), os.Getenv(c.TOS.AccessKeyEnv), os.Getenv(c.TOS.SecretKeyEnv))
 	if err != nil {
 		return err

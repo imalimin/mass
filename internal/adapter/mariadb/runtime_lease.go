@@ -136,7 +136,7 @@ func (l *RuntimeLease) CheckRun(ctx context.Context, s run.Snapshot) error {
 	if v.CancelRequested {
 		return run.ErrCancelled
 	}
-	_, err = l.store.ResolveRuntimeCredential(ctx, s.ActorID, s.SpaceID, s.Definition.Model.ID, s.Definition.Model.CredentialID)
+	_, err = l.store.ResolveModelSecret(ctx, s.ActorID, s.SpaceID, s.Definition.Model.ID)
 	return err
 }
 func (l *RuntimeLease) Heartbeat(ctx context.Context, s run.Snapshot) error {

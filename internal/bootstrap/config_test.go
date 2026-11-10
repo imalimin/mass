@@ -8,9 +8,6 @@ import (
 )
 
 func fixtureEnv(name string) string {
-	if name == "MASS_LLM_MODEL_BASE_URL" {
-		return "https://ark.cn-beijing.volces.com/api/v3"
-	}
 	if name == "MASS_MASTER_KEY" {
 		return base64.StdEncoding.EncodeToString(make([]byte, 32))
 	}
@@ -31,6 +28,7 @@ func TestConfig(t *testing.T) {
 	}{
 		{"missing_secret", string(data), func(string) string { return "" }},
 		{"unknown", string(data) + "unexpected: true\n", fixtureEnv},
+		{"global_model_url_removed", strings.Replace(string(data), "  framework: \"eino\"", "  base_url_env: MODEL_URL\n  framework: \"eino\"", 1), fixtureEnv},
 		{"multiple_documents", string(data) + "---\nhttp: {}\n", fixtureEnv},
 		{"duplicate", string(data) + "http: {}\n", fixtureEnv},
 		{"nonpositive_limit", strings.Replace(string(data), "max_concurrent_runs: 4", "max_concurrent_runs: 0", 1), fixtureEnv},
@@ -56,14 +54,6 @@ func TestD02ConfigurationDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := string(data)
-	lines := strings.Split(source, "\n")
-	var legacy []string
-	for _, line := range lines {
-		if !strings.Contains(line, "base_url_env:") {
-			legacy = append(legacy, line)
-		}
-	}
-	source = strings.Join(legacy, "\n")
 	start := strings.Index(source, "storage:")
 	end := strings.Index(source[start:], "auth:") + start
 	source = source[:start] + source[end:]

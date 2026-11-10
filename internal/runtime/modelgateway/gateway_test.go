@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/google/uuid"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
@@ -52,12 +53,12 @@ type secrets struct {
 	denyAfter int
 }
 
-func (s *secrets) ResolveRunSecret(context.Context, string, string, run.ModelConfig) ([]byte, int64, error) {
+func (s *secrets) ResolveRunSecret(context.Context, string, string, run.ModelConfig) ([]byte, string, int64, error) {
 	s.resolves++
 	if s.denyAfter > 0 && s.resolves > s.denyAfter {
-		return nil, 0, run.ErrPermission
+		return nil, "", 0, run.ErrPermission
 	}
-	return []byte("test"), int64(s.resolves), nil
+	return []byte(fmt.Sprintf("key-%d", s.resolves)), fmt.Sprintf("https://provider-%d.example/api", s.resolves), int64(s.resolves), nil
 }
 
 type budget struct{ reserve, settle int }
@@ -67,15 +68,19 @@ func (b *budget) Reserve(context.Context, string, string, int64) error { b.reser
 func (b *budget) Settle(string, run.Usage) error                       { b.settle++; return nil }
 
 type provider struct {
-	calls   int
-	partial bool
-	repo    *memory
-	failLog bool
+	endpoints []string
+	keys      []string
+	calls     int
+	partial   bool
+	repo      *memory
+	failLog   bool
 }
 
 func (p *provider) Source() string { return "fake" }
-func (p *provider) Stream(ctx context.Context, _ run.Snapshot, _ run.Prepared, _ string, r Recorder, delta func(string) error) (run.Reply, error) {
+func (p *provider) Stream(ctx context.Context, snapshot run.Snapshot, _ run.Prepared, key string, r Recorder, delta func(string) error) (run.Reply, error) {
 	p.calls++
+	p.endpoints = append(p.endpoints, snapshot.Definition.Model.Endpoint)
+	p.keys = append(p.keys, key)
 	if err := r.Request(ctx, []byte(`{"messages":[]}`)); err != nil {
 		return run.Reply{}, err
 	}
@@ -110,6 +115,11 @@ func TestExplicitRetrySafety(t *testing.T) {
 			s := run.Snapshot{ID: uuid.NewString(), ActorID: uuid.NewString(), SpaceID: uuid.NewString(), SessionID: uuid.NewString(), Definition: run.Definition{ModelAttempts: tc.attempts, OutputTokens: 10}}
 			p := run.Prepared{EventID: uuid.NewString(), InputTokens: 10, Spec: run.ProjectionSpec{Purpose: "task"}}
 			reply, err := g.Call(context.Background(), s, p)
+			for i, endpoint := range transport.endpoints {
+				if endpoint != fmt.Sprintf("https://provider-%d.example/api", i+1) || transport.keys[i] != fmt.Sprintf("key-%d", i+1) {
+					t.Fatal("URL and key were not resolved together", transport.endpoints)
+				}
+			}
 			if transport.calls != tc.want || control.reserve != tc.want || control.settle != tc.want {
 				t.Fatal("attempt accounting", transport.calls, control)
 			}

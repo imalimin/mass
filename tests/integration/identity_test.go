@@ -145,29 +145,18 @@ func TestIdentityDatabaseAndHTTP(t *testing.T) {
 	}
 	api("GET", "/spaces?limit=1&cursor="+*page.NextCursor, bCookie, nil, 200)
 	api("GET", "/spaces?cursor="+*page.NextCursor, aCookie, nil, 400)
-	var cred identity.Credential
-	w = api("POST", aBase+"/credentials", aCookie, identity.CredentialInput{Name: "Ark", Secret: "very-private-provider-key", Enabled: true}, 201)
-	json.Unmarshal(w.Body.Bytes(), &cred)
-	for _, path := range []string{aBase + "/credentials", bBase + "/credentials"} {
-		api("GET", path, bCookie, nil, map[bool]int{true: 403, false: 200}[strings.HasPrefix(path, aBase)])
-	}
-	if strings.Contains(w.Body.String(), "private") || strings.Contains(w.Body.String(), "ciphertext") {
-		t.Fatal("secret leaked")
-	}
-	var encrypted []byte
-	db.Admin.DB.QueryRow("SELECT ciphertext FROM credentials WHERE space_id=? AND id=?", a.ID, cred.ID).Scan(&encrypted)
-	if bytes.Contains(encrypted, []byte("very-private")) {
-		t.Fatal("plaintext credential")
-	}
-	model := identity.Model{Name: "Ark model", Provider: "ark", ModelID: "ep-test", Endpoint: identity.ArkEndpoint, CredentialID: cred.ID, ContextWindow: 32768, MaxOutputTokens: 4096, Temperature: .7, Enabled: true}
-	api("POST", bBase+"/models", bCookie, model, 404)
-	bad := model
-	bad.Endpoint = "http://127.0.0.1:9999"
-	api("POST", aBase+"/models", aCookie, bad, 400)
+	model := identity.Model{Name: "Ark model", Provider: "ark", ModelID: "ep-test", BaseURL: "http://127.0.0.1:9999", APIKey: "very-private-provider-key", ContextWindow: 32768, MaxOutputTokens: 4096, Temperature: .7, Enabled: true}
 	api("POST", aBase+"/models", bCookie, model, 403)
 	w = api("POST", aBase+"/models", aCookie, model, 201)
 	var saved identity.Model
 	json.Unmarshal(w.Body.Bytes(), &saved)
+	if saved.BaseURL != model.BaseURL || strings.Contains(w.Body.String(), "private") || strings.Contains(w.Body.String(), "api_key") || strings.Contains(w.Body.String(), "ciphertext") {
+		t.Fatal("model connection or secret response", w.Body.String())
+	}
+	var encrypted []byte
+	if err = db.Admin.DB.QueryRow("SELECT ciphertext FROM model_configs WHERE space_id=? AND id=?", a.ID, saved.ID).Scan(&encrypted); err != nil || len(encrypted) == 0 || bytes.Contains(encrypted, []byte("very-private")) {
+		t.Fatal("plaintext or missing model key", err)
+	}
 	api("GET", bBase+"/models/"+saved.ID, bCookie, nil, 404)
 	secret, err := svc.ModelSecret(ctx, bob.ID, a.ID, saved.ID)
 	if err != nil || string(secret) != "very-private-provider-key" {
@@ -214,21 +203,31 @@ func TestIdentityDatabaseAndHTTP(t *testing.T) {
 	if _, _, err = svc.WatchAccess(ctx, bob.ID, a.ID); !errors.Is(err, identity.ErrForbidden) {
 		t.Fatal("revoked watch subscribed", err)
 	}
-	api("PUT", aBase+"/credentials/"+cred.ID, aCookie, identity.CredentialInput{Name: cred.Name, Enabled: false, Revision: cred.Revision}, 200)
-	api("PUT", aBase+"/credentials/"+cred.ID, aCookie, identity.CredentialInput{Name: cred.Name, Enabled: true, Revision: cred.Revision}, 409)
+	saved.Enabled = false
+	input := saved
+	input.ID = ""
+	api("PUT", aBase+"/models/"+saved.ID, aCookie, input, 200)
+	api("PUT", aBase+"/models/"+saved.ID, aCookie, input, 409)
 	w = api("GET", aBase+"/models?available=true", aCookie, nil, 200)
 	if !strings.Contains(w.Body.String(), `"items":[]`) {
-		t.Fatal("disabled credential model available")
+		t.Fatal("disabled model available")
 	}
 	if _, err = svc.ModelSecret(ctx, alice.ID, a.ID, saved.ID); !errors.Is(err, identity.ErrNotFound) {
-		t.Fatal("disabled credential resolved", err)
+		t.Fatal("disabled model resolved", err)
 	}
-	api("PUT", aBase+"/credentials/"+cred.ID, aCookie, identity.CredentialInput{Name: cred.Name, Secret: "rotated-secret", Enabled: true, Revision: 2}, 200)
+	saved.Revision = 2
+	saved.Enabled = true
+	saved.APIKey = "rotated-secret"
+	// IDs belong in the URL, not the request body.
+	modelID := saved.ID
+	saved.ID = ""
+	api("PUT", aBase+"/models/"+modelID, aCookie, saved, 200)
+	saved.ID = modelID
 	secret, err = svc.ModelSecret(ctx, alice.ID, a.ID, saved.ID)
 	if err != nil || string(secret) != "rotated-secret" {
 		t.Fatal("rotation", err)
 	}
-	api("DELETE", aBase+"/models/"+saved.ID, aCookie, map[string]int{"revision": 1}, 204)
+	api("DELETE", aBase+"/models/"+saved.ID, aCookie, map[string]int{"revision": 3}, 204)
 	api("GET", aBase+"/models/"+saved.ID, aCookie, nil, 200)
 	api("POST", aBase+"/members", aCookie, map[string]string{"username": "bob"}, 204)
 	api("DELETE", aBase+"/members/"+bob.ID, bCookie, nil, 204) // self leave

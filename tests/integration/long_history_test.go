@@ -26,11 +26,7 @@ import (
 func longHistoryAgent(t *testing.T, r *faultRig, space string) (string, string) {
 	t.Helper()
 	ctx := context.Background()
-	c, err := r.auth.SaveCredential(ctx, r.actor, space, "", identity.CredentialInput{Name: "long fixture", Secret: "not-a-real-key", Enabled: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, err := r.auth.SaveModel(ctx, r.actor, space, "", identity.Model{Name: "long fixture", Provider: "ark", Endpoint: identity.ArkEndpoint, ModelID: "fixture", CredentialID: c.ID, ContextWindow: 32768, MaxOutputTokens: 2048, Enabled: true})
+	m, err := r.auth.SaveModel(ctx, r.actor, space, "", identity.Model{Name: "long fixture", Provider: "ark", BaseURL: identity.ArkEndpoint, ModelID: "fixture", APIKey: "not-a-real-key", ContextWindow: 32768, MaxOutputTokens: 2048, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -48,7 +48,6 @@ type Config struct {
 	} `yaml:"auth"`
 	LLM struct {
 		MaxAttempts int    `yaml:"max_attempts"`
-		BaseURLEnv  string `yaml:"base_url_env"`
 		Framework   string `yaml:"framework"`
 		Provider    string `yaml:"provider"`
 		ModelEnv    string `yaml:"model_env"`
@@ -167,19 +166,6 @@ func (c Config) validate(getenv func(string) string) error {
 	}
 	if !filepath.IsAbs(c.Runtime.WorkspaceTempRoot) || filepath.Clean(c.Runtime.WorkspaceTempRoot) == string(filepath.Separator) {
 		return errors.New("workspace_temp_root must be an absolute dedicated directory")
-	}
-	if c.LLM.BaseURLEnv != "" {
-		if getenv == nil {
-			return errors.New("llm.base_url_env requires an environment reader")
-		}
-		value := getenv(c.LLM.BaseURLEnv)
-		if value == "" {
-			return errors.New("llm.base_url_env requires a nonempty environment value")
-		}
-		endpoint, err := url.Parse(value)
-		if err != nil || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Scheme != "https" && !(endpoint.Scheme == "http" && (endpoint.Hostname() == "localhost" || isLoopback(endpoint.Hostname())))) {
-			return errors.New("llm.base_url_env requires an HTTP(S) endpoint; HTTP is allowed only for loopback tests")
-		}
 	}
 	if c.LLM.MaxAttempts < 0 || c.LLM.MaxAttempts > 3 {
 		return errors.New("llm.max_attempts must be between 1 and 3 (0 uses 1)")

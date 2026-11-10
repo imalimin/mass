@@ -263,36 +263,6 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 		w.WriteHeader(204)
 		return nil
 	})
-	register("GET /api/v1/spaces/{space_id}/credentials", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
-		q, n, scope, err := query(r, u)
-		if err != nil {
-			return err
-		}
-		items, err := svc.Repo.Credentials(r.Context(), u.ID, r.PathValue("space_id"), q)
-		if err != nil {
-			return err
-		}
-		writeJSON(w, 200, identity.Paginate(svc, scope, items, n, func(v identity.Credential) string { return v.ID }))
-		return nil
-	})
-	saveCredential := func(w http.ResponseWriter, r *http.Request, u identity.User) error {
-		var b identity.CredentialInput
-		if err := decodeBody(w, r, &b); err != nil {
-			return err
-		}
-		c, err := svc.SaveCredential(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("id"), b)
-		if err != nil {
-			return err
-		}
-		status := 200
-		if r.Method == "POST" {
-			status = 201
-		}
-		writeJSON(w, status, c)
-		return nil
-	}
-	register("POST /api/v1/spaces/{space_id}/credentials", true, saveCredential)
-	register("PUT /api/v1/spaces/{space_id}/credentials/{id}", true, saveCredential)
 	register("GET /api/v1/spaces/{space_id}/models", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		available := r.URL.Query().Get("available")
 		if available != "" && available != "true" && available != "false" {
@@ -355,7 +325,7 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 		if err := svc.CheckAccess(r.Context(), u.ID, r.PathValue("space_id")); err != nil {
 			return err
 		}
-		writeJSON(w, 200, map[string]any{"provider": "ark", "endpoint": svc.Endpoint, "input_types": []string{"text"}, "streaming": true, "tool_calling": true})
+		writeJSON(w, 200, map[string]any{"provider": "ark", "input_types": []string{"text"}, "streaming": true, "tool_calling": true})
 		return nil
 	})
 	if options.Storage != nil {

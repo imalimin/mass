@@ -285,116 +285,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-  /api/v1/spaces/{space_id}/credentials:
-    get:
-      operationId: listCredentials
-      security:
-        - SessionCookie: []
-      parameters:
-        - name: space_id
-          in: path
-          required: true
-          schema:
-            $ref: '#/components/schemas/ResourceID'
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Cursor'
-      responses:
-        '200':
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CredentialPage'
-        default:
-          description: >-
-            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
-            type, 429 login throttled or 500 storage failure.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-    post:
-      operationId: createCredential
-      security:
-        - SessionCookie: []
-      parameters:
-        - name: space_id
-          in: path
-          required: true
-          schema:
-            $ref: '#/components/schemas/ResourceID'
-        - name: Origin
-          in: header
-          required: true
-          schema:
-            type: string
-            format: uri
-          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
-      responses:
-        '201':
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Credential'
-        default:
-          description: >-
-            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
-            type, 429 login throttled or 500 storage failure.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CredentialCreate'
-  /api/v1/spaces/{space_id}/credentials/{id}:
-    put:
-      operationId: replaceCredential
-      security:
-        - SessionCookie: []
-      parameters:
-        - name: space_id
-          in: path
-          required: true
-          schema:
-            $ref: '#/components/schemas/ResourceID'
-        - name: id
-          in: path
-          required: true
-          schema:
-            $ref: '#/components/schemas/ResourceID'
-        - name: Origin
-          in: header
-          required: true
-          schema:
-            type: string
-            format: uri
-          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
-      responses:
-        '200':
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Credential'
-        default:
-          description: >-
-            400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content
-            type, 429 login throttled or 500 storage failure.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CredentialUpdate'
   /api/v1/spaces/{space_id}/models:
     get:
       operationId: listModels
@@ -412,7 +302,7 @@ paths:
           in: query
           schema:
             type: boolean
-          description: Only enabled models with enabled credentials.
+          description: Only enabled models.
       responses:
         '200':
           description: Success
@@ -4142,49 +4032,6 @@ components:
         username:
           type: string
           pattern: ^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,63}$
-    Credential:
-      type: object
-      additionalProperties: false
-      required:
-        - id
-        - name
-        - enabled
-        - revision
-      properties:
-        id:
-          $ref: '#/components/schemas/ResourceID'
-        name:
-          type: string
-          minLength: 1
-          maxLength: 100
-        enabled:
-          type: boolean
-        revision:
-          type: integer
-          minimum: 1
-          maximum: 9007199254740991
-    CredentialInput:
-      type: object
-      additionalProperties: false
-      required:
-        - name
-        - enabled
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 100
-        secret:
-          type: string
-          format: password
-          writeOnly: true
-          maxLength: 8192
-        enabled:
-          type: boolean
-        revision:
-          type: integer
-          minimum: 1
-          maximum: 9007199254740991
     Model:
       type: object
       additionalProperties: false
@@ -4193,8 +4040,7 @@ components:
         - name
         - provider
         - model_id
-        - endpoint
-        - credential_id
+        - base_url
         - context_window
         - max_output_tokens
         - temperature
@@ -4213,12 +4059,11 @@ components:
         model_id:
           type: string
           pattern: ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$
-        endpoint:
+        base_url:
           type: string
           format: uri
-          description: 服务端批准的兼容模型 Base URL，默认 Ark 地址。
-        credential_id:
-          $ref: '#/components/schemas/ResourceID'
+          minLength: 1
+          maxLength: 2048
         context_window:
           type: integer
           minimum: 2
@@ -4252,7 +4097,6 @@ components:
       additionalProperties: false
       required:
         - provider
-        - endpoint
         - input_types
         - streaming
         - tool_calling
@@ -4260,10 +4104,6 @@ components:
         provider:
           type: string
           const: ark
-        endpoint:
-          type: string
-          format: uri
-          description: 服务端批准的兼容模型 Base URL，默认 Ark 地址。
         input_types:
           type: array
           items:
@@ -4282,8 +4122,8 @@ components:
         - name
         - provider
         - model_id
-        - endpoint
-        - credential_id
+        - base_url
+        - api_key
         - context_window
         - max_output_tokens
         - temperature
@@ -4299,12 +4139,17 @@ components:
         model_id:
           type: string
           pattern: ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$
-        endpoint:
+        base_url:
           type: string
           format: uri
-          description: 服务端批准的兼容模型 Base URL，默认 Ark 地址。
-        credential_id:
-          $ref: '#/components/schemas/ResourceID'
+          minLength: 1
+          maxLength: 2048
+        api_key:
+          type: string
+          format: password
+          writeOnly: true
+          maxLength: 8192
+          description: Required on creation; omitted or empty on update retains the stored key.
         context_window:
           type: integer
           minimum: 2
@@ -4353,21 +4198,6 @@ components:
           type:
             - string
             - 'null'
-    CredentialPage:
-      type: object
-      additionalProperties: false
-      required:
-        - items
-        - next_cursor
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/Credential'
-        next_cursor:
-          type:
-            - string
-            - 'null'
     ModelPage:
       type: object
       additionalProperties: false
@@ -4383,52 +4213,6 @@ components:
           type:
             - string
             - 'null'
-    CredentialCreate:
-      type: object
-      additionalProperties: false
-      required:
-        - name
-        - secret
-        - enabled
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 100
-        secret:
-          type: string
-          format: password
-          writeOnly: true
-          maxLength: 8192
-        enabled:
-          type: boolean
-        revision:
-          type: integer
-          minimum: 1
-          maximum: 9007199254740991
-    CredentialUpdate:
-      type: object
-      additionalProperties: false
-      required:
-        - name
-        - enabled
-        - revision
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 100
-        secret:
-          type: string
-          format: password
-          writeOnly: true
-          maxLength: 8192
-        enabled:
-          type: boolean
-        revision:
-          type: integer
-          minimum: 1
-          maximum: 9007199254740991
     ModelUpdate:
       type: object
       additionalProperties: false
@@ -4436,8 +4220,7 @@ components:
         - name
         - provider
         - model_id
-        - endpoint
-        - credential_id
+        - base_url
         - context_window
         - max_output_tokens
         - temperature
@@ -4454,12 +4237,17 @@ components:
         model_id:
           type: string
           pattern: ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$
-        endpoint:
+        base_url:
           type: string
           format: uri
-          description: 服务端批准的兼容模型 Base URL，默认 Ark 地址。
-        credential_id:
-          $ref: '#/components/schemas/ResourceID'
+          minLength: 1
+          maxLength: 2048
+        api_key:
+          type: string
+          format: password
+          writeOnly: true
+          maxLength: 8192
+          description: Required on creation; omitted or empty on update retains the stored key.
         context_window:
           type: integer
           minimum: 2
@@ -4738,7 +4526,6 @@ components:
         - provider
         - model_id
         - endpoint
-        - credential_id
         - revision
         - context_window
         - max_output_tokens
@@ -4756,6 +4543,8 @@ components:
         credential_id:
           type: string
           format: uuid
+          deprecated: true
+          description: Legacy immutable snapshots only; current runs resolve connection settings by model ID.
         revision:
           type: integer
         context_window:

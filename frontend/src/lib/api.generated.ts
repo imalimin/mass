@@ -148,38 +148,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/spaces/{space_id}/credentials": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["listCredentials"];
-        put?: never;
-        post: operations["createCredential"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/spaces/{space_id}/credentials/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put: operations["replaceCredential"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/spaces/{space_id}/models": {
         parameters: {
             query?: never;
@@ -1152,31 +1120,14 @@ export interface components {
         MemberInput: {
             username: string;
         };
-        Credential: {
-            id: components["schemas"]["ResourceID"];
-            name: string;
-            enabled: boolean;
-            revision: number;
-        };
-        CredentialInput: {
-            name: string;
-            /** Format: password */
-            secret?: string;
-            enabled: boolean;
-            revision?: number;
-        };
         Model: {
             id: components["schemas"]["ResourceID"];
             name: string;
             /** @constant */
             provider: "ark";
             model_id: string;
-            /**
-             * Format: uri
-             * @description 服务端批准的兼容模型 Base URL，默认 Ark 地址。
-             */
-            endpoint: string;
-            credential_id: components["schemas"]["ResourceID"];
+            /** Format: uri */
+            base_url: string;
             context_window: number;
             max_output_tokens: number;
             temperature: number;
@@ -1189,11 +1140,6 @@ export interface components {
         ModelCapabilities: {
             /** @constant */
             provider: "ark";
-            /**
-             * Format: uri
-             * @description 服务端批准的兼容模型 Base URL，默认 Ark 地址。
-             */
-            endpoint: string;
             input_types: "text"[];
             /** @constant */
             streaming: true;
@@ -1205,12 +1151,13 @@ export interface components {
             /** @constant */
             provider: "ark";
             model_id: string;
+            /** Format: uri */
+            base_url: string;
             /**
-             * Format: uri
-             * @description 服务端批准的兼容模型 Base URL，默认 Ark 地址。
+             * Format: password
+             * @description Required on creation; omitted or empty on update retains the stored key.
              */
-            endpoint: string;
-            credential_id: components["schemas"]["ResourceID"];
+            api_key: string;
             context_window: number;
             max_output_tokens: number;
             temperature: number;
@@ -1225,39 +1172,22 @@ export interface components {
             items: components["schemas"]["Member"][];
             next_cursor: string | null;
         };
-        CredentialPage: {
-            items: components["schemas"]["Credential"][];
-            next_cursor: string | null;
-        };
         ModelPage: {
             items: components["schemas"]["Model"][];
             next_cursor: string | null;
-        };
-        CredentialCreate: {
-            name: string;
-            /** Format: password */
-            secret: string;
-            enabled: boolean;
-            revision?: number;
-        };
-        CredentialUpdate: {
-            name: string;
-            /** Format: password */
-            secret?: string;
-            enabled: boolean;
-            revision: number;
         };
         ModelUpdate: {
             name: string;
             /** @constant */
             provider: "ark";
             model_id: string;
+            /** Format: uri */
+            base_url: string;
             /**
-             * Format: uri
-             * @description 服务端批准的兼容模型 Base URL，默认 Ark 地址。
+             * Format: password
+             * @description Required on creation; omitted or empty on update retains the stored key.
              */
-            endpoint: string;
-            credential_id: components["schemas"]["ResourceID"];
+            api_key?: string;
             context_window: number;
             max_output_tokens: number;
             temperature: number;
@@ -1366,8 +1296,12 @@ export interface components {
             provider: string;
             model_id: string;
             endpoint: string;
-            /** Format: uuid */
-            credential_id: string;
+            /**
+             * Format: uuid
+             * @deprecated
+             * @description Legacy immutable snapshots only; current runs resolve connection settings by model ID.
+             */
+            credential_id?: string;
             revision: number;
             context_window: number;
             max_output_tokens: number;
@@ -1995,123 +1929,12 @@ export interface operations {
             };
         };
     };
-    listCredentials: {
-        parameters: {
-            query?: {
-                limit?: components["parameters"]["Limit"];
-                cursor?: components["parameters"]["Cursor"];
-            };
-            header?: never;
-            path: {
-                space_id: components["schemas"]["ResourceID"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CredentialPage"];
-                };
-            };
-            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-        };
-    };
-    createCredential: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
-                Origin: string;
-            };
-            path: {
-                space_id: components["schemas"]["ResourceID"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CredentialCreate"];
-            };
-        };
-        responses: {
-            /** @description Success */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Credential"];
-                };
-            };
-            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-        };
-    };
-    replaceCredential: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
-                Origin: string;
-            };
-            path: {
-                space_id: components["schemas"]["ResourceID"];
-                id: components["schemas"]["ResourceID"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CredentialUpdate"];
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Credential"];
-                };
-            };
-            /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-        };
-    };
     listModels: {
         parameters: {
             query?: {
                 limit?: components["parameters"]["Limit"];
                 cursor?: components["parameters"]["Cursor"];
-                /** @description Only enabled models with enabled credentials. */
+                /** @description Only enabled models. */
                 available?: boolean;
             };
             header?: never;

@@ -25,7 +25,6 @@ var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,63}$`)
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 
 type Service struct {
-	Endpoint  string
 	Repo      Repository
 	Cipher    Cipher
 	TTL       time.Duration
@@ -42,7 +41,7 @@ func New(repo Repository, cipher Cipher, ttl time.Duration, key []byte) (*Servic
 		return nil, err
 	}
 	sum := sha256.Sum256(append([]byte("mass.cursor.v1:"), key...))
-	return &Service{Endpoint: ArkEndpoint, Repo: repo, Cipher: cipher, TTL: ttl, cursorKey: sum[:], dummyHash: dummy, watchers: map[string]map[*watch]struct{}{}}, nil
+	return &Service{Repo: repo, Cipher: cipher, TTL: ttl, cursorKey: sum[:], dummyHash: dummy, watchers: map[string]map[*watch]struct{}{}}, nil
 }
 func validName(v string) bool {
 	return strings.TrimSpace(v) == v && utf8.ValidString(v) && len([]rune(v)) >= 1 && len([]rune(v)) <= 100 && !strings.ContainsAny(v, "\x00\r\n")
@@ -166,55 +165,35 @@ func (s *Service) CheckAccess(ctx context.Context, actor, space string) error {
 	return s.Repo.CheckAccess(ctx, actor, space, false)
 }
 
-type CredentialInput struct {
-	Name     string `json:"name"`
-	Secret   string `json:"secret,omitempty"`
-	Enabled  bool   `json:"enabled"`
-	Revision int64  `json:"revision,omitempty"`
-}
-
-func (s *Service) SaveCredential(ctx context.Context, actor, space, id string, input CredentialInput) (Credential, error) {
-	create := id == ""
-	if !validName(input.Name) || len(input.Secret) > 8192 || strings.ContainsAny(input.Secret, "\x00\r\n") || (create && strings.TrimSpace(input.Secret) == "") || (!create && (!validID(id) || input.Revision < 1)) {
-		return Credential{}, ErrInvalid
-	}
-	if err := s.Repo.CheckAccess(ctx, actor, space, true); err != nil {
-		return Credential{}, err
-	}
-	if create {
-		id = uuid.NewString()
-	}
-	c := Credential{ID: id, Name: input.Name, Enabled: input.Enabled, Revision: input.Revision}
-	if input.Secret != "" {
-		var err error
-		c.KeyID, c.Ciphertext, err = s.Cipher.Seal(space, id, []byte(input.Secret))
-		if err != nil {
-			return c, err
-		}
-	}
-	if err := s.Repo.SaveCredential(ctx, actor, space, c, create); err != nil {
-		return Credential{}, err
-	}
-	if create {
-		c.Revision = 1
-	} else {
-		c.Revision++
-	}
-	c.Ciphertext = nil
-	c.KeyID = ""
-	return c, nil
-}
 func (s *Service) SaveModel(ctx context.Context, actor, space, id string, m Model) (Model, error) {
 	create := id == ""
-	if m.Provider != "ark" || m.Endpoint != s.Endpoint {
+	if m.Provider != "ark" {
 		return Model{}, ErrCapability
 	}
-	if !validName(m.Name) || !modelPattern.MatchString(m.ModelID) || !validID(m.CredentialID) || m.ContextWindow <= m.MaxOutputTokens || m.ContextWindow > 2000000 || m.MaxOutputTokens < 1 || m.MaxOutputTokens > 1000000 || math.IsNaN(m.Temperature) || math.IsInf(m.Temperature, 0) || m.Temperature < 0 || m.Temperature > 2 || (!create && (!validID(id) || m.Revision < 1)) {
+	if !validName(m.Name) || !modelPattern.MatchString(m.ModelID) || m.ContextWindow <= m.MaxOutputTokens || m.ContextWindow > 2000000 || m.MaxOutputTokens < 1 || m.MaxOutputTokens > 1000000 || math.IsNaN(m.Temperature) || math.IsInf(m.Temperature, 0) || m.Temperature < 0 || m.Temperature > 2 || (!create && (!validID(id) || m.Revision < 1)) {
 		return Model{}, ErrInvalid
 	}
 	if create {
 		id = uuid.NewString()
 	}
+	baseURL, err := NormalizeBaseURL(m.BaseURL)
+	if err != nil || len(m.APIKey) > 8192 || strings.ContainsAny(m.APIKey, "\x00\r\n") || (create && strings.TrimSpace(m.APIKey) == "") {
+		return Model{}, ErrInvalid
+	}
+	if err := s.Repo.CheckAccess(ctx, actor, space, true); err != nil {
+		return Model{}, err
+	}
+	m.BaseURL = baseURL
+	// Never accept persisted encryption metadata from an input value.
+	m.KeyID, m.Ciphertext, m.SecretBindingID = "", nil, ""
+	if m.APIKey != "" {
+		m.SecretBindingID = id
+		m.KeyID, m.Ciphertext, err = s.Cipher.Seal(space, id, []byte(m.APIKey))
+		if err != nil {
+			return Model{}, err
+		}
+	}
+	m.APIKey = ""
 	m.ID = id
 	if err := s.Repo.SaveModel(ctx, actor, space, m, create); err != nil {
 		return Model{}, err
@@ -224,6 +203,7 @@ func (s *Service) SaveModel(ctx context.Context, actor, space, id string, m Mode
 	} else {
 		m.Revision++
 	}
+	m.KeyID, m.Ciphertext, m.SecretBindingID = "", nil, ""
 	return m, nil
 }
 
@@ -240,11 +220,11 @@ func (s *Service) DeleteModel(ctx context.Context, actor, space, id string, revi
 	return s.Repo.SaveModel(ctx, actor, space, m, false)
 }
 func (s *Service) ModelSecret(ctx context.Context, actor, space, model string) ([]byte, error) {
-	c, err := s.Repo.ResolveCredential(ctx, actor, space, model)
+	c, err := s.Repo.ResolveModelSecret(ctx, actor, space, model)
 	if err != nil {
 		return nil, err
 	}
-	return s.Cipher.Open(space, c.ID, c.KeyID, c.Ciphertext)
+	return s.Cipher.Open(space, c.SecretBindingID, c.KeyID, c.Ciphertext)
 }
 
 // Cursor authentication binds live keyset pagination to actor, space and list.
