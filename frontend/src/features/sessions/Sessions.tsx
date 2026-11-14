@@ -1,59 +1,127 @@
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, NavLink, Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { sessionPath, spacePath } from '../../app/routes'
-import { lazy, Suspense, useRef, useState } from 'react'
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { list, request, type Schema } from '../../lib/api'
-import { useRunStream } from './useRunStream'
-const Trace = lazy(() => import('../debug/Trace'))
-const SafeMarkdown = lazy(() => import('../debug/SafeMarkdown'))
-type Session = Schema['RuntimeSession']; type Run = Schema['RuntimeRun']
-const statuses: Record<string, string> = { queued: '排队中', running: '运行中', succeeded: '已完成', failed: '失败', cancelled: '已取消' }
-export function Sessions({ space }: { space: string }) {
-  const { sessionId: selected = '' } = useParams(), navigate = useNavigate()
-  const client = useQueryClient(), base = `/spaces/${space}`, [agent, setAgent] = useState(''), [version, setVersion] = useState(''), [title, setTitle] = useState(''), [snapshot, setSnapshot] = useState('')
+import { Conversation } from './Conversation'
+import './sessions.css'
+
+type Session = Schema['RuntimeSession']
+const sessionsKey = (space: string) => ['private', space, 'sessions']
+
+export function SessionWorkspace({ space }: { space: string }) {
+  const [showSessions, setShowSessions] = useState(false)
+  const sessions = useQuery({
+    queryKey: sessionsKey(space),
+    queryFn: ({ signal }) => list<Session>(`/spaces/${space}/sessions`, signal),
+    refetchInterval: q => q.state.error ? false : 5000,
+  })
+  const recent = [...(sessions.data ?? [])].sort((a, b) => b.created_at?.localeCompare(a.created_at) || b.id.localeCompare(a.id))
+  return <div className="session-workspace">
+    <button className="session-switch secondary" type="button" aria-expanded={showSessions} aria-controls="session-list"
+      onClick={() => setShowSessions(open => !open)}>会话列表</button>
+    <nav id="session-list" aria-label="会话列表" className={`session-rail${showSessions ? ' is-open' : ''}`}>
+      <div className="session-rail-top">
+        <NavLink end to={spacePath(space, 'sessions')} aria-label="新建会话" onClick={() => setShowSessions(false)}><span aria-hidden="true">+</span> 新建会话</NavLink>
+      </div>
+      <div className="session-links">
+        <h2>会话</h2>
+        {recent.map(s => <NavLink key={s.id} to={sessionPath(space, s.id)} end onClick={() => setShowSessions(false)} title={s.title || s.id}>
+          {s.title || s.id.slice(0, 8)}{s.workspace_error && <small>文件待恢复</small>}
+        </NavLink>)}
+        {sessions.isPending && <p role="status">正在读取会话…</p>}
+        {sessions.data?.length === 0 && <p>还没有会话</p>}
+        {sessions.error && <p role="alert">{sessions.error.message}</p>}
+      </div>
+    </nav>
+    <Outlet />
+  </div>
+}
+
+export function NewSession({ space }: { space: string }) {
+  const [params] = useSearchParams()
+  const source = params.get('from') ?? ''
+  return <SessionForm key={source} space={space} source={source} />
+}
+
+function SessionForm({ space, source }: { space: string; source: string }) {
+  const [agent, setAgent] = useState(''), [version, setVersion] = useState('')
+  const [title, setTitle] = useState(''), [snapshot, setSnapshot] = useState('')
+  const client = useQueryClient(), navigate = useNavigate(), base = `/spaces/${space}`
   const key = useRef<{ signature: string; key: string } | null>(null)
-  const sessions = useQuery({ queryKey: ['private', space, 'sessions'], queryFn: ({ signal }) => list<Session>(`${base}/sessions`, signal), refetchInterval: q => q.state.error ? false : 3000 })
-  const agents = useQuery({ queryKey: ['private', space, 'run-agents'], queryFn: ({ signal }) => list<Schema['Definition']>(`${base}/agents`, signal) })
-  const versions = useQuery({ queryKey: ['private', space, 'run-agent-versions', agent], queryFn: async ({ signal }) => [...await list<Schema['DefinitionVersion']>(`${base}/agents/${agent}/versions`, signal), ...await list<Schema['DefinitionVersion']>(`${base}/agents/${agent}/debug-snapshots`, signal)], enabled: !!agent })
-  const snapshots = useQuery({ queryKey: ['private', space, selected, 'workspace-snapshots'], queryFn: ({ signal }) => request<Schema['RuntimeSnapshots']>(`${base}/sessions/${selected}/workspace-snapshots`, 'GET', undefined, signal), enabled: !!selected, refetchInterval: q => q.state.error ? false : 3000 })
-  const create = useMutation({ mutationFn: () => { const body = { agent_id: agent, version_id: version, source_workspace_snapshot_id: snapshot, title }; const signature = JSON.stringify(body); if (key.current?.signature !== signature) key.current = { signature, key: crypto.randomUUID() }; return request<Session>(`${base}/sessions`, 'POST', { ...body, idempotency_key: key.current.key }) }, onSuccess: s => { key.current = null; navigate(sessionPath(space, s.id)); setTitle(''); void client.invalidateQueries({ queryKey: ['private', space, 'sessions'] }) } })
-  const form = <form className="form-grid" onSubmit={e => { e.preventDefault(); create.mutate() }}><label>会话名称<input value={title} maxLength={200} onChange={e => setTitle(e.target.value)} /></label><label>使用 Agent<select required value={agent} onChange={e => { setAgent(e.target.value); setVersion('') }}><option value="">选择 Agent</option>{agents.data?.filter(a => !a.archived).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label><label>定义版本<select value={version} onChange={e => setVersion(e.target.value)}><option value="">默认发布版本</option>{versions.data?.filter(v => !v.archived).map(v => <option key={v.id} value={v.id}>{v.debug ? `调试快照 ${v.id.slice(0, 8)}` : v.label}</option>)}</select></label><label>文件起始快照（可选）<select value={snapshot} onChange={e => setSnapshot(e.target.value)}><option value="">新建空目录</option>{snapshots.data?.items.map(s => <option key={s.id} value={s.id}>{s.id.slice(0, 8)} · 当前会话快照的独立副本</option>)}</select></label><button disabled={create.isPending || !agent}>新建会话</button></form>
-  return <section className="panel sessions">{selected ? <><Link className="text-link back-link" to={spacePath(space, 'sessions')}>← 返回会话列表</Link><Conversation key={selected} space={space} sessionID={selected} /><details className="session-fork"><summary>从当前会话的文件快照新建会话</summary>{form}</details></> : <>
-    <h2>会话列表</h2><p className="muted">选择已有会话继续工作，或使用固定版本的 Agent 新建会话。</p>
-    <div className="session-list">{sessions.data?.map(s => <Link className="resource-link" key={s.id} to={sessionPath(space, s.id)}>{s.title || s.id.slice(0, 8)}{s.workspace_error && ' · 文件待恢复'}<span aria-hidden="true"> →</span></Link>)}</div>
-    {sessions.isPending && <p role="status">正在读取会话…</p>}{sessions.data?.length === 0 && <p className="muted">还没有会话，选择一个 Agent 开始任务。</p>}
-    <h3>新建会话</h3>{form}</>}
-    {[sessions.error, agents.error, versions.error, snapshots.error, create.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{e?.message}</p>)}
+  const abort = useRef<AbortController | null>(null)
+  useEffect(() => {
+    const controller = new AbortController()
+    abort.current = controller
+    return () => controller.abort()
+  }, [])
+  const agents = useQuery({
+    queryKey: ['private', space, 'run-agents'],
+    queryFn: ({ signal }) => list<Schema['Definition']>(`${base}/agents`, signal),
+  })
+  const versions = useQuery({
+    queryKey: ['private', space, 'run-agent-versions', agent],
+    queryFn: async ({ signal }) => {
+      const [published, debug] = await Promise.all([
+        list<Schema['DefinitionVersion']>(`${base}/agents/${agent}/versions`, signal),
+        list<Schema['DefinitionVersion']>(`${base}/agents/${agent}/debug-snapshots`, signal),
+      ])
+      return [...published, ...debug]
+    },
+    enabled: !!agent,
+  })
+  const snapshots = useQuery({
+    queryKey: ['private', space, source, 'workspace-snapshots'],
+    queryFn: ({ signal }) => request<Schema['RuntimeSnapshots']>(`${base}/sessions/${source}/workspace-snapshots`, 'GET', undefined, signal),
+    enabled: !!source,
+  })
+  const create = useMutation({
+    mutationFn: () => {
+      const body = { agent_id: agent, version_id: version, source_workspace_snapshot_id: snapshot, title }
+      const signature = JSON.stringify(body)
+      if (key.current?.signature !== signature) key.current = { signature, key: crypto.randomUUID() }
+      return request<Session>(`${base}/sessions`, 'POST', { ...body, idempotency_key: key.current.key }, abort.current?.signal)
+    },
+    onSuccess: session => {
+      if (abort.current?.signal.aborted) return
+      client.setQueryData<Session[]>(sessionsKey(space), previous => [
+        session, ...(previous ?? []).filter(s => s.id !== session.id),
+      ])
+      void client.invalidateQueries({ queryKey: sessionsKey(space) })
+      navigate(sessionPath(space, session.id), { replace: true })
+    },
+  })
+  const available = agents.data?.filter(a => !a.archived) ?? []
+  return <section className="session-start">
+    <div className="session-start-content">
+      {source && <Link className="text-link" to={sessionPath(space, source)}>返回来源会话</Link>}
+      <h1>{source ? '从文件快照新建会话' : '开始新对话'}</h1>
+      <form className="session-start-form" onSubmit={event => {
+        event.preventDefault()
+        if (!create.isPending && agent && (!source || snapshot)) create.mutate()
+      }}>
+        <label>使用 Agent<select required value={agent} disabled={create.isPending} onChange={event => { setAgent(event.target.value); setVersion('') }}>
+          <option value="">选择 Agent</option>
+          {available.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </select></label>
+        <label>定义版本<select value={version} disabled={!agent || create.isPending} onChange={event => setVersion(event.target.value)}>
+          <option value="">默认发布版本</option>
+          {versions.data?.filter(v => !v.archived).map(v => <option key={v.id} value={v.id}>{v.debug ? `调试快照 ${v.id.slice(0, 8)}` : v.label}</option>)}
+        </select></label>
+        {source && <label className="full-width">文件起始快照<select required value={snapshot} disabled={create.isPending} onChange={event => setSnapshot(event.target.value)}>
+          <option value="">选择文件快照</option>
+          {snapshots.data?.items.map(s => <option key={s.id} value={s.id}>{s.id.slice(0, 8)}</option>)}
+        </select></label>}
+        <label className="full-width">会话名称<input value={title} maxLength={200} placeholder="可选" disabled={create.isPending} onChange={event => setTitle(event.target.value)} /></label>
+        {agents.isSuccess && available.length === 0 && <Link className="text-link full-width" to={spacePath(space, 'agents')}>先创建并发布一个 Agent →</Link>}
+        {[agents.error, versions.error, snapshots.error, create.error].filter(Boolean).map((error, i) => <p className="full-width" role="alert" key={i}>{error?.message}</p>)}
+        <button disabled={create.isPending || !agent || (!!source && !snapshot)}>{create.isPending ? '正在创建…' : '新建会话'}</button>
+      </form>
+    </div>
   </section>
 }
 
-function Conversation({ space, sessionID }: { space: string; sessionID: string }) {
-  const [params, setParams] = useSearchParams(), chosenRun = params.get('run') ?? ''
-  const setRun = (run: string) => setParams(run ? { run } : {})
-  const client = useQueryClient(), base = `/spaces/${space}`, [text, setText] = useState(''), [generation, setGeneration] = useState(0)
-  const [windowSize, setWindowSize] = useState(50)
-  const [attachments, setAttachments] = useState<Schema['RuntimeAttachment'][]>([])
-  const upload = useMutation({ mutationFn: async (file: File) => { if (file.size > 8 * 1024 * 1024) throw new Error('附件不能超过 8 MiB'); const bytes = new Uint8Array(await file.arrayBuffer()); let binary = ''; for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768)); return request<Schema['RuntimeAttachment']>(`${base}/sessions/${sessionID}/attachments`, 'POST', { name: file.name, media_type: file.type || (/\.json$/i.test(file.name) ? 'application/json' : /\.csv$/i.test(file.name) ? 'text/csv' : /\.txt$/i.test(file.name) ? 'text/plain' : 'application/octet-stream'), content_base64: btoa(binary) }) }, onSuccess: a => setAttachments(items => [...items, a]) })
-  const requestKey = useRef<{ text: string; key: string } | null>(null)
-  const session = useQuery({ queryKey: ['private', space, sessionID, 'session'], queryFn: ({ signal }) => request<Session>(`${base}/sessions/${sessionID}`, 'GET', undefined, signal), refetchInterval: q => q.state.error ? false : 1500 })
-  const runs = useQuery({ queryKey: ['private', space, sessionID, 'runs'], queryFn: ({ signal }) => list<Run>(`${base}/sessions/${sessionID}/runs`, signal), refetchInterval: q => q.state.error ? false : 1000 })
-  const sorted = [...(runs.data ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at)), runID = chosenRun || sorted[0]?.id || ''
-  const current = useQuery({ queryKey: ['private', space, sessionID, 'run', runID], queryFn: ({ signal }) => request<Run>(`${base}/runs/${runID}`, 'GET', undefined, signal), enabled: !!runID, refetchInterval: q => q.state.error || q.state.data && ['succeeded', 'failed', 'cancelled'].includes(q.state.data.status) ? false : 1000 })
-  const stream = useRunStream(space, sessionID, runID, generation)
-  const messages = useInfiniteQuery({ queryKey: ['private', space, sessionID, 'messages'], initialPageParam: '0', queryFn: ({ signal, pageParam }) => request<Schema['RuntimeMessages']>(`${base}/sessions/${sessionID}/messages?after_sequence=${pageParam}&limit=20`, 'GET', undefined, signal), getNextPageParam: p => p.has_more ? p.next_after : undefined })
-  const refresh = () => { void client.invalidateQueries({ queryKey: ['private', space, sessionID] }); void client.invalidateQueries({ queryKey: ['private', space, 'sessions'] }) }
-  const submit = useMutation({ mutationFn: () => { const payload = JSON.stringify({ text, attachments: attachments.map(a => a.id) }); if (requestKey.current?.text !== payload) requestKey.current = { text: payload, key: crypto.randomUUID() }; return request<Run>(`${base}/sessions/${sessionID}/runs`, 'POST', { text, attachment_ids: attachments.map(a => a.id), idempotency_key: requestKey.current.key }) }, onSuccess: r => { setText(''); setAttachments([]); requestKey.current = null; setRun(r.id); refresh() } })
-  const cancel = useMutation({ mutationFn: () => request<Run>(`${base}/runs/${runID}/cancel`, 'POST'), onSuccess: refresh })
-  const workspaceAction = useMutation({ mutationFn: (action: string) => request(`${base}/sessions/${sessionID}/${action}`, 'POST'), onSuccess: refresh })
-  const busy = runs.data?.some(r => ['queued', 'running'].includes(r.status)) ?? false
-  return <div className="conversation"><h3>{session.data?.title || '会话'}</h3>{session.data && <p className="muted">定义版本：{session.data.version_id} · 最近快照：{session.data.latest_workspace_snapshot_id || '尚无'}</p>}
-    {session.data?.workspace_error && <div className="error"><p role="alert">工作目录尚未确认持久化，已阻止下一轮运行。</p><div className="actions"><button disabled={workspaceAction.isPending} onClick={() => workspaceAction.mutate('workspace-snapshots/retry')}>仅重试保存文件</button><button className="secondary" disabled={workspaceAction.isPending} onClick={() => workspaceAction.mutate('workspace/restore')}>恢复最近已提交快照</button></div><p>恢复会丢弃当前未保存文件；不会重跑模型或工具。</p></div>}
-    <div className="chat-history">{messages.data?.pages.flatMap(p => p.items).filter(m => m.content && (m.role === 'user' || m.run_id !== runID)).map(m => <article className={`chat-message ${m.role}`} key={m.id}><strong>{m.role === 'user' ? '用户' : '助手'}</strong><Suspense fallback={<pre>{m.content}</pre>}><SafeMarkdown text={m.content} /></Suspense>{m.attachments?.map(a => <p key={a.id}><a href={`/api/v1/spaces/${space}/payloads/${a.ref.object_id}`} download>{a.name}</a> · {a.size} 字节</p>)}{m.truncated && <a href={`/api/v1/spaces/${space}/payloads/${m.content_id}`} download>下载完整内容</a>}</article>)}{messages.hasNextPage && <button className="secondary" onClick={() => { void messages.fetchNextPage() }}>加载更多消息</button>}</div>
-    <div className="attachment-picker"><label>添加任务附件<input type="file" disabled={upload.isPending || attachments.length >= 16} onChange={e => { const file = e.currentTarget.files?.[0]; if (file) upload.mutate(file); e.currentTarget.value = '' }} /></label><p className="muted">每个附件最多 8 MiB；发送任务后才可供模型读取。支持 UTF-8 文本、JSON、CSV。</p>{attachments.map(a => <p key={a.id}>{a.name} · {a.size} 字节 <button className="secondary" aria-label={`移除附件 ${a.name}`} onClick={() => setAttachments(items => items.filter(x => x.id !== a.id))}>移除</button></p>)}</div>
-    <form onSubmit={e => { e.preventDefault(); submit.mutate() }} className="message-form"><label>输入任务<textarea value={text} onChange={e => setText(e.target.value)} maxLength={262144} required rows={4} placeholder="例如：写入 notes.txt，读取确认，再发布为文件产物。" /></label><button disabled={submit.isPending || upload.isPending || busy || !text.trim() || !!session.data?.workspace_error}>发送任务</button></form>
-    <label className="run-selector">查看运行<select value={runID} onChange={e => { setRun(e.target.value) }}><option value="">选择运行</option>{sorted.map(r => <option value={r.id} key={r.id}>{r.id.slice(0, 8)} · {statuses[r.status] ?? r.status}</option>)}</select></label>
-    {current.data && <><div className="run-status" data-testid="run-status"><strong>{statuses[current.data.status] ?? current.data.status}</strong><span>{current.data.cancel_requested && !['succeeded', 'failed', 'cancelled'].includes(current.data.status) ? '取消已请求，等待执行停止和文件收尾' : current.data.error}</span>{['queued', 'running'].includes(current.data.status) && <button className="secondary" disabled={cancel.isPending || current.data.cancel_requested} onClick={() => cancel.mutate()}>取消运行</button>}</div><p className="muted">用量：输入 {current.data.usage.input_tokens ?? '未知'} / 输出 {current.data.usage.output_tokens ?? '未知'} Token；缓存读取 {current.data.usage.cache_read_tokens ?? '未知'}。快照：{current.data.workspace_snapshot_id || '尚未提交'}</p></>}
-    {runID && <div className="run-output">{stream.state?.plan && <aside aria-label="当前运行计划" className="run-plan"><strong>任务计划 · 修订 {stream.state.plan.revision}</strong><ol>{stream.state.plan.steps.map(step => <li key={step.id}><span>{({ pending: '待处理', in_progress: '进行中', completed: '已完成', skipped: '已跳过' })[step.status]}</span> · {step.title}</li>)}</ol><p className="muted">计划由 Agent 报告；运行状态与产物另行确认。</p></aside>}{stream.state && (stream.state.messages.length > windowSize || stream.state.tools.length > windowSize) && <button className="secondary" onClick={() => setWindowSize(n => n + 50)}>显示更早的运行输出</button>}{stream.state?.messages.slice(-windowSize).map(m => <article className="chat-message assistant" key={m.id}><strong>助手{m.incomplete ? ' · 输出未完成' : ''}</strong>{m.closed && !m.incomplete ? <Suspense fallback={<pre>{m.text}</pre>}><SafeMarkdown text={m.text} /></Suspense> : <pre>{m.text}</pre>}</article>)}{stream.state?.tools.slice(-windowSize).map(t => <details key={t.id}><summary>{t.name} · {t.status}</summary><>{t.standard ? <pre>{t.arguments}</pre> : <p className="muted">参数较大，完整内容请在 Trace 的模型响应载荷中查看。</p>}</><pre>{t.result}</pre></details>)}{stream.state?.artifacts.map(a => <p key={a.id}><a href={a.download_url} download>{a.name}</a> · {a.sha256}</p>)}<p className="muted">事件游标 {stream.cursor} · {stream.connected ? '接收运行事件' : '事件连接已关闭'}</p>{stream.error && <p role="alert">{stream.error}<button className="secondary" onClick={() => setGeneration(x => x + 1)}>重新同步事件</button></p>}<Suspense fallback={<p>载入调试工作台…</p>}><Trace key={runID} space={space} runID={runID} /></Suspense></div>}
-    {[session.error, runs.error, current.error, messages.error, upload.error, submit.error, cancel.error, workspaceAction.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{e?.message}</p>)}
-  </div>
+export function SessionConversation({ space }: { space: string }) {
+  const { sessionId = '' } = useParams()
+  return <Conversation key={sessionId} space={space} sessionID={sessionId} />
 }

@@ -40,7 +40,8 @@ try {
   await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 60000 }); await page.getByText('十四工具处理完成，汇总结果为 10。', { exact: true }).waitFor()
   await expect(page.getByRole('complementary', { name: '当前运行计划' })).toContainText('修订 2'); await expect(page.getByRole('complementary', { name: '当前运行计划' })).toContainText('已完成 · Create summary')
   assert.ok(await page.evaluate(() => window.__massToolInterrupted), 'tool parameter stream was not interrupted')
-  const names = await page.locator('.run-output > details:not(.trace) > summary').allTextContents(); assert.equal(new Set(names.map(n => n.split(' · ')[0])).size, 14)
+  await page.getByText(/^工具调用 · /).click()
+  const names = await page.locator('.tool-activity > details > summary').allTextContents(); assert.equal(new Set(names.map(n => n.split(' · ')[0])).size, 14)
   const artifactLink = page.locator('.run-output a').filter({ hasText: 'summary.json' }).first(); const artifact = await context.request.get(new URL(await artifactLink.getAttribute('href'), server.url).href); assert.equal(artifact.status(), 200); assert.equal(await artifact.text(), '{"total":10,"label":"final"}')
   const attachmentLink = page.locator('.chat-history a').filter({ hasText: 'records.json' }).first(); await attachmentLink.waitFor(); const attachment = await context.request.get(new URL(await attachmentLink.getAttribute('href'), server.url).href); assert.equal(attachment.status(), 200); assert.equal(await attachment.text(), '[{"amount":2},{"amount":3}]')
   const base = `${server.url}/api/v1/spaces/${run.space_id}/runs/${run.id}`
@@ -49,7 +50,9 @@ try {
   for (;;) { const response = await context.request.get(`${base}/trace?after_sequence=${after}&limit=100`); assert.equal(response.status(), 200); const trace = await response.json(); ioCount += trace.events.filter(e => e.event_type === 'tool.io.recorded').length; inputResolved ||= trace.events.some(e => e.event_type === 'tool.execution.input_resolved'); if (!trace.has_more) break; after = trace.next_after }
   assert.ok(!inputResolved && ioCount === 0, 'code IO was persisted')
   const calls = server.modelCalls(); assert.equal(calls, 16); await page.reload(); await page.getByText('十四工具处理完成，汇总结果为 10。', { exact: true }).waitFor(); await expect(page.getByRole('complementary', { name: '当前运行计划' })).toContainText('修订 2'); assert.equal(server.modelCalls(), calls, 'replay executed tools/model')
+  await page.getByRole('button', { name: '运行详情', exact: true }).click()
   await page.getByText('Trace 与上下文', { exact: true }).click(); await page.getByText('model.attempt.started', { exact: false }).first().waitFor()
+  await page.keyboard.press('Escape')
   await mkdir('.cache', { recursive: true }); await page.screenshot({ path: '.cache/d05-desktop.png', fullPage: true }); await page.setViewportSize({ width: 390, height: 844 }); await page.getByRole('complementary', { name: '当前运行计划' }).scrollIntoViewIfNeeded(); await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile overflow'); await page.screenshot({ path: '.cache/d05-mobile.png' })
   assert.deepEqual(errors, []); console.log('D05 browser passed: all 14 tools through actual Eino/HTTP, accepted attachment and fixed Skill, JS file/network/CSV IO, plan, immutable artifact after deletion, replay without execution and mobile layout.')
 } catch (e) { await mkdir('.cache', { recursive: true }); await page?.screenshot({ path: '.cache/d05-failure.png', fullPage: true }); throw e }

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -28,6 +29,7 @@ type RuntimeRepository interface {
 	BeginWorkspaceMaintenance(context.Context, string, string, string) error
 	EndWorkspaceMaintenance(context.Context, string, string, string) error
 	RuntimeLastRun(context.Context, string, string, string) (run.View, error)
+	RuntimeMessagesBefore(context.Context, string, string, string, int64, int) ([]run.MessageView, error)
 	sessionapp.Repository
 	RuntimeRuns(context.Context, string, string, string, identity.Query) ([]run.View, error)
 	RuntimeTrace(context.Context, string, string, string, int64, *int64, int) (journal.Page, error)
@@ -162,9 +164,28 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if err != nil {
 			return err
 		}
-		items, err := svc.Repo.RuntimeMessages(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("session_id"), after, limit)
+		space, session := r.PathValue("space_id"), r.PathValue("session_id")
+		beforeSequence := r.URL.Query().Get("before_sequence")
+		var items []run.MessageView
+		if beforeSequence != "" {
+			before, parseErr := agui.ParseCursor(beforeSequence)
+			if parseErr != nil || r.URL.Query().Has("after_sequence") {
+				return storage.ErrInvalid
+			}
+			items, err = runtime.Repo.RuntimeMessagesBefore(r.Context(), u.ID, space, session, before, limit)
+		} else {
+			items, err = svc.Repo.RuntimeMessages(r.Context(), u.ID, space, session, after, limit)
+		}
 		if err != nil {
 			return err
+		}
+		more := len(items) == limit
+		if beforeSequence != "" {
+			more = len(items) > limit
+			if more {
+				items = items[:limit]
+			}
+			slices.Reverse(items)
 		}
 		type item struct {
 			run.MessageView
@@ -196,7 +217,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 			result = append(result, item{MessageView: m, Content: text, Truncated: truncated})
 			next = m.Sequence
 		}
-		writeJSON(w, 200, map[string]any{"items": result, "next_after": strconv.FormatInt(next, 10), "has_more": len(items) == limit})
+		writeJSON(w, 200, map[string]any{"items": result, "next_after": strconv.FormatInt(next, 10), "has_more": more})
 		return nil
 	})
 	for _, kind := range []string{"trace", "contexts"} {

@@ -5035,6 +5035,8 @@ export interface operations {
         parameters: {
             query?: {
                 after_sequence?: string;
+                /** @description Return messages before this sequence, or the latest page when set to 0. Items are in chronological order. When has_more is true, use the first item's sequence for the preceding page. Cannot be combined with after_sequence. */
+                before_sequence?: string;
                 limit?: number;
             };
             header?: never;

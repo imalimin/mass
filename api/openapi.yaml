@@ -2920,6 +2920,11 @@ paths:
           in: query
           schema:
             type: string
+        - name: before_sequence
+          in: query
+          description: Return messages before this sequence, or the latest page when set to 0. Items are in chronological order. When has_more is true, use the first item's sequence for the preceding page. Cannot be combined with after_sequence.
+          schema:
+            type: string
         - name: limit
           in: query
           schema:

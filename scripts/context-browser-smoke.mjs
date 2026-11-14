@@ -32,7 +32,7 @@ try {
   for (let i = 0; i < 6 && summaries().length === 0; i++) run = await send('D06 long ' + 'user fact. '.repeat(60))
   assert.equal(summaries().length, 1)
   run = await send('D06 continue briefly'); run = await send('D06 continue briefly again'); assert.equal(summaries().length, 1)
-  await expect(page.locator('.chat-history')).not.toContainText('D06 saved history:'); await expect(page.locator('.run-output')).not.toContainText('D06 saved history:')
+  await expect(page.locator('.chat-history')).not.toContainText('D06 saved history:')
   const requests = server.modelRequests().filter(r => !r.messages[0].content.startsWith('Summarize this historical transcript'))
   for (let i = 1; i < requests.length; i++) {
     const a = requests[i - 1].messages, b = requests[i].messages
@@ -41,6 +41,7 @@ try {
   const base = `${server.url}/api/v1/spaces/${run.space_id}/runs/${run.id}`
   const contexts = await (await context.request.get(`${base}/contexts?limit=100`)).json(); const projected = contexts.events.find(e => e.event_type === 'context.projected')
   const inspection = await (await context.request.get(`${base}/contexts/${projected.data.id}`)).json(); assert.equal(inspection.projection.spec.context_epoch, 2); assert.equal(inspection.requests.length, 0); assert.ok(inspection.source_events.length > 0)
+  await page.getByRole('button', { name: '运行详情', exact: true }).click()
   await page.getByText('Trace 与上下文', { exact: true }).click(); await page.getByText('context.projected', { exact: false }).first().click(); await page.getByRole('button', { name: '检查上下文来源', exact: true }).click()
   await expect(page.getByRole('region', { name: '上下文来源检查' })).toContainText('Epoch 2')
   await page.setViewportSize({ width: 390, height: 844 }); await page.getByRole('region', { name: '上下文来源检查' }).scrollIntoViewIfNeeded(); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await mkdir('.cache', { recursive: true }); await page.screenshot({ path: '.cache/d06-inspection-mobile.png' }); await page.setViewportSize({ width: 1440, height: 1100 });

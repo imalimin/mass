@@ -158,16 +158,38 @@ func (s *Store) RuntimeDiagnosticSpace(ctx context.Context, actor, runID, snapsh
 }
 
 func (s *Store) RuntimeMessages(ctx context.Context, actor, space, session string, after int64, limit int) (items []run.MessageView, err error) {
-	items = []run.MessageView{}
 	if after < 0 || limit < 1 || limit > 100 {
-		return items, storage.ErrInvalid
+		return []run.MessageView{}, storage.ErrInvalid
 	}
+	return s.runtimeMessages(ctx, actor, space, session, after, limit, false)
+}
+
+func (s *Store) RuntimeMessagesBefore(ctx context.Context, actor, space, session string, before int64, limit int) ([]run.MessageView, error) {
+	if before < 0 || limit < 1 || limit > 100 {
+		return nil, storage.ErrInvalid
+	}
+	return s.runtimeMessages(ctx, actor, space, session, before, limit+1, true)
+}
+
+func (s *Store) runtimeMessages(ctx context.Context, actor, space, session string, cursor int64, limit int, descending bool) (items []run.MessageView, err error) {
+	items = []run.MessageView{}
 	err = s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
 		var exists string
 		if e := tx.QueryRowContext(ctx, "SELECT id FROM sessions WHERE space_id=? AND id=?", space, session).Scan(&exists); e != nil {
 			return e
 		}
-		rows, e := tx.QueryContext(ctx, "SELECT m.id,COALESCE(m.run_id,''),m.role,m.content_id,m.source_event_id,m.sequence,m.complete,m.attachments FROM messages m WHERE m.space_id=? AND m.session_id=? AND m.sequence>? ORDER BY m.sequence LIMIT ?", space, session, after, limit)
+		const query = "SELECT m.id,COALESCE(m.run_id,''),m.role,m.content_id,m.source_event_id,m.sequence,m.complete,m.attachments FROM messages m WHERE m.space_id=? AND m.session_id=?"
+		var (
+			rows *sql.Rows
+			e    error
+		)
+		if !descending {
+			rows, e = tx.QueryContext(ctx, query+" AND m.sequence>? ORDER BY m.sequence LIMIT ?", space, session, cursor, limit)
+		} else if cursor == 0 {
+			rows, e = tx.QueryContext(ctx, query+" ORDER BY m.sequence DESC LIMIT ?", space, session, limit)
+		} else {
+			rows, e = tx.QueryContext(ctx, query+" AND m.sequence<? ORDER BY m.sequence DESC LIMIT ?", space, session, cursor, limit)
+		}
 		if e != nil {
 			return e
 		}

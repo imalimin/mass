@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useMatch, useNavigate, useParams } from 'react-router-dom'
 import { APIError, list, request, type Schema } from '../lib/api'
-import { Sessions } from '../features/sessions/Sessions'
+import { SessionWorkspace, NewSession, SessionConversation } from '../features/sessions/Sessions'
 import { Catalog } from '../features/catalog/Catalog'
 import { Members, Models } from '../features/spaces/SpaceDetail'
 import { sortSpacesByCreation } from '../features/spaces/spaces'
@@ -17,6 +17,7 @@ export function App() {
   const space = spaces.data?.find(s => s.id === spaceID)
   const section = match?.params['*']?.split('/')[0] ?? ''
   const page = workspaceSections.find(s => s.path === section)
+  const sessionPage = !!space && /^sessions(?:\/[^/]+)?\/?$/.test(match?.params['*'] ?? '')
   useEffect(() => {
     document.title = `${space ? `${page?.label ?? '页面未找到'} · ${space.name}` : '工作台'} · MASS`
     window.scrollTo(0, 0)
@@ -45,19 +46,19 @@ export function App() {
     if (me.error instanceof APIError && me.error.status === 401) return <Login onSuccess={() => { setNotice(''); void client.invalidateQueries({ queryKey: ['me'] }) }} />
     return <div className="login-card"><h1>暂时无法连接服务</h1><p role="alert">{me.error.message}</p><button onClick={() => { void me.refetch() }}>重试</button></div>
   }
-  return <div className="layout"><aside className="app-sidebar"><Link className="brand" to={workspaceHomePath}>M<span className="brand-dot">A</span>SS<span className="brand-sub">AGENT WORKSPACE</span></Link>
+  return <div className={sessionPage ? 'layout session-layout' : 'layout'}><aside className="app-sidebar"><Link className="brand" to={workspaceHomePath}>M<span className="brand-dot">A</span>SS<span className="brand-sub">AGENT WORKSPACE</span></Link>
     <nav aria-label="主导航"><label className="workspace-picker">空间<select aria-label="切换空间" value={space?.id ?? spaces.data?.[0]?.id ?? ''} disabled={!spaces.data?.length} onChange={event => navigate(spacePath(event.target.value))}>{!spaces.data?.length && <option value="" disabled>{spaces.isPending ? '正在读取空间…' : '暂无空间'}</option>}{spaces.data?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label></nav>
     {space && <nav aria-label="空间导航">{['工作空间', '定义与资源', '空间管理'].map(group => <div key={group}><div className="nav-caption">{group}</div>{workspaceSections.filter(s => s.group === group).map(s => <NavLink key={s.path} to={spacePath(space.id, s.path)} end={!s.path}>{s.label}</NavLink>)}</div>)}</nav>}
     <AccountSettings username={me.data.username} pending={logout.isPending} onLogout={() => logout.mutate()} /></aside>
-    <main id="main-content"><nav className="breadcrumbs" aria-label="面包屑"><Link to={space ? spacePath(space.id) : workspaceHomePath}>{space?.name ?? '工作台'}</Link>{space && <>{section && <><span aria-hidden="true">/</span><span aria-current="page">{page?.label ?? '页面未找到'}</span></>}</>}</nav>
+    <main id="main-content">{!sessionPage && <><nav className="breadcrumbs" aria-label="面包屑"><Link to={space ? spacePath(space.id) : workspaceHomePath}>{space?.name ?? '工作台'}</Link>{space && <>{section && <><span aria-hidden="true">/</span><span aria-current="page">{page?.label ?? '页面未找到'}</span></>}</>}</nav>
       <header><div><div className="eyebrow">{space ? space.name : 'WORKSPACE'}</div><h1>{space ? page?.label ?? '页面未找到' : '工作台'}</h1></div><span className="service-status">已连接 MASS 服务</span></header>
-      <p className="intro">{space ? page?.description : '在空间中协作，使用 Agent 开始任务。'}</p>
+      <p className="intro">{space ? page?.description : '在空间中协作，使用 Agent 开始任务。'}</p></>}
       {notice && <div role="alert" className="error">{notice}<button onClick={() => setNotice('')}>关闭</button></div>}{logout.error && <p role="alert">{logout.error.message}</p>}
       <Routes><Route path="/" element={<Navigate to="/spaces" replace />} /><Route path="/login" element={<Navigate to="/spaces" replace />} />
         <Route path="/spaces" element={<SpacesLanding spaces={spaces.data} pending={spaces.isPending} error={spaces.error} />} />
         <Route path="/spaces/:spaceId/*" element={<SpaceWorkspace user={me.data} space={space} pending={spaces.isPending} error={spaces.error} />} />
         <Route path="*" element={<NotFound />} /></Routes>
-      <footer>会话固定定义版本，运行记录与文件快照持续保存。</footer>
+      {!sessionPage && <footer>会话固定定义版本，运行记录与文件快照持续保存。</footer>}
     </main></div>
 }
 function AccountSettings({ username, pending, onLogout }: { username: string; pending: boolean; onLogout: () => void }) {
@@ -136,8 +137,10 @@ function SpaceWorkspace({ space, user, pending, error }: { space?: Schema['Space
     <Route path="agents/:definitionId" element={<Catalog key={`${space.id}-agents`} space={space} kind="agent" />} />
     <Route path="skills" element={<Catalog key={`${space.id}-skills`} space={space} kind="skill" />} />
     <Route path="skills/:definitionId" element={<Catalog key={`${space.id}-skills`} space={space} kind="skill" />} />
-    <Route path="sessions" element={<Sessions key={space.id} space={space.id} />} />
-    <Route path="sessions/:sessionId" element={<Sessions key={space.id} space={space.id} />} />
+    <Route path="sessions" element={<SessionWorkspace key={space.id} space={space.id} />}>
+      <Route index element={<NewSession space={space.id} />} />
+      <Route path=":sessionId" element={<SessionConversation space={space.id} />} />
+    </Route>
     <Route path="*" element={<NotFound />} /></Routes>
 }
 function SpaceOverview({ space }: { space: Schema['Space'] }) {
