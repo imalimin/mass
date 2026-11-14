@@ -24,21 +24,17 @@ type Control struct {
 	calls, tools       int
 	maxTokens, charged int64
 	items              map[string]reservation
-	check              func(context.Context) error
 }
 
-func New(snapshot run.Snapshot, started time.Time, check func(context.Context) error) *Control {
-	return &Control{deadline: started.Add(time.Duration(snapshot.Definition.TimeoutSeconds) * time.Second), maxCalls: snapshot.Definition.MaxSteps, maxTools: snapshot.Definition.MaxSteps * 16, maxTokens: int64(snapshot.Definition.MaxSteps) * int64(snapshot.Definition.MaxInputTokens+snapshot.Definition.OutputTokens), items: map[string]reservation{}, check: check}
+func New(snapshot run.Snapshot, started time.Time) *Control {
+	return &Control{deadline: started.Add(time.Duration(snapshot.Definition.TimeoutSeconds) * time.Second), maxCalls: snapshot.Definition.MaxSteps, maxTools: snapshot.Definition.MaxSteps * 16, maxTokens: int64(snapshot.Definition.MaxSteps) * int64(snapshot.Definition.MaxInputTokens+snapshot.Definition.OutputTokens), items: map[string]reservation{}}
 }
 func (c *Control) Check(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return context.Cause(ctx)
 	}
 	if !time.Now().Before(c.deadline) {
 		return run.ErrBudget
-	}
-	if c.check != nil {
-		return c.check(ctx)
 	}
 	return nil
 }

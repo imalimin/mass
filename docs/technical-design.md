@@ -194,7 +194,7 @@ Cookie 使用 SameSite=Lax，HTTPS 下 Secure；本地回环地址开发可显�
 
 页面提供创建、切换、成员列表、添加与移除，服务端重新校验每次操作。用户名只做精确匹配，不开放全站用户枚举。成员变更与 audit_logs 同事务。
 
-**权限失效只报错并结束任务。** 最小身份 API 保留 POST /auth/login、POST /auth/logout 和 GET /auth/me。HTTP 入口、文件下载、SSE 输出批次、模型调用和每个工具/宿主 I/O 前重新检查当前主体；排队任务认领时也检查。移除成员提交成功后，进程内通知 Supervisor 取消该 actor 在该 space 的 queued/running Run，撤销活跃读取连接；Supervisor 的已有心跳定期复核作为通知遗漏兜底。不增加新任务状态、重新授权等待或自动续跑。未登录/登录失效返回 401 unauthenticated，成员失效返回 403 forbidden；Run 以 failed 和同名错误原因结束。已完成 Run 不因后来移除成员改写。
+**权限失效只报错并结束任务。** HTTP 入口、文件下载、SSE 输出批次、模型凭证获取和排队任务认领检查当前主体。Run 开始执行前统一复核，工具和宿主 I/O 使用 Run context 处理取消。移除成员提交成功后，应用通知同一进程中的活跃 Run 和读取连接。未登录或登录失效返回 401 unauthenticated，成员失效返回 403 forbidden。被撤权的 Run 以 failed 和 permission_revoked 结束。
 
 模型 HTTP、代码网络请求、文件循环和 VM 接收取消；等待实际退出后才释放会话占用。正在传输的请求或已经发生的副作用不能追溯撤销，但之后不启动新动作。服务使用独立有界收尾 context 保存已收到的结果、权限失败和已有文件快照；这是系统收尾权限，不允许被移除主体借此读取内容或继续执行。数据库无法验证权限时拒绝继续，以实际存储错误结束，不伪称 403。
 
@@ -210,7 +210,7 @@ SSE/下载已发送响应头后无法改 HTTP 状态：停止后续数据并关�
 
 所有空间内 Repository 操作按「空间行 → 成员关系 → 资源」顺序在事务内授权并加锁；成员变更、模型和凭证变更与审计共同提交。添加已有成员幂等且不重复审计，普通成员可退出自己，owner 永不可删除。模型/凭证联合外键携带 space_id，跨空间 ID 不可用于建立引用。列表默认 20、最多 100 条，以 UUID keyset 排序，HMAC 游标绑定 actor/space/list/filter；管理列表为实时视图，新增到已翻页位置之前的项需刷新才能看到，不宣称不可变历史快照。
 
-WatchAccess 先登记取消订阅再查询权限，消除订阅和撤权的检查竞态；RemoveMember 事务提交后通知同空间/主体的订阅者。CheckAccess 为每次动作与心跳提供重新查询入口，数据库错误保持存储失败语义。D04 尚未实现，通知目前通过真实数据库集成测试验证；尚无 Supervisor、后台 Run 或长连接可供终止，不能把 context 取消等同于实际退出。前端私有查询键包含 space_id；切换、退出、401/403 时取消请求、清空私有缓存及表单，成员页面每 5 秒复核，收到权限失败后停止该页面查询。
+WatchAccess 先登记取消订阅再查询权限。Supervisor 复用同一订阅机制，由启动校验查询权限。RemoveMember 事务提交后通知同空间和主体的订阅者。前端私有查询键包含 space_id，切换、退出、401/403 时取消请求并清空私有缓存及表单。
 
 ## T02 M02 定义、Skill 依赖与发布
 
@@ -281,7 +281,7 @@ func (s *CatalogService) PublishAgent(ctx context.Context, in PublishInput) (Ver
 
 新增迁移 00004_definitions，不改动已发布的前三份迁移；D03 使用 schema 4；当前 serve 要求 schema 6。Agent 与 Skill 的元数据、草稿和版本复用 definitions / definition_drafts / definition_versions，以 kind 区分，外部 API 仍为 /agents 和 /skills。全部关联含 space_id；definition_dependencies 保存有序、准确的 Skill 内部版本 ID，数据库外键限制删除被引用版本。版本 label 在单一定义内区分大小写且唯一；latest（不区分大小写）及范围表达式不被接受。debug=true 的不可变快照无发布 label，不改变默认版本。
 
-定义名称为 1—64 字节的小写字母/数字/连字符标识，首字符为字母。agent.yaml 的 model 和 skills[].id 分别使用本空间模型配置 ID 与 Skill ID，version 是准确显示版本；name 必须与定义名称一致。严格拒绝未知字段、重复键、多 YAML 文档、alias/anchor、合并键、非法类型、未知工具、重复 Skill/工具及越界限额。草稿允许空正文和空配置便于新建；非空配置保存时校验结构，发布和调试快照进一步要求非空正文、完整配置、已启用的模型和未归档的准确依赖。输入/输出预留总量不得超过模型上下文容量，输出预留不超过模型上限。平台上限为 1000 步、3600 秒；这里是配置校验，D04 已接入运行限额，D05 继续扩展工具。
+定义名称为 1—64 字节的小写字母/数字/连字符标识，首字符为字母。agent.yaml 的 model 和 skills[].id 分别使用本空间模型配置 ID 与 Skill ID，version 是准确显示版本；name 必须与定义名称一致。严格拒绝未知字段、重复键、多 YAML 文档、alias/anchor、合并键、非法类型、未知工具、重复 Skill/工具及越界限额。草稿允许空正文和空配置便于新建；非空配置保存时校验结构，发布和调试快照进一步要求非空正文、完整配置、已启用的模型和未归档的准确依赖。输入/输出预留总量不得超过模型上下文容量，输出预留不超过模型上限。平台上限为 1000 步、86400 秒（24 小时）；这里是配置校验，D04 已接入运行限额，D05 继续扩展工具。
 
 Agent 文档包含 Markdown 和配置原文，正文上限 256 KiB、配置上限 64 KiB。Skill 资源最多 100 个、单资源上限 8 MiB，资源和目录使用相对于根目录的规范路径。Skill 根目录的 SKILL.md 和 bundle.json 分别保留给正文和 ZIP 元数据。路径校验拒绝穿越、绝对路径、大小写冲突及文件/目录前缀冲突。JSON 上传接口使用 data_base64，HTTP 请求上限 12 MiB。上传写入新 ZIP 后提交草稿引用并推进 revision，已发布版本仍引用原 ZIP。
 
@@ -374,7 +374,7 @@ Run context 派生自服务执行生命周期，不使用提交请求的 context
 
 bootstrap.StartRuntime 组装串行 Scheduler、Supervisor、Executor、Planner、Gateway 与工具 Dispatcher。Scheduler 每 300ms 轮询并接受内存通知，先获取全局名额，再按空间最多 min(全局, 2) 准入，事务追加 run.started 后交接。数据库写入沿用空间授权锁 → Session → Run 顺序。GET_LOCK 独占连接保留至所有执行实际退出，普通请求取消不会关闭该连接。
 
-Supervisor 以服务生命周期创建有界 Run context，每 500ms 在同一授权事务中复核成员资格、Run 归属与取消状态以及绑定模型的启用状态，并更新心跳。模型地址和密钥在实际调用时读取。取消、撤权、超时、panic 均等待实际执行退出，再调用 resource.Finisher。运行通知不承担权限授予，撤权后的普通查询/动作仍被 Repository 拒绝。
+Supervisor 在执行前用一次授权事务确认成员资格、Run 归属、取消状态及模型是否启用。工具执行期间通过 context 处理取消和撤权，额度在内存中计算。模型地址和密钥在实际调用时读取。取消、撤权、超时和 panic 均等待执行退出，再调用 resource.Finisher。
 
 Finisher 的系统身份是一个绑定已认领 Run、主体、空间/Session 和 owner 的窄 Repository 能力，仅允许收尾/核实事实及该 Run 的归档/Manifest；调用方伪造 actor.kind=system 不能绕过鉴权。成功提交再次检查成员资格和取消标记；竞态发生时复用相同归档改为失败/取消收尾。收尾计划和稳定 UUID/时间写入数据库，以便核实未知提交；SQL 失败保留占用并停止接单，快照上传失败则提交明确失败和文件阻塞状态。
 
@@ -389,7 +389,7 @@ Finisher 的系统身份是一个绑定已认领 Run、主体、空间/Session �
 | 子包（相对于 internal/） | 归属 | 输入 → 输出与独占职责 | 不承担的职责 |
 | --- | --- | --- | --- |
 | runtime/scheduler | M05 | queued 候选、并发配额 → 已认领 Run 与准入名额；串行 dispatcher、唤醒/轮询、单实例锁监测、认领后交接 | 不创建用户消息、不执行 ReAct、不写运行终态 |
-| runtime/supervisor | M05 | 已认领 Run 与名额 → 有界执行、终态和资源释放；Run context、取消信号、心跳、panic 收尾、启动恢复 | 不组装消息、不解析模型响应、不实现工具 |
+| runtime/supervisor | M05 | 已认领 Run 与名额 → 启动校验、有界执行、终态和资源释放 | 不组装消息、不解析模型响应、不实现工具 |
 | runtime/executor | M06 | RunSnapshot → Outcome 或 error；唯一 ReAct 循环、步骤推进、串行派发一组工具、选择最终响应 | 不更新 Run 状态、不持有 SQL/TOS/SDK、不做摘要算法 |
 | runtime/control | M06 | Run 限额、操作类型、已记录用量 → 允许执行或停止原因；统一次数、时限与预算检查/预留/结算 | 不管理队列并发、不组装上下文、不独立保存计费事实 |
 | runtime/context/planner | M07 | Run 与日志最新已提交边界 → 已保存的 PreparedContext；容量规划、摘要编排、epoch 选择、投影登记 | 不实现模型传输、不递归调用自己生成摘要 |
@@ -439,7 +439,7 @@ bootstrap → 上述具体实现及 adapter/*，完成组装
 | 消费方 | 最小接口与实现方 | 关键返回约束 |
 | --- | --- | --- |
 | scheduler | CandidateReader、ClaimWriter（MariaDB/Journal）；RunLauncher（Supervisor） | 认领提交后交接；启动结果明确是否接收了名额所有权 |
-| supervisor | Runner（Executor）、WorkspaceSnapshots（resource）、FinishWriter（Journal）、取消/心跳存储接口 | 运行实际退出后才提交终态；重复 Finish 返回相同结果或状态冲突 |
+| supervisor | Runner（Executor）、WorkspaceSnapshots（resource）、FinishWriter（Journal）、Run 启动校验 | 运行实际退出后才提交终态；重复 Finish 返回相同结果或状态冲突 |
 | executor | ContextPreparer（Planner）、ModelCaller（Gateway）、ToolDispatcher、RunControl | 返回成功即对应动作已持久化；Executor 只保留引用，不缓存另一份历史 |
 | planner | JournalReader、ContentReader、Projector、SummaryCaller（同一 Gateway）、ProjectionWriter（Journal） | 摘要先保存再选用；PreparedContext 仅引用已提交的 context.projected |
 | projector | 固定边界 JournalReader、不可变 ContentReader、版本化计数器/渲染器 | 只读；返回投影值/有界内容流，不保存对象与事件 |
@@ -782,7 +782,7 @@ MVP 固定提供下列 14 个平台内置工具。每个 Agent 选择授权子�
 | list_skill_resources | skill_binding_id、prefix、cursor、limit | 绑定版本的资源清单、类型、大小及可用说明 |
 | read_skill_resource | skill_binding_id、path、range | 固定 SkillVersion 的只读内容、版本及来源 |
 | read_attachment | attachment_id、range、format | 读取本会话已接受的附件；返回原文引用、解析方式/版本、范围和完整性 |
-| run_code | language、code、input | JavaScript 计算、当前目录文件操作及网络请求；返回 JSON、日志/I/O 引用和已发生效果 |
+| run_code / run_code_js / run_code_go | language、code、input | 分别执行 Python、JavaScript 和 Go 函数体，使用相同的会话文件、HTTP 和 CSV 接口，返回 JSON、日志和副作用状态 |
 | update_plan | expected_revision、steps[{id,title,status}] | 当前 Run 的完整计划及新 revision；status=pending/in_progress/completed/skipped |
 | publish_artifact | path、expected_sha256、display_name、media_type | 固定文件版本为产物，返回 artifact_id 和本服务鉴权下载入口 |
 
@@ -837,9 +837,9 @@ glob_files 使用 [doublestar.Match](https://github.com/bmatcuk/doublestar#match
 
 分页查询首次在目录锁内取得有界清单，搜索片段/候选摘要保存成不可变工具输出；游标绑定该输出、查询摘要、空间/Session 与位置，后续页读取相同输出并再次鉴权。超限标记 complete=false 和覆盖范围，不声称扫描了整个目录。list/glob 的返回清单不等于未来文件内容固定；再次 read_file 时以摘要检查并保存当次实际读取结果。
 
-### T09.4 run_code：会话文件与网络能力
+### T09.4 代码工具的会话文件与网络能力
 
-采用纯 Go [goja](https://github.com/dop251/goja)，adapter/javascript 实现 CodeRunner，经 bootstrap 注入 SessionWorkspace、NetworkClient 和受限 I/O 记录接口。每次调用使用独立 VM 和单一执行 goroutine；取消/超时发 Interrupt，等待实际退出后释放名额。输入为 language=javascript、同步函数体 code 与 JSON input；不要求预先声明资源/输出清单，文件直接在当前 Session 目录读写。启用 run_code 即授权下面的文件和网络能力，Agent 编辑页须明确展示这一范围；不要求为了调用 fs 再逐项启用同名文件工具。
+JavaScript 沿用 [Goja](https://github.com/dop251/goja)。Python 使用内嵌的 [CPython](https://github.com/goccy/go-python)，Go 使用本地编译器生成 WASI 模块后在 [wazero](https://github.com/wazero/wazero) 中执行。每次调用使用独立运行实例。三个工具共用 CodeService 的限额、执行名额、宿主文件和 HTTP 接口及 Trace。Python 和 Go 使用 `host(operation, arguments)` 调用下列接口，文件操作的参数包装为 `{"arguments": [...]}`。
 
 | 宿主 API | 能力和约束 |
 | --- | --- |
@@ -867,7 +867,7 @@ return { total, path: "summary.json" };
 
 工具返回有界 JSON 值、日志及 I/O 引用，拒绝循环引用、函数、Promise、超深结构和不可表达数字。代码长度、文件/网络调用次数、读取/写入/返回总量、日志与耗时都计限额；CSV 和 Go 宿主 I/O 持续检查 context。代码异常、取消或序列化失败不撤销此前文件修改/外部请求，结果明确 none/committed/unknown 及已完成操作，Run 收尾仍保存工作目录快照。需要交付下载文件时使用 publish_artifact。
 
-此方案没有沙箱，不提供每次 VM 的硬内存隔离；Interrupt 不能替代 Go 宿主函数的取消检查，也不能保证终止所有引擎内部操作。服务等待实际退出，无法退出则随进程终止并按中断处理，不能提前宣称已取消。MVP 不支持 Shell、Python 或任意 Skill 脚本执行。[goja 中断限制](https://github.com/dop251/goja#interrupting)、[解析器配置](https://pkg.go.dev/github.com/dop251/goja/parser)
+Python 和 Go 的实例没有宿主文件系统、环境变量和原生网络权限，相关操作通过服务提供的宿主接口。Go 可由运行时中断。Goja 使用 Interrupt，Python 会在解释器取消检查点响应取消。宿主 I/O 继续检查 context，代码名额在执行实际退出后释放。
 
 ### T09.5 计划与产物
 
@@ -1363,7 +1363,7 @@ mass/
 │   ├── resource/                   # 不可变内容、会话目录及快照编排
 │   ├── runtime/                    # 组织目录；不设包级全局 RuntimeService
 │   │   ├── scheduler/              # 轮询、准入、认领、交接
-│   │   ├── supervisor/             # Run context、取消/心跳、终态与恢复
+│   │   ├── supervisor/             # Run 启动校验、取消、终态与恢复
 │   │   ├── executor/               # 唯一 ReAct 循环及消费接口
 │   │   ├── control/                # Run 限额、预算预留与结算
 │   │   ├── context/

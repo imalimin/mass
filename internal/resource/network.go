@@ -3,8 +3,7 @@ package resource
 import (
 	"context"
 	"encoding/base64"
-	"github.com/imalimin/mass/internal/domain/run"
-	"github.com/imalimin/mass/internal/domain/storage"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -12,6 +11,9 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/imalimin/mass/internal/domain/run"
+	"github.com/imalimin/mass/internal/domain/storage"
 )
 
 type Network struct{ Client *http.Client }
@@ -104,6 +106,12 @@ func (n *Network) Request(ctx context.Context, args map[string]any, maximum int6
 	}
 	response, err := client.Do(request)
 	if err != nil {
+		if networkTimedOut(err) {
+			if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
+				return nil, "none", run.ErrNetworkTimeout
+			}
+			return nil, "unknown", run.ErrNetworkTimeout
+		}
 		return nil, "unknown", run.ToolFailure("network_request_failed", "unknown")
 	}
 	defer response.Body.Close()
@@ -131,6 +139,9 @@ func (n *Network) Request(ctx context.Context, args map[string]any, maximum int6
 		text = base64.StdEncoding.EncodeToString(raw)
 	}
 	data := map[string]any{"status": response.StatusCode, "headers": headers, "body": text, "encoding": encoding, "complete": complete, "truncated": !complete}
+	if networkTimedOut(readErr) {
+		return data, "committed", run.ErrNetworkTimeout
+	}
 	if !complete {
 		return data, "committed", run.ToolFailure("network_response_incomplete", "committed")
 	}
@@ -138,4 +149,9 @@ func (n *Network) Request(ctx context.Context, args map[string]any, maximum int6
 		return data, "committed", err
 	}
 	return data, "committed", nil
+}
+
+func networkTimedOut(err error) bool {
+	var timeout net.Error
+	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout())
 }

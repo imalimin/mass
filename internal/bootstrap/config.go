@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	einoadapter "github.com/imalimin/mass/internal/adapter/eino"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -47,9 +48,10 @@ type Config struct {
 		CookieSecure bool          `yaml:"cookie_secure"`
 	} `yaml:"auth"`
 	LLM struct {
-		MaxAttempts int    `yaml:"max_attempts"`
-		Framework   string `yaml:"framework"`
-		Provider    string `yaml:"provider"`
+		MaxAttempts int           `yaml:"max_attempts"`
+		Timeout     time.Duration `yaml:"timeout"`
+		Framework   string        `yaml:"framework"`
+		Provider    string        `yaml:"provider"`
 		// Accepted for older configuration files. Model settings now live in the database.
 		ModelEnv  string `yaml:"model_env"`
 		APIKeyEnv string `yaml:"api_key_env"`
@@ -95,6 +97,7 @@ func LoadConfig(path string) (Config, error) {
 
 func ParseConfig(data []byte) (Config, error) {
 	var c Config
+	c.LLM.Timeout = einoadapter.DefaultModelTimeout
 	if len(data) > 1<<20 {
 		return c, errors.New("configuration exceeds 1 MiB")
 	}
@@ -167,6 +170,9 @@ func (c Config) ValidateService(getenv func(string) string) error {
 	}
 	if c.LLM.MaxAttempts < 0 || c.LLM.MaxAttempts > 3 {
 		return errors.New("llm.max_attempts must be between 1 and 3 (0 uses 1)")
+	}
+	if c.LLM.Timeout <= 0 {
+		return errors.New("llm.timeout must be positive")
 	}
 	if c.LLM.Framework != "eino" || c.LLM.Provider != "ark" {
 		return errors.New("only the verified eino/ark provider is supported")

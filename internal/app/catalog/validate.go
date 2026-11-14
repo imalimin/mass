@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/resource"
 	"go.yaml.in/yaml/v4"
@@ -17,7 +18,7 @@ import (
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 var versionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 var hashPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-var Tools = []string{"list_files", "glob_files", "search_files", "read_file", "write_file", "edit_file", "move_file", "delete_file", "list_skill_resources", "read_skill_resource", "read_attachment", "run_code", "update_plan", "publish_artifact"}
+var Tools = []string{"list_files", "glob_files", "search_files", "read_file", "write_file", "edit_file", "move_file", "delete_file", "list_skill_resources", "read_skill_resource", "read_attachment", run.PythonTool, run.JavaScriptTool, run.GoTool, "update_plan", "publish_artifact"}
 
 func ValidName(s string) bool { return namePattern.MatchString(s) }
 func ValidLabel(s string) bool {
@@ -136,7 +137,7 @@ func ValidateDocument(kind, name string, doc Document, publish bool) (*Config, e
 		}
 		used[t] = true
 	}
-	if c.Context.MaxInputTokens < 1 || c.Context.MaxInputTokens > 2000000 || c.Context.ReservedOutputTokens < 1 || c.Context.ReservedOutputTokens > 1000000 || (c.Context.Compression != "summary" && c.Context.Compression != "reject") || c.Limits.MaxSteps < 1 || c.Limits.MaxSteps > 1000 || c.Limits.TimeoutSeconds < 1 || c.Limits.TimeoutSeconds > 3600 {
+	if c.Context.MaxInputTokens < 1 || c.Context.MaxInputTokens > 2000000 || c.Context.ReservedOutputTokens < 1 || c.Context.ReservedOutputTokens > 1000000 || (c.Context.Compression != "summary" && c.Context.Compression != "reject") || c.Limits.MaxSteps < 1 || c.Limits.MaxSteps > 1000 || c.Limits.TimeoutSeconds < 1 || c.Limits.TimeoutSeconds > 86400 {
 		return nil, ErrConfig
 	}
 	return &c, nil

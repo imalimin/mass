@@ -12,19 +12,16 @@ import (
 
 type guard struct{}
 
-func (guard) WatchAccess(ctx context.Context, _, _ string) (context.Context, func(), error) {
-	return ctx, func() {}, nil
+func (guard) SubscribeAccess(ctx context.Context, _, _ string) (context.Context, func()) {
+	return ctx, func() {}
 }
 
-type coordinator struct{ cancelled atomic.Bool }
+type coordinator struct{ checks atomic.Int32 }
 
 func (c *coordinator) CheckRun(context.Context, run.Snapshot) error {
-	if c.cancelled.Load() {
-		return run.ErrCancelled
-	}
+	c.checks.Add(1)
 	return nil
 }
-func (c *coordinator) Heartbeat(ctx context.Context, s run.Snapshot) error { return c.CheckRun(ctx, s) }
 
 type workspaces struct{}
 
@@ -58,7 +55,6 @@ func TestCancellationWaitsForActualExecutionExit(t *testing.T) {
 		t.Fatal("handoff refused")
 	}
 	<-runner.entered
-	coordinator.cancelled.Store(true)
 	s.Cancel("run")
 	short, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -82,6 +78,9 @@ func TestCancellationWaitsForActualExecutionExit(t *testing.T) {
 	outcome := <-finished
 	if outcome.Status != "cancelled" || released.Load() != 1 {
 		t.Fatal("wrong finalization", outcome, released.Load())
+	}
+	if coordinator.checks.Load() != 1 {
+		t.Fatal("run was checked again after startup")
 	}
 }
 

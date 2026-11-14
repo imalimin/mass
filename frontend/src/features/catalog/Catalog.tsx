@@ -1,7 +1,8 @@
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { sessionPath } from '../../app/routes'
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { CORE_SCHEMA, load } from 'js-yaml'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { APIError, list, request, type Schema } from '../../lib/api'
@@ -11,7 +12,15 @@ type Kind = 'agent' | 'skill'
 type Asset = Schema['DefinitionAsset']
 type Draft = Schema['DefinitionDraft']; type Doc = Schema['DefinitionDocument']; type Version = Schema['DefinitionVersion']
 type ConfigAction = 'draft' | 'publish' | 'debug'
-const tools = ['list_files', 'read_file', 'write_file', 'edit_file', 'glob_files', 'search_files', 'move_file', 'delete_file', 'list_skill_resources', 'read_skill_resource', 'read_attachment', 'run_code', 'update_plan', 'publish_artifact']
+const agentLimits = {
+  max_steps: { label: '最大步数', max: 1000, initial: 30 },
+  timeout_seconds: { label: '运行超时（秒）', max: 86400, initial: 300 },
+} as const
+type Limit = keyof typeof agentLimits
+const limitFields = Object.keys(agentLimits) as Limit[]
+const validLimit = (key: Limit, value: string) => Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= agentLimits[key].max
+const codeTools = ['run_code', 'run_code_js', 'run_code_go']
+const tools = ['list_files', 'read_file', 'write_file', 'edit_file', 'glob_files', 'search_files', 'move_file', 'delete_file', 'list_skill_resources', 'read_skill_resource', 'read_attachment', ...codeTools, 'update_plan', 'publish_artifact']
 const errorText = (e: unknown) => e instanceof Error ? e.message : '操作未完成'
 const displayVersion = (v: Version) => v.debug ? `调试快照 ${v.id.slice(0, 8)}` : v.label
 export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind }) {
@@ -224,22 +233,43 @@ function ConfigBuilder({ space, name, config, disabled, label, onLabelChange, on
     const definitions = await list<Schema['Definition']>(`/spaces/${space}/skills`, signal)
     return Promise.all(definitions.filter(d => !d.archived).map(async d => ({ ...d, versions: (await list<Version>(`/spaces/${space}/skills/${d.id}/versions`, signal)).filter(v => !v.archived) })))
   } })
-  type Selection = { model: string; skills: Record<string, string>; tools: string[]; input: number }
-  const [edits, setEdits] = useState<{ source: string; selection: Selection }>()
-  let existing: Schema['DefinitionConfig'] | undefined
-  try { existing = JSON.parse(config) as Schema['DefinitionConfig'] } catch { /* Raw YAML is kept for advanced editing. */ }
+  type Selection = { model: string; skills: Record<string, string>; tools: string[]; input: number; limits: Record<Limit, string> }
+  const [edits, setEdits] = useState<{ source: string; selection: Partial<Selection> }>()
+  const existing = useMemo(() => {
+    try {
+      return load(config, {
+        schema: CORE_SCHEMA,
+        listener: (event, node) => { if (event === 'close' && node.anchor) throw new Error('YAML anchors are not supported') },
+      }) as Schema['DefinitionConfig'] | undefined
+    } catch { return undefined }
+  }, [config])
   const selection = edits?.source === config ? edits.selection : undefined
-  const state: Selection = selection ?? {
+  const { limits: editedLimits, ...configEdits } = selection ?? {}
+  const state: Selection = {
     model: existing?.model ?? '',
-    skills: Object.fromEntries((existing?.skills ?? []).map(skill => [skill.id, skill.version])),
-    tools: existing ? existing.tools ?? [] : ['read_file', 'write_file', 'publish_artifact'],
+    skills: Object.fromEntries(Array.isArray(existing?.skills) ? existing.skills.filter(skill => skill?.id).map(skill => [skill.id, skill.version]) : []),
+    tools: existing ? (Array.isArray(existing.tools) ? existing.tools : []) : ['read_file', 'write_file', 'publish_artifact'],
     input: existing?.context?.max_input_tokens ?? 24000,
+    ...configEdits,
+    limits: editedLimits ?? {
+      max_steps: String(existing?.limits?.max_steps ?? agentLimits.max_steps.initial),
+      timeout_seconds: String(existing?.limits?.timeout_seconds ?? agentLimits.timeout_seconds.initial),
+    },
   }
-  const select = (change: Partial<Selection>) => setEdits({ source: config, selection: { ...state, ...change } })
+  const select = (change: Partial<Selection>) => setEdits({ source: config, selection: { ...selection, ...change } })
   const model = models.data?.find(m => m.id === state.model)
+  const rebuild = !!selection && (!existing?.model || Object.keys(configEdits).length > 0)
+  const limitsValid = limitFields.every(key => validLimit(key, state.limits[key]))
+  const canSave = (!selection || limitsValid) && (!rebuild || !!model)
   const submit = (action: ConfigAction) => {
+    if (!canSave) return
     if (!selection) {
       onAction(action, config)
+      return
+    }
+    const limits = { max_steps: Number(state.limits.max_steps), timeout_seconds: Number(state.limits.timeout_seconds) }
+    if (!rebuild) {
+      onAction(action, JSON.stringify({ ...existing, limits }, null, 2))
       return
     }
     if (!model) return
@@ -255,17 +285,29 @@ function ConfigBuilder({ space, name, config, disabled, label, onLabelChange, on
         reserved_output_tokens: output,
         compression: existing?.context?.compression ?? 'summary',
       },
-      limits: existing?.limits ?? { max_steps: 30, timeout_seconds: 300 },
+      limits,
     }, null, 2))
   }
-  const canPublish = selection ? !!model : !!config.trim()
+  const canPublish = canSave && (!!selection || !!config.trim())
   return <details className="config-builder" open>
-    <summary>选择模型、Skill 版本与工具</summary>
+    <summary>模型、Skill、工具与运行限制</summary>
     <div className="form-grid">
       <label>绑定模型<select disabled={disabled} value={state.model} onChange={e => select({ model: e.target.value })}>
         <option value="">选择可用模型</option>{models.data?.map(m => <option value={m.id} key={m.id}>{m.name}</option>)}
       </select></label>
       <label>输入 Token 上限<input disabled={disabled} type="number" min={1} max={2000000} value={state.input} onChange={e => select({ input: Number(e.target.value) })} /></label>
+      {limitFields.map(key => {
+        const { label, max } = agentLimits[key]
+        const invalid = !validLimit(key, state.limits[key])
+        return <label key={key}>{label}
+          <input id={key} aria-describedby={`${key}-hint`} aria-invalid={invalid} disabled={disabled}
+            aria-label={label} required type="number" min={1} max={max} step={1} value={state.limits[key]}
+            onChange={e => select({ limits: { ...state.limits, [key]: e.target.value } })} />
+          <small id={`${key}-hint`} role={invalid ? 'alert' : undefined}>
+            {invalid ? '请输入整数，范围 ' : ''}1–{max}{key === 'timeout_seconds' && !invalid && '，包含模型和工具执行时间'}
+          </small>
+        </label>
+      })}
       {skills.data?.map(skill => <label key={skill.id}>Skill 版本：{skill.name}
         <select disabled={disabled} aria-label={`Skill 版本：${skill.name}`} value={state.skills[skill.id] ?? ''} onChange={e => select({ skills: { ...state.skills, [skill.id]: e.target.value } })}>
           <option value="">不绑定</option>{skill.versions.map(v => <option value={v.label} key={v.id}>{v.label}</option>)}
@@ -276,11 +318,11 @@ function ConfigBuilder({ space, name, config, disabled, label, onLabelChange, on
       <input type="checkbox" disabled={disabled} checked={state.tools.includes(tool)}
         onChange={e => select({ tools: e.target.checked ? [...state.tools, tool] : state.tools.filter(t => t !== tool) })} />{tool}
     </label>)}</div>
-    {state.tools.includes('run_code') && <p className="muted">run_code 允许 JavaScript 读写当前会话文件及发送 HTTP 请求；平台不提供 OS 沙箱，也不会自动执行 Skill 脚本。</p>}
+    {codeTools.some(tool => state.tools.includes(tool)) && <p className="muted">run_code 运行 Python，run_code_js 运行 JavaScript，run_code_go 运行 Go。启用后可读写当前会话文件及发送 HTTP 请求。</p>}
     <div className="inline-form">
       <label>发布版本号<input disabled={disabled} value={label} onChange={e => onLabelChange(e.target.value)} maxLength={64} /></label>
       <button type="button" disabled={disabled || !canPublish || !label.trim()} onClick={() => submit('publish')}>发布版本</button>
-      <button type="button" className="secondary" disabled={disabled || !!selection && !model} onClick={() => submit('draft')}>保存草稿</button>
+      <button type="button" className="secondary" disabled={disabled || !canSave} onClick={() => submit('draft')}>保存草稿</button>
       <button type="button" className="secondary" disabled={disabled || !canPublish} onClick={() => submit('debug')}>创建调试快照</button>
     </div>
     {[models.error, skills.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}

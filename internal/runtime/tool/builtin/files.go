@@ -82,7 +82,7 @@ func (h *Handler) Execute(ctx context.Context, s run.Snapshot, call run.Call, ar
 			steps = append(steps, run.PlanStep{ID: step["id"].(string), Title: step["title"].(string), Status: step["status"].(string)})
 		}
 		result, err = resource.PreparePlan(ctx, h.Journal, s, int64(number("expected_revision")), steps)
-	case "run_code":
+	case run.PythonTool, run.JavaScriptTool, run.GoTool:
 		if h.Code == nil {
 			return result, nil, run.ErrTool
 		}

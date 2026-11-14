@@ -9,8 +9,11 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,6 +73,32 @@ func (m *faultModel) Stream(ctx context.Context, snapshot run.Snapshot, p run.Pr
 		}
 	}
 
+	if endpoint, ok := strings.CutPrefix(task, "code while space locked "); ok && len(p.Messages[last+1:]) == 0 {
+		raw, _ := json.Marshal(run.CodeInput{
+			Language: "javascript", Input: json.RawMessage("null"),
+			Code: "net.request({url:" + strconv.Quote(endpoint) + "});fs.mkdir('first/second');" +
+				"fs.writeFile('first/second/finished.txt','ok',{expected_sha256:'missing'});return true;",
+		})
+		return run.Reply{Message: run.Message{Role: "assistant", ToolCalls: []run.Call{{ID: "local-file-tool", Name: "run_code_js", Arguments: string(raw)}}}, FinishReason: "tool_calls"}, nil
+	}
+	if request, ok := strings.CutPrefix(task, "code network deadline "); ok {
+		for _, msg := range p.Messages[last+1:] {
+			if msg.Role == "tool" {
+				var result run.ToolResult
+				if err := json.Unmarshal([]byte(msg.Content), &result); err != nil || result.Error != "code_timeout" || result.SideEffect != "none" {
+					return run.Reply{}, errors.New("agent did not receive the code timeout")
+				}
+				return run.Reply{Message: run.Message{Role: "assistant", Content: "Handled tool timeout"}, FinishReason: "stop"}, nil
+			}
+		}
+		method, endpoint, _ := strings.Cut(request, " ")
+		raw, _ := json.Marshal(run.CodeInput{
+			Language: "javascript", Input: json.RawMessage("null"),
+			Code: "net.request({method:" + strconv.Quote(method) + ",url:" + strconv.Quote(endpoint) + "});return true;",
+		})
+		return run.Reply{Message: run.Message{Role: "assistant", ToolCalls: []run.Call{{ID: "network-deadline", Name: "run_code_js", Arguments: string(raw)}}}, FinishReason: "tool_calls"}, nil
+	}
+
 	if p.Spec.Purpose == "task" && strings.Contains(task, "retry") {
 		if _, seen := m.retries.LoadOrStore(snapshot.ID, true); !seen {
 			input := int64(100)
@@ -95,7 +124,7 @@ func (m *faultModel) Stream(ctx context.Context, snapshot run.Snapshot, p run.Pr
 	}
 
 	if strings.Contains(task, "code revocation") {
-		return run.Reply{Message: run.Message{Role: "assistant", ToolCalls: []run.Call{{ID: "revocation-code", Name: "run_code", Arguments: `{"language":"javascript","input":null,"code":"fs.writeFile('revoked.txt','kept',{expected_sha256:'missing'});while(true){}"}`}}}, FinishReason: "tool_calls"}, nil
+		return run.Reply{Message: run.Message{Role: "assistant", ToolCalls: []run.Call{{ID: "revocation-code", Name: "run_code_js", Arguments: `{"language":"javascript","input":null,"code":"fs.writeFile('revoked.txt','kept',{expected_sha256:'missing'});while(true){}"}`}}}, FinishReason: "tool_calls"}, nil
 	}
 	if strings.Contains(task, "artifact") {
 		count := 0
@@ -186,7 +215,7 @@ func newFaultRigWithTimeout(t *testing.T, timeoutSeconds int) *faultRig {
 		t.Fatal(err)
 	}
 	r.agent = agent.ID
-	cfg := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Tools: []string{"write_file", "read_file", "publish_artifact", "run_code"}, Skills: []catalog.SkillRef{}}
+	cfg := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Tools: []string{"write_file", "read_file", "publish_artifact", "run_code_js"}, Skills: []catalog.SkillRef{}}
 	cfg.Context.MaxInputTokens = 24000
 	cfg.Context.ReservedOutputTokens = 512
 	cfg.Context.Compression = "summary"
@@ -337,13 +366,31 @@ func TestFaultTimeoutAndTraceStorage(t *testing.T) {
 	})
 }
 
-func TestFaultHeartbeatTrace(t *testing.T) {
+func TestToolsDoNotRecheckRunInDatabase(t *testing.T) {
 	r := newFaultRigWithTimeout(t, 30)
-	v := r.submit(r.session(), "wait for heartbeat timeout")
-	r.entered()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var enterOnce, releaseOnce sync.Once
+	resume := func() { releaseOnce.Do(func() { close(release) }) }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enterOnce.Do(func() { close(entered) })
+		select {
+		case <-release:
+			w.WriteHeader(http.StatusNoContent)
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	defer resume()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	session := r.session()
+	v := r.submit(session, "code while space locked "+server.URL)
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("code tool did not start")
+	}
 	tx, err := r.db.Admin.DB.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -353,23 +400,56 @@ func TestFaultHeartbeatTrace(t *testing.T) {
 	if err = tx.QueryRowContext(ctx, "SELECT id FROM spaces WHERE id=? FOR UPDATE", r.space).Scan(&locked); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-r.model.exited:
-	case <-ctx.Done():
-		t.Fatal("heartbeat did not stop the model while the lock was held")
+	resume()
+	output := filepath.Join(r.manager.LocalPath(), r.space+"_"+session.ID, "first", "second", "finished.txt")
+	for {
+		raw, err := os.ReadFile(output)
+		if err == nil && string(raw) == "ok" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("code tool could not write while the space row was locked")
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 	if err = tx.Rollback(); err != nil {
 		t.Fatal(err)
 	}
 	v = r.wait(v.ID)
-	if v.Status != "failed" || v.Error != "run_timeout" || v.WorkspaceSnapshotID == "" {
+	if v.Status != "succeeded" || v.WorkspaceSnapshotID == "" {
 		t.Fatalf("unexpected final state: status=%s error=%s snapshot=%s", v.Status, v.Error, v.WorkspaceSnapshotID)
 	}
 	r.terminalOnce(v)
-	detail := r.finishData(v).FailureDetail
-	if detail == nil || detail.Source != "heartbeat" || detail.Stage != "lock_space" || detail.Reason != "deadline_exceeded" ||
-		detail.FailedAt.IsZero() || detail.DurationMS < 3000 || detail.TimeoutMS != 3000 {
-		t.Fatalf("wrong heartbeat detail: %+v", detail)
+}
+
+func TestCodeNetworkTimeoutKeepsCauseAndEffect(t *testing.T) {
+	r := newFaultRigWithTimeout(t, 30)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		<-req.Context().Done()
+	}))
+	defer server.Close()
+	for _, tc := range []struct{ method, status, code, effect string }{
+		{"GET", "succeeded", "", "none"},
+		{"POST", "failed", "code_timeout", "unknown"},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			v := r.wait(r.submit(r.session(), "code network deadline "+tc.method+" "+server.URL).ID)
+			if v.Status != tc.status || v.Error != tc.code {
+				t.Fatal("unexpected run outcome", v.Status, v.Error)
+			}
+			page := awaitToolTrace(t, context.Background(), r.runtime.Trace, r.db.Store, v)
+			var step struct {
+				Tools []struct{ Result run.ToolResult }
+			}
+			if len(page.Items) == 0 || json.Unmarshal(page.Items[0], &step) != nil || len(step.Tools) != 1 {
+				t.Fatal("missing timed-out tool in trace")
+			}
+			got := step.Tools[0].Result
+			if got.Error != "code_timeout" || got.SideEffect != tc.effect {
+				t.Fatal("unexpected tool error or side effect", got.Error, got.SideEffect)
+			}
+		})
 	}
 }
 

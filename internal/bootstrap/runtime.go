@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/imalimin/mass/internal/adapter/codevm"
 	einoadapter "github.com/imalimin/mass/internal/adapter/eino"
-	"github.com/imalimin/mass/internal/adapter/javascript"
 	"github.com/imalimin/mass/internal/adapter/mariadb"
 	"github.com/imalimin/mass/internal/app/catalog"
 	"github.com/imalimin/mass/internal/app/identity"
@@ -93,7 +93,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	}
 	supervisorService.Fault = fault
 	if transport == nil {
-		transport = &einoadapter.ModelTransport{}
+		transport = &einoadapter.ModelTransport{Timeout: c.LLM.Timeout}
 	}
 	policy := run.ToolPolicy{Version: "mass-tools-v1", MaxCodeBytes: c.Tools.Code.MaxSourceBytes, TimeoutMS: c.Tools.Code.Timeout.Milliseconds(), MaxInputBytes: int64(c.Tools.Code.MaxInputBytes), MaxOutputBytes: int64(c.Tools.Code.MaxOutputBytes), MaxFileOperations: c.Tools.Code.MaxFileOperations, MaxNetworkRequests: c.Tools.Code.MaxNetworkRequests, MaxNetworkBodyBytes: int64(c.Tools.Code.MaxNetworkBodyBytes), MaxLogBytes: c.Tools.Code.MaxLogBytes}
 	if policy.MaxCodeBytes == 0 {
@@ -120,9 +120,9 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	if policy.MaxLogBytes == 0 {
 		policy.MaxLogBytes = 65536
 	}
-	codeEngine := &javascript.Runner{MaxConcurrent: max(1, c.Tools.Code.MaxConcurrent)}
+	codeEngine := codevm.New(c.Tools.Code.MaxConcurrent, filepath.Join(traceRoot, ".go-wasi"))
 	supervisorService.NewRunner = func(ctx context.Context, s run.Snapshot, started time.Time) (supervisor.Runner, error) {
-		budget := control.New(s, started, func(ctx context.Context) error { return lease.CheckRun(ctx, s) })
+		budget := control.New(s, started)
 		contextPlanner := &planner.Planner{Journal: journalService, Content: content, Projector: &projector.Projector{Content: content, ToolResult: recorder.ToolResult}, Tools: registryService}
 		gateway := &modelgateway.Gateway{Journal: journalService, Content: content, Transport: transport, Credentials: auth, Control: budget, Trace: recorder, Delta: store.LiveUI.Delta}
 		contextPlanner.Model = gateway

@@ -25,6 +25,7 @@ auth:
 llm:
   # Explicit platform attempts per logical call; SDK retries remain disabled.
   max_attempts: 1
+  timeout: "30m"
   framework: "eino"
   provider: "ark"
 secrets:

@@ -26,7 +26,7 @@ try {
   const uploaded = page.waitForResponse(r => r.url().endsWith('/resources')); await page.getByRole('button', { name: '上传资源', exact: true }).click(); assert.equal((await uploaded).status(), 200); await publish()
   await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByLabel('定义名称').fill('tools-assistant'); await page.getByRole('button', { name: '创建 Agent', exact: true }).click(); await edit('AGENTS.md', '# Tools assistant\nProcess the accepted attachment with the selected tools.')
   await page.getByLabel('绑定模型').selectOption({ label: '工具模型' }); await page.getByLabel('Skill 版本：rules', { exact: true }).selectOption('v1')
-  const checks = page.locator('.tool-options input'); assert.equal(await checks.count(), 14); for (const check of await checks.all()) await check.check()
+  const checks = page.locator('.tool-options input'); assert.equal(await checks.count(), 16); for (const check of await checks.all()) await check.check()
   await page.getByLabel('输入 Token 上限').fill('100000'); const agentVersion = await publish()
   await page.locator('.app-sidebar').getByRole('link', { name: '会话与运行', exact: true }).click(); await page.getByLabel('使用 Agent').selectOption({ label: 'tools-assistant' }); await page.getByLabel('定义版本').selectOption(agentVersion.id); await page.getByLabel('会话名称', { exact: true }).fill('十四工具组合'); await page.getByRole('button', { name: '新建会话', exact: true }).click(); await page.getByRole('heading', { name: '十四工具组合', exact: true }).waitFor()
   const attachmentUpload = page.waitForResponse(r => r.url().endsWith('/attachments') && r.request().method() === 'POST')

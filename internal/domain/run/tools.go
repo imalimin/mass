@@ -47,6 +47,26 @@ type ToolPolicy struct {
 	MaxNetworkBodyBytes int64  `json:"max_network_body_bytes"`
 	MaxLogBytes         int    `json:"max_log_bytes"`
 }
+
+const (
+	PythonTool     = "run_code"
+	JavaScriptTool = "run_code_js"
+	GoTool         = "run_code_go"
+)
+
+func CodeLanguage(tool string) string {
+	switch tool {
+	case PythonTool:
+		return "python"
+	case JavaScriptTool:
+		return "javascript"
+	case GoTool:
+		return "go"
+	default:
+		return ""
+	}
+}
+
 type CodeInput struct {
 	Language string          `json:"language"`
 	Code     string          `json:"code"`
@@ -56,6 +76,7 @@ type CodeHost interface {
 	Invoke(name string, arguments json.RawMessage) (json.RawMessage, error)
 }
 type CodeOutput struct {
+	Engine       string            `json:"-"`
 	Value        json.RawMessage   `json:"value"`
 	Logs         []json.RawMessage `json:"logs"`
 	Detail       string            `json:"error_detail,omitempty"`

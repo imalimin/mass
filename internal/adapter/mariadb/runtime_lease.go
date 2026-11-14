@@ -150,30 +150,6 @@ func (l *RuntimeLease) CheckRun(ctx context.Context, s run.Snapshot) error {
 	})
 }
 
-func (l *RuntimeLease) Heartbeat(ctx context.Context, s run.Snapshot) error {
-	if !l.alive.Load() {
-		return run.ErrUnavailable
-	}
-	stage := "begin_heartbeat"
-	err := l.store.scoped(ctx, s.ActorID, s.SpaceID, false, func(tx *sql.Tx) error {
-		stage = "check_run"
-		if err := l.checkRun(ctx, tx, s); err != nil {
-			return err
-		}
-		stage = "update_heartbeat"
-		if _, err := tx.ExecContext(ctx, "UPDATE runs SET heartbeat_at=UTC_TIMESTAMP(6) WHERE space_id=? AND id=?", s.SpaceID, s.ID); err != nil {
-			return err
-		}
-		stage = "commit_heartbeat"
-		return nil
-	})
-	var checked *run.CheckError
-	if errors.As(err, &checked) {
-		return err
-	}
-	return checkError(stage, err)
-}
-
 // CleanupRepository is a capability for one claimed run. It cannot expose
 // identity, model, arbitrary query or tool APIs, and cannot append new actions.
 type CleanupRepository struct {

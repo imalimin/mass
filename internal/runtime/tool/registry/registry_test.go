@@ -9,7 +9,7 @@ import (
 
 func TestAllToolSchemasAndFrozenDefinitions(t *testing.T) {
 	specs := Specs()
-	if len(specs) != 14 {
+	if len(specs) != 16 {
 		t.Fatal(len(specs))
 	}
 	seen := map[string]bool{}
@@ -30,6 +30,16 @@ func TestAllToolSchemasAndFrozenDefinitions(t *testing.T) {
 			compiled, err := c.Compile("https://mass.local/schema")
 			if err != nil {
 				t.Fatal(spec.Name, err)
+			}
+			if language := run.CodeLanguage(spec.Name); i == 0 && language != "" {
+				input := map[string]any{"language": language, "code": "return 1", "input": nil}
+				if err := compiled.Validate(input); err != nil {
+					t.Fatal(spec.Name, err)
+				}
+				input["language"] = "other"
+				if compiled.Validate(input) == nil {
+					t.Fatal("wrong language accepted", spec.Name)
+				}
 			}
 			if i == 1 {
 				value := map[string]any{"call_id": "call", "status": "completed", "data": map[string]any{}, "side_effect": "none", "complete": true, "source_refs": []any{}}

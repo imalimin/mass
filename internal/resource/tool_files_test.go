@@ -79,6 +79,28 @@ func toolData(t *testing.T, r run.ToolResult) map[string]any {
 	return data
 }
 func digest(v string) string { sum := sha256.Sum256([]byte(v)); return hex.EncodeToString(sum[:]) }
+
+func TestMkdirReportsConfirmedEffectsWhenInterrupted(t *testing.T) {
+	f, s, root := fileFixture(t)
+	f.Check = func(context.Context, run.Snapshot) error {
+		if _, err := os.Stat(filepath.Join(root, "parent")); err == nil {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}
+	result, err := f.Mkdir(context.Background(), s, "parent/child")
+	if !errors.Is(err, context.DeadlineExceeded) || result.SideEffect != "committed" {
+		t.Fatalf("expected committed parent before timeout, got effect=%q err=%v", result.SideEffect, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "parent", "child")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("interrupted child should be absent: %v", err)
+	}
+	result, err = f.Mkdir(context.Background(), s, "another")
+	if !errors.Is(err, context.DeadlineExceeded) || result.SideEffect != "none" {
+		t.Fatalf("expected no effects before first write, got effect=%q err=%v", result.SideEffect, err)
+	}
+}
+
 func TestFileEditingAndMutationBoundaries(t *testing.T) {
 	f, s, root := fileFixture(t)
 	ctx := context.Background()

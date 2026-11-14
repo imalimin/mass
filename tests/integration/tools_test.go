@@ -179,16 +179,44 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		if strings.Contains(task, "code error") {
 			if len(results) == 0 {
 				code := fmt.Sprintf(`fs.writeFile('kept.txt','preserved',{expected_sha256:'missing'});net.request({url:%q,method:'POST',headers:{Authorization:'Bearer fixture-network-secret'},body:'5'});throw Error('after effects');`, server.URL+"?token=fixture-query-secret")
-				return toolReply("run_code", map[string]any{"language": "javascript", "code": code, "input": nil}), nil
+				return toolReply("run_code_js", map[string]any{"language": "javascript", "code": code, "input": nil}), nil
 			}
-			if results[0].Status != "failed" || results[0].SideEffect != "committed" {
-				t.Error("exception erased effects", results[0])
+			if results[0].Status != "failed" || results[0].Error != "code_exception" || results[0].SideEffect != "committed" ||
+				!bytes.Contains(results[0].Data, []byte("after effects")) {
+				t.Error("exception lost details or confirmed effects", results[0])
 			}
 			return textReply("preserved after code error"), nil
 		}
+		if task == "correct invalid run_code_js arguments and source" {
+			switch len(results) {
+			case 0:
+				return toolReply("run_code_js", map[string]any{"language": "javascript", "code": "return 42;"}), nil
+			case 1:
+				got := results[0]
+				if got.Status != "failed" || got.Error != "invalid_tool_input" || got.SideEffect != "none" ||
+					!bytes.Contains(got.Data, []byte("missing property")) || !bytes.Contains(got.Data, []byte("input")) {
+					return nil, fmt.Errorf("missing argument error detail: %s", got.Data)
+				}
+				return toolReply("run_code_js", map[string]any{"language": "javascript", "code": "const = ;", "input": nil}), nil
+			case 2:
+				got := results[1]
+				if got.Status != "failed" || got.Error != "code_exception" || got.SideEffect != "none" ||
+					!bytes.Contains(got.Data, []byte("mass-code-v1.js")) {
+					return nil, fmt.Errorf("missing syntax error detail: %s", got.Data)
+				}
+				return toolReply("run_code_js", map[string]any{"language": "javascript", "code": "return 42;", "input": nil}), nil
+			case 3:
+				if results[2].Status != "completed" || !bytes.Contains(results[2].Data, []byte(`"value":42`)) {
+					return nil, fmt.Errorf("corrected code did not succeed: %s", results[2].Data)
+				}
+				return textReply("corrected code completed"), nil
+			default:
+				return nil, fmt.Errorf("unexpected tool result count: %d", len(results))
+			}
+		}
 		if strings.Contains(task, "host methods") {
 			if len(results) == 0 {
-				return toolReply("run_code", map[string]any{"language": "javascript", "input": nil, "code": `const a=fs.writeFile('host.txt','before',{expected_sha256:'missing'});const b=fs.editFile('host.txt',[{old_text:'before',new_text:'after'}],{expected_sha256:a.sha256});fs.mkdir('hostdir');const c=fs.rename('host.txt','hostdir/host.txt',{expected_sha256:b.sha256});const names=fs.list('hostdir');if(names.items.length!==1)throw Error('list');if(fs.readFile('hostdir/host.txt',{expected_sha256:c.sha256}).content!=='after')throw Error('read');fs.remove('hostdir/host.txt',{expected_sha256:c.sha256});if(fs.list('hostdir').items.length!==0)throw Error('remove');return {ok:true};`}), nil
+				return toolReply("run_code_js", map[string]any{"language": "javascript", "input": nil, "code": `const a=fs.writeFile('host.txt','before',{expected_sha256:'missing'});const b=fs.editFile('host.txt',[{old_text:'before',new_text:'after'}],{expected_sha256:a.sha256});fs.mkdir('hostdir');const c=fs.rename('host.txt','hostdir/host.txt',{expected_sha256:b.sha256});const names=fs.list('hostdir');if(names.items.length!==1)throw Error('list');if(fs.readFile('hostdir/host.txt',{expected_sha256:c.sha256}).content!=='after')throw Error('read');fs.remove('hostdir/host.txt',{expected_sha256:c.sha256});if(fs.list('hostdir').items.length!==0)throw Error('remove');return {ok:true};`}), nil
 			}
 			if results[0].Status != "completed" {
 				t.Error("host method failed", string(results[0].Data))
@@ -204,7 +232,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 				if strings.Contains(task, "network") {
 					code = fmt.Sprintf(`for(let i=0;i<3;i++)net.request({url:%q,method:'POST',headers:{Authorization:'Bearer fixture-network-secret'},body:'5'});return true;`, server.URL+"?token=fixture-query-secret")
 				}
-				return toolReply("run_code", map[string]any{"language": "javascript", "input": nil, "code": code}), nil
+				return toolReply("run_code_js", map[string]any{"language": "javascript", "input": nil, "code": code}), nil
 			}
 			var data map[string]any
 			json.Unmarshal(results[0].Data, &data)
@@ -222,7 +250,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		}
 		if strings.Contains(task, "large code") {
 			if len(results) == 0 {
-				return toolReply("run_code", map[string]any{"language": "javascript", "input": nil, "code": "//" + strings.Repeat("x", 33000) + "\nreturn 1;"}), nil
+				return toolReply("run_code_js", map[string]any{"language": "javascript", "input": nil, "code": "//" + strings.Repeat("x", 33000) + "\nreturn 1;"}), nil
 			}
 			if results[0].Status != "completed" {
 				t.Error("valid source over 32 KiB rejected", results[0].Status)
@@ -233,14 +261,14 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 			return textReply("attachments accepted"), nil
 		}
 		if strings.Contains(task, "unknown io") {
-			return toolReply("run_code", map[string]any{"language": "javascript", "code": `fs.writeFile('unknown.txt','once',{expected_sha256:'missing'});return 1;`, "input": nil}), nil
+			return toolReply("run_code_js", map[string]any{"language": "javascript", "code": `fs.writeFile('unknown.txt','once',{expected_sha256:'missing'});return 1;`, "input": nil}), nil
 		}
 		if strings.Contains(task, "plan failure") {
 			return toolReply("update_plan", map[string]any{"expected_revision": 0, "steps": []any{map[string]any{"id": "only", "title": "Atomic plan", "status": "in_progress"}}}), nil
 		}
 		if strings.Contains(task, "code limit") {
 			if len(results) == 0 {
-				return toolReply("run_code", map[string]any{"language": "javascript", "code": `return 'x'.repeat(2097153);`, "input": nil}), nil
+				return toolReply("run_code_js", map[string]any{"language": "javascript", "code": `return 'x'.repeat(2097153);`, "input": nil}), nil
 			}
 			if results[0].Status != "failed" || results[0].SideEffect != "none" {
 				t.Error("output limit result", results[0])
@@ -248,7 +276,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 			return textReply("output limit acknowledged"), nil
 		}
 		if strings.Contains(task, "code cancel") {
-			return toolReply("run_code", map[string]any{"language": "javascript", "code": `fs.writeFile('cancelled.txt','kept',{expected_sha256:'missing'});while(true){}`, "input": nil}), nil
+			return toolReply("run_code_js", map[string]any{"language": "javascript", "code": `fs.writeFile('cancelled.txt','kept',{expected_sha256:'missing'});while(true){}`, "input": nil}), nil
 		}
 		data := func(index int) map[string]any {
 			var v map[string]any
@@ -301,7 +329,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 			name = "update_plan"
 			args = map[string]any{"expected_revision": 0, "steps": []any{map[string]any{"id": "report", "title": "Create summary", "status": "in_progress"}}}
 		case 9:
-			name = "run_code"
+			name = "run_code_js"
 			code := fmt.Sprintf(`let all=[];for(let i=0;i<2;i++){const file=fs.readFile('records.json');all=JSON.parse(file.content)};const total=all.reduce((s,r)=>s+r.amount,0)*Number(input.multiplier);const csv=CSV.stringify([['total'],[String(total)]]);if(CSV.parse(csv)[1][0]!==String(total))throw Error('csv');fs.mkdir('reports');const written=fs.writeFile('summary.json',JSON.stringify({total,label:'draft'}),{expected_sha256:'missing',media_type:'application/json'});const response=net.request({method:'POST',url:%q,headers:{Authorization:'Bearer fixture-network-secret'},body:String(total/2)});if(response.status!==201)throw Error('request');log({total});return {total,path:'summary.json',sha256:written.sha256};`, server.URL+"?token=fixture-query-secret")
 			args = map[string]any{"language": "javascript", "code": code, "input": map[string]any{"multiplier": stringAt(1, "content")}}
 		case 10:
@@ -320,6 +348,36 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		case 14:
 			name = "update_plan"
 			args = map[string]any{"expected_revision": 1, "steps": []any{map[string]any{"id": "report", "title": "Create summary", "status": "completed"}}}
+		case 15:
+			name = run.PythonTool
+			args = map[string]any{"language": "python", "input": "records.json", "code": `import os
+assert "MASS_MARIADB_DSN" not in os.environ
+assert "MASS_MASTER_KEY" not in os.environ
+try:
+    open("/etc/hosts")
+except OSError:
+    pass
+else:
+    raise RuntimeError("host filesystem access")
+assert """a
+b""" == "a\nb"
+rows = json.loads(host("fs.readFile", {"arguments": [input]})["content"])
+log(len(rows))
+return sum(row["amount"] for row in rows)`}
+		case 16:
+			if data(15)["value"] != float64(5) {
+				return nil, fmt.Errorf("unexpected Python result: %s", results[15].Data)
+			}
+			name = run.GoTool
+			args = map[string]any{"language": "go", "input": data(15)["value"], "code": `if _, err := os.ReadFile("/etc/hosts"); err == nil { panic("host filesystem access") }
+rows := host("csv.parse", "a,b\n1,2").([]any)
+log(len(rows))
+return input.(float64) + float64(len(rows))`}
+		case 17:
+			if data(16)["value"] != float64(7) {
+				return nil, fmt.Errorf("unexpected Go result: %s", results[16].Data)
+			}
+			return textReply("D05 summary complete"), nil
 		default:
 			return textReply("D05 summary complete"), nil
 		}
@@ -387,6 +445,16 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	}
 	first = wait(first.ID)
 	if first.Status != "succeeded" || requests.Load() != 1 {
+		for _, line := range awaitToolTrace(t, ctx, runtime.Trace, db.Store, first).Items {
+			var step trace.ModelStep
+			if json.Unmarshal(line, &step) == nil {
+				for _, tool := range step.Tools {
+					if tool.Status == "failed" {
+						t.Logf("%s failed: %s", tool.Name, tool.Result)
+					}
+				}
+			}
+		}
 		t.Fatal("full scenario", first.Status, first.Error, requests.Load())
 	}
 	firstTrace := awaitToolTrace(t, ctx, runtime.Trace, db.Store, first)
@@ -402,7 +470,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 			}
 		}
 	}
-	if len(names) != 14 {
+	if len(names) != len(registry.Specs()) {
 		t.Fatal("tools not covered", names)
 	}
 	plan, err := db.Store.RuntimePlan(ctx, actor.ID, space.ID, first.ID)
@@ -478,6 +546,22 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	})
 	if err != nil || actual != "preserved" {
 		t.Fatal("exception rolled back file", actual, err)
+	}
+	corrected, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{
+		Key: uuid.NewString(), Text: "correct invalid run_code_js arguments and source",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if corrected = wait(corrected.ID); corrected.Status != "succeeded" {
+		t.Fatal("run_code_js could not recover in the same run", corrected.Error)
+	}
+	correctedTrace := awaitToolTrace(t, ctx, runtime.Trace, db.Store, corrected)
+	var rejectedStep trace.ModelStep
+	if len(correctedTrace.Items) != 5 || json.Unmarshal(correctedTrace.Items[0], &rejectedStep) != nil ||
+		len(rejectedStep.Tools) != 1 || rejectedStep.Tools[0].Status != "failed" || rejectedStep.Tools[0].DurationMS != nil ||
+		!bytes.Contains(rejectedStep.Tools[0].Result, []byte("invalid_tool_input")) {
+		t.Fatal("trace did not record the rejected tool call")
 	}
 	// Raw upload does not make an attachment available to a running tool.
 	files := &resource.FileService{Workspaces: manager, Content: content, Cursors: auth, MaxBytes: 1 << 20, Limits: limits, Check: func(ctx context.Context, s run.Snapshot) error { return auth.CheckAccess(ctx, s.ActorID, s.SpaceID) }}
@@ -644,7 +728,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		t.Fatal(err)
 	}
 
-	t.Log("D05: all 14 tools, accepted attachment/fixed Skill, file/query/code/network/CSV, atomic plan, immutable artifact, in-memory tool results and snapshot state passed")
+	t.Log("D05: all 16 tools, Python/JavaScript/Go, file/network/CSV, plan, artifact and in-memory tool results passed")
 }
 func toolReply(name string, args any) []*schema.Message {
 	raw, _ := json.Marshal(args)

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/imalimin/mass/internal/domain/run"
 )
@@ -74,6 +75,32 @@ func TestActualProtocolMatrix(t *testing.T) {
 				t.Fatal("lost failed attempt usage")
 			}
 		})
+	}
+}
+
+func TestModelTimeoutAppliesToStreamingBody(t *testing.T) {
+	flushed := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"partial\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+		flushed <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	transport := &ModelTransport{Timeout: 300 * time.Millisecond}
+	s := run.Snapshot{Definition: run.Definition{OutputTokens: 256, Model: run.ModelConfig{Endpoint: server.URL, ModelID: "fixture"}}}
+	p := run.Prepared{Messages: []run.Message{{Role: "user", Content: "hello"}}}
+	_, err := transport.Stream(ctx, s, p, "fixture", func(string) error { return nil })
+	if err == nil || ctx.Err() != nil {
+		t.Fatalf("model client timeout did not end the stream before the parent deadline: %v", err)
+	}
+	select {
+	case <-flushed:
+	default:
+		t.Fatal("no partial response was sent")
 	}
 }
 func TestUsageUnknownAndRawProtocol(t *testing.T) {

@@ -18,9 +18,12 @@ import (
 	"github.com/imalimin/mass/internal/domain/run"
 )
 
+const DefaultModelTimeout = 30 * time.Minute
+
 type ModelTransport struct {
-	Base http.RoundTripper
-	Fake model.ToolCallingChatModel
+	Base    http.RoundTripper
+	Fake    model.ToolCallingChatModel
+	Timeout time.Duration
 }
 
 func (t *ModelTransport) Source() string {
@@ -91,7 +94,11 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 		zero := 0
 		temperature := float32(s.Definition.Model.Temperature)
 		output := s.Definition.OutputTokens
-		client := &http.Client{Transport: capture, Timeout: 120 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		timeout := t.Timeout
+		if timeout == 0 {
+			timeout = DefaultModelTimeout
+		}
+		client := &http.Client{Transport: capture, Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		created, err := ark.NewChatModel(ctx, &ark.ChatModelConfig{APIKey: key, Model: s.Definition.Model.ModelID, BaseURL: s.Definition.Model.Endpoint, HTTPClient: client, RetryTimes: &zero, MaxTokens: &output, Temperature: &temperature})
 		if err != nil {
 			return reply, run.ErrProtocol

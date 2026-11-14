@@ -5,12 +5,13 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
-	"github.com/imalimin/mass/internal/domain/run"
-	"github.com/imalimin/mass/internal/domain/storage"
 	"io/fs"
 	"math"
 	"strings"
 	"time"
+
+	"github.com/imalimin/mass/internal/domain/run"
+	"github.com/imalimin/mass/internal/domain/storage"
 )
 
 type CodeEngine interface {
@@ -28,6 +29,7 @@ type codeHost struct {
 	sequence, files, requests int
 	inputs, outputs           int64
 	effect                    string
+	networkTimedOut           bool
 }
 
 func (c *CodeService) Run(ctx context.Context, s run.Snapshot, input run.CodeInput) (run.ToolResult, error) {
@@ -41,10 +43,24 @@ func (c *CodeService) Run(ctx context.Context, s run.Snapshot, input run.CodeInp
 	}
 	host := &codeHost{service: c, ctx: ctx, s: s, effect: "none", inputs: int64(len(input.Input) + len(input.Code))}
 	output, actionErr := c.Engine.Execute(ctx, input, host, s.Definition.ToolPolicy)
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(actionErr, context.DeadlineExceeded) {
+		output.Error = run.ErrCodeTimeout.Error()
+		if output.Detail == "" {
+			output.Detail = "Code execution exceeded its deadline"
+		}
+		actionErr = run.ErrCodeTimeout
+	} else if host.networkTimedOut && (host.effect == "unknown" || errors.Is(actionErr, run.ErrNetworkTimeout) ||
+		strings.Contains(output.Detail, run.ErrNetworkTimeout.Error())) {
+		output.Error = run.ErrNetworkTimeout.Error()
+		if output.Detail == "" {
+			output.Detail = "A net.request call timed out"
+		}
+		actionErr = run.ErrNetworkTimeout
+	}
 	if output.Value == nil {
 		output.Value = json.RawMessage(`null`)
 	}
-	result := dataResult(map[string]any{"value": output.Value, "logs": output.Logs, "logs_complete": output.LogsComplete, "error": output.Error, "error_detail": output.Detail, "io_count": host.sequence, "io_complete": true, "engine_version": "goja-e6862644b38f"}, host.effect)
+	result := dataResult(map[string]any{"value": output.Value, "logs": output.Logs, "logs_complete": output.LogsComplete, "error": output.Error, "error_detail": output.Detail, "io_count": host.sequence, "io_complete": true, "engine_version": output.Engine}, host.effect)
 	if output.Error != "" || actionErr != nil {
 		result.Status = "failed"
 		result.Error = output.Error
@@ -82,6 +98,9 @@ func (h *codeHost) Invoke(name string, arguments json.RawMessage) (json.RawMessa
 	}
 	h.sequence++
 	result, err := h.perform(name, args)
+	if h.effect != "unknown" {
+		h.networkTimedOut = errors.Is(err, run.ErrNetworkTimeout)
+	}
 	if result.SideEffect == "unknown" {
 		h.effect = "unknown"
 	} else if result.SideEffect == "committed" && h.effect != "unknown" {

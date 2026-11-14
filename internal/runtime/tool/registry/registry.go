@@ -37,8 +37,11 @@ func Specs() []run.ToolSpec {
 			"list_files": {"items", "complete"}, "glob_files": {"items", "complete"}, "search_files": {"items", "complete"}, "list_skill_resources": {"items", "complete"},
 			"read_file": {"path", "sha256", "content", "encoding", "complete"}, "read_skill_resource": {"skill_binding_id", "path", "sha256", "content", "encoding", "complete"}, "read_attachment": {"attachment_id", "sha256", "parser_version", "complete"},
 			"write_file": {"path", "sha256", "size"}, "edit_file": {"path", "sha256", "size"}, "move_file": {"source", "path", "sha256", "size"}, "delete_file": {"path", "sha256"},
-			"run_code": {"value", "logs", "logs_complete", "io_count", "io_complete", "engine_version"}, "update_plan": {"revision", "steps"}, "publish_artifact": {"id", "object_id", "sha256", "download_url", "path"},
+			"update_plan": {"revision", "steps"}, "publish_artifact": {"id", "object_id", "sha256", "download_url", "path"},
 		}[name]
+		if run.CodeLanguage(name) != "" {
+			fields = []string{"value", "logs", "logs_complete", "io_count", "io_complete", "engine_version"}
+		}
 		selected := map[string]any{}
 		for _, key := range fields {
 			selected[key] = dataProps[key]
@@ -63,7 +66,17 @@ func Specs() []run.ToolSpec {
 	add("list_skill_resources", "List resources of a fixed Skill binding; skill_binding_id is the SkillVersion ID in the system instructions.", page(map[string]any{"skill_binding_id": str(), "prefix": path}), "skill_binding_id")
 	add("read_skill_resource", "Read a resource from an exact bound SkillVersion; never executes scripts. Optional byte/line range.", map[string]any{"skill_binding_id": str(), "path": path, "range": ranges}, "skill_binding_id", "path")
 	add("read_attachment", "Read only attachments accepted by this session. text permits byte/line range; json/csv validates the whole document before a bounded structured view; record_offset/record_limit continues structured rows.", map[string]any{"attachment_id": str(), "record_offset": integer(0, 10000), "record_limit": integer(1, 1000), "format": map[string]any{"enum": []string{"text", "json", "csv"}}, "range": ranges}, "attachment_id")
-	add("run_code", "Execute a synchronous JavaScript function body with JSON input. APIs: fs.list(directory='.', {cursor,limit}?); fs.readFile(path, {expected_sha256,range}?); fs.mkdir(path); fs.writeFile(path,text,{expected_sha256,media_type?}); fs.editFile(path,[{old_text,new_text}],{expected_sha256}); fs.rename(source,target,{expected_sha256}); fs.remove(path,{expected_sha256}). Create uses digest 'missing', updates require current SHA-256. Reads return content, encoding (utf-8/base64), sha256 and complete; list returns items/next_cursor. net.request({method?,url,headers?,body?}) returns status/headers/body/encoding/complete; only HTTP(S), no retries. CSV.parse(text)/stringify(string[][]), log(JSON), JSON and input are available. Return a bounded JSON value. Confirmed effects persist after errors. No shell, Node, Python, Promise result or OS sandbox.", map[string]any{"language": map[string]any{"const": "javascript", "type": "string"}, "code": map[string]any{"type": "string", "minLength": 1, "maxLength": 65536}, "input": map[string]any{}}, "language", "code", "input")
+	addCode := func(name, description string) {
+		add(name, description+" Return a JSON value and use input: null when unused. Workspace writes require expected_sha256 ('missing' to create). Confirmed effects persist after errors.", map[string]any{
+			"language": map[string]any{"const": run.CodeLanguage(name), "type": "string"},
+			"code":     map[string]any{"type": "string", "minLength": 1, "maxLength": 65536},
+			"input":    map[string]any{},
+		}, "language", "code", "input")
+	}
+	hostAPI := " Use host(operation, arguments). For fs.list, fs.readFile, fs.mkdir, fs.writeFile, fs.editFile, fs.rename and fs.remove, wrap positional arguments in an object with an arguments array. net.request accepts an object with url, method, headers and body. csv.parse takes a string; csv.stringify takes a list of rows."
+	addCode(run.PythonTool, "Execute a Python function body. The JSON input is available as input. Use return to produce a value and log(value) for logs."+hostAPI)
+	addCode(run.JavaScriptTool, "Execute a synchronous JavaScript function body with JSON input. APIs: fs.list(directory='.', {cursor,limit}?); fs.readFile(path, {expected_sha256,range}?); fs.mkdir(path); fs.writeFile(path,text,{expected_sha256,media_type?}); fs.editFile(path,[{old_text,new_text}],{expected_sha256}); fs.rename(source,target,{expected_sha256}); fs.remove(path,{expected_sha256}). net.request({method?,url,headers?,body?}) returns status/headers/body/encoding/complete. CSV.parse(text), CSV.stringify(rows), JSON and log(value) are available.")
+	addCode(run.GoTool, "Execute a Go function body. input is decoded as any; return a JSON-encodable value. Predeclared imports: encoding/json (json), fmt, strings, strconv, math. Use log(value) for logs."+hostAPI)
 	add("update_plan", "Replace this Run's complete progress plan using expected_revision (initial 0). At most one in_progress; stable IDs retain titles. This is reported progress, not proof of success.", map[string]any{"expected_revision": integer(0, 1000000), "steps": map[string]any{"type": "array", "maxItems": 100, "items": object(map[string]any{"id": map[string]any{"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,64}$"}, "title": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "status": map[string]any{"enum": []string{"pending", "in_progress", "completed", "skipped"}}}, "id", "title", "status")}}, "expected_revision", "steps")
 	add("publish_artifact", "Publish an immutable copy of the exact current file and return an authenticated download URL.", map[string]any{"path": path, "expected_sha256": sha, "display_name": map[string]any{"type": "string", "minLength": 1, "maxLength": 200}, "media_type": media}, "path", "expected_sha256", "display_name", "media_type")
 	return specs

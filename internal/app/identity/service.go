@@ -33,7 +33,7 @@ type Service struct {
 	mu        sync.Mutex
 	watchers  map[string]map[*watch]struct{}
 }
-type watch struct{ cancel context.CancelFunc }
+type watch struct{ cancel context.CancelCauseFunc }
 
 func New(repo Repository, cipher Cipher, ttl time.Duration, key []byte) (*Service, error) {
 	dummy, err := bcrypt.GenerateFromPassword([]byte("mass-invalid-user-placeholder"), bcrypt.DefaultCost)
@@ -129,7 +129,7 @@ func (s *Service) RemoveMember(ctx context.Context, actor, space, user string) e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for w := range s.watchers[space+":"+user] {
-		w.cancel()
+		w.cancel(ErrForbidden)
 	}
 	return nil
 }
@@ -137,7 +137,18 @@ func (s *Service) RemoveMember(ctx context.Context, actor, space, user string) e
 // WatchAccess registers before checking access, closing the subscribe/revoke
 // race. Supervisor will wait for actual work exit; cancellation alone is not exit.
 func (s *Service) WatchAccess(parent context.Context, actor, space string) (context.Context, func(), error) {
-	ctx, cancel := context.WithCancel(parent)
+	ctx, release := s.SubscribeAccess(parent, actor, space)
+	if err := s.CheckAccess(ctx, actor, space); err != nil {
+		release()
+		return nil, nil, err
+	}
+	return ctx, release, nil
+}
+
+// SubscribeAccess supplies in-process revocation notifications. The caller
+// checks access after subscribing so a concurrent revocation is observed.
+func (s *Service) SubscribeAccess(parent context.Context, actor, space string) (context.Context, func()) {
+	ctx, cancel := context.WithCancelCause(parent)
 	w := &watch{cancel}
 	key := space + ":" + actor
 	s.mu.Lock()
@@ -147,7 +158,7 @@ func (s *Service) WatchAccess(parent context.Context, actor, space string) (cont
 	s.watchers[key][w] = struct{}{}
 	s.mu.Unlock()
 	release := func() {
-		cancel()
+		cancel(nil)
 		s.mu.Lock()
 		delete(s.watchers[key], w)
 		if len(s.watchers[key]) == 0 {
@@ -155,11 +166,7 @@ func (s *Service) WatchAccess(parent context.Context, actor, space string) (cont
 		}
 		s.mu.Unlock()
 	}
-	if err := s.CheckAccess(ctx, actor, space); err != nil {
-		release()
-		return nil, nil, err
-	}
-	return ctx, release, nil
+	return ctx, release
 }
 func (s *Service) CheckAccess(ctx context.Context, actor, space string) error {
 	return s.Repo.CheckAccess(ctx, actor, space, false)

@@ -9,8 +9,10 @@ require (
 	github.com/cloudwego/eino-ext/components/model/ark v0.1.71
 	github.com/dop251/goja v0.0.0-20261017142635-e6862644b38f
 	github.com/go-sql-driver/mysql v1.10.1
+	github.com/goccy/go-python v0.4.0
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
+	github.com/tetratelabs/wazero v1.12.0
 	github.com/volcengine/ve-tos-golang-sdk/v2 v2.9.10
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
 )
@@ -27,6 +29,7 @@ require (
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/eino-contrib/jsonschema v1.0.3 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
+	github.com/goccy/pythonwasm2go v0.4.0 // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/google/uuid v1.6.0
 	github.com/goph/emperror v0.17.2 // indirect

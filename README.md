@@ -2,7 +2,7 @@
 
 Multi-use Agent Systems：支持空间协作、Agent/Skill 定义、版本管理与连续任务执行的单服务应用。
 
-当前 D00—D10 的 MVP 建设及验收已完成，D07 真实模型与 D10 真实 TOS 恢复证据已补齐：可配置模型、发布 Agent/Skill、创建连续对话，使用全部十四个内置工具处理文件、已接受附件和固定版本 Skill 资源。支持 JavaScript 文件/HTTP/CSV 操作、计划展示、产物下载、Trace、取消和快照恢复；支持阶段摘要复用和原始事件和投影 Manifest 的来源检查。
+当前 D00—D10 的 MVP 建设及验收已完成，D07 真实模型与 D10 真实 TOS 恢复证据已补齐：可配置模型、发布 Agent/Skill、创建连续对话，使用内置工具处理文件、已接受附件和固定版本 Skill 资源。支持 Python、JavaScript 和 Go 文件/HTTP/CSV 操作、计划展示、产物下载、Trace、取消和快照恢复；支持阶段摘要复用和原始事件和投影 Manifest 的来源检查。
 
 > 本文件提供项目简介、Quickstart 和建设文档入口。系统方案及工程验收继续由文末四份建设文档维护，不新增专题主文档。
 
@@ -142,10 +142,10 @@ bin/mass serve --config mass.yaml
 3. 进入「Agents」创建 Agent，编辑 `AGENTS.md`，选择模型和准确的 Skill 版本，应用配置、保存草稿并发布 v1。
 4. 修改 Skill 并发布 v2；旧 Agent v1 继续引用原 Skill v1。
 5. 编辑 Agent，选择 Skill v2 后发布 Agent v2，查看旧内容、版本差异并切换默认版本。
-6. 按任务选择工具，支持全部十四个选项。先体验文件任务可选 `read_file`、`write_file`、`publish_artifact`；组合任务再选附件、资源、搜索、计划及 `run_code`。输入 Token 上限须符合实际模型容量；长工具流程可在配置选择中调高，然后发布新版本或创建调试快照。
+6. 按任务选择工具。先体验文件任务可选 `read_file`、`write_file`、`publish_artifact`；组合任务再选附件、资源、搜索、计划及所需语言的代码工具。输入 Token 上限须符合实际模型容量；长工具流程可在配置选择中调高，然后发布新版本或创建调试快照。
 7. 进入「会话与运行」，选择 Agent 及发布/调试版本，新建会话。发送“写入 notes.txt，内容为 hello；读取确认后发布成产物”。可观察输出、工具状态，下载产物并展开「Trace 与上下文」。
 8. 在同一会话发送“读取 notes.txt 的内容”验证跨轮文件延续。每轮停止后保存快照；关闭页面不取消后台任务，取消按钮会等待实际执行停止。
-9. 使用启用了 `read_attachment`、`run_code`、`update_plan`、`publish_artifact` 的 Agent 新建会话，添加 UTF-8 JSON/CSV 附件后发送：“先更新计划，读取附件，用 JavaScript 汇总 amount，保存 summary.json 并发布产物，最后完成计划。”上传后须发送任务才接受附件；页面可查看计划、附件原文、工具结果及代码 I/O Trace。
+9. 使用启用了 `read_attachment`、`run_code`、`update_plan`、`publish_artifact` 的 Agent 新建会话，添加 UTF-8 JSON/CSV 附件后发送：“先更新计划，读取附件，用 Python 汇总 amount，保存 summary.json 并发布产物，最后完成计划。”上传后须发送任务才接受附件，页面可查看计划、附件原文、工具结果及代码 I/O Trace。
 
 登录后或进入 `/spaces` 时，若用户已有空间，默认选中创建时间最早的一个；没有空间时显示工作台空状态。左栏下拉菜单只列出实际空间，用于直接切换；昵称右侧的「账号设置」中提供「创建空间」对话框及退出登录。原「我的空间」列表页已移除，`/spaces?view=all` 也自动进入默认空间。
 
@@ -153,7 +153,9 @@ bin/mass serve --config mass.yaml
 
 会话固定创建时的 Agent/Skill 定义，后续修改默认版本不会改变已有会话。容量不足会明确报错，当前不自动压缩或截断上下文。文件写入/编辑限每文件 1 MiB UTF-8，读取返回至多 64 KiB 范围及摘要；附件每个最多 8 MiB，工具解析支持 UTF-8 文本、JSON、CSV。写入、编辑、移动、删除通过 `expected_sha256` 防止冲突；发布的产物保持原版本，即使源文件被删除也可下载。
 
-启用 `run_code` 会授权代码读取/修改当前会话文件及发送 HTTP(S) 请求，无需逐项启用同名文件工具。代码为同步 JavaScript 函数体，支持 `fs`、`net.request`、`CSV`、`JSON`、`log`；不提供 Shell、Python、Node 或 OS 沙箱。默认每次 5 秒、源码 64 KiB、累计输入/文件读取 2 MiB、宿主输出 2 MiB、返回值 2 MiB、日志 64 KiB、100 次文件和 10 次网络操作；可通过 `tools.code` 配置限额。代码异常/取消保留已经确认的文件修改和请求效果，审计不完整明确报告未知，不自动重做。
+`run_code` 执行 Python，`run_code_js` 执行 JavaScript，`run_code_go` 执行 Go。三个工具都接收 `language`、函数体 `code` 和 JSON `input`。Python 和 Go 通过 `host(operation, arguments)` 访问当前会话文件、HTTP(S) 和 CSV。JavaScript 继续使用 `fs`、`net.request` 和 `CSV`。Go 执行要求服务能找到 Go 1.25 或更新的本地工具链，编译计入 `tools.code.timeout`，首次编译需要建立缓存。三个工具共用原有执行限额、并发名额和 Trace，代码异常会返回详情，已确认的文件修改和请求效果会保留。
+
+已有会话配置中的 `run_code` 会使用 Python。已有 Agent 如需继续使用 JavaScript，请选择 `run_code_js`、发布新版本并用该版本新建会话。
 
 `GET /health/live` 检查进程存活；`GET /health/ready` 检查数据库 schema 与 TOS HeadBucket，就绪结果有短时缓存。对象写入权限可通过页面上传资源验证。
 
@@ -214,6 +216,8 @@ unset MASS_INITIAL_PASSWORD
 
 ### 模型重试与观测（D07 实现中）
 
+`mass.yaml` 的 `llm.timeout` 控制单次模型 HTTP 请求的总时长，包含流式响应读取。省略时为 30 分钟，仍受当前 Run 剩余时间约束。
+
 `llm.max_attempts` 可设为 1—3，省略时为 1。该策略固定到每个新 Run；开启后仅对尚未输出文本的 HTTP 429/502/503/504 进行有限重试，每次均重新检查授权、解析当前凭证、预留和结算预算。SDK 重试始终关闭。取消、协议错误、持久化失败以及部分输出不自动重试；已有工具不会因为模型重试重新执行。
 
 会话 Trace 按模型尝试及其工具调用记录耗时、首个文本片段延迟、HTTP 状态、输出文本、供应商 reasoning 和原始工具调用。供应商未返回 usage 时为 `null`，已返回 usage 时缺失的单项为 `0`。模型请求和流式响应分片只在调用期间处理。
@@ -235,7 +239,7 @@ curl -fsS --cookie "$MASS_COOKIE_JAR" \
 
 `trace.items` 包含 `model_step` 和 `run_finished`。`trace.upload_status` 为 `recording`、`pending` 或 `uploaded`。当 `trace.has_more` 为真时，下一页使用 `trace.next_after` 作为 `after_sequence`，并保留首屏的 `trace.through_sequence`。聚合指标可通过 `/runs/{run_id}/metrics` 单独读取。
 
-心跳失败和已识别的超时在 `run_finished.failure_detail` 中记录来源、失败时刻、耗时和超时预算。来源包括 `heartbeat`、`final_check`（结束前复核）和 `run_deadline`（Run 总时限）。数据库探测会记录可定位的阶段，例如 `lock_space` 或 `update_heartbeat`，以及可用的 MySQL 错误号。
+Run 开始执行前统一查询空间成员、Run 状态和模型启用状态。执行期间使用进程内的取消、撤权通知和额度检查。模型凭证、工具业务数据和 Run 终态仍按各自的读写路径存取。启动校验超时和 Run 总超时分别在 `run_finished.failure_detail` 中标记为 `start_check` 和 `run_deadline`。
 
 连接中断后，前端通过已鉴权的 UI 快照获取当前流和游标。服务重启后根据已提交业务记录恢复 UI 快照。连续恢复失败五次后停止自动重连，可点击“重新同步事件”取得新的成对快照与游标。空间切换和权限失效清理订阅与私有内容。Markdown 禁止原始 HTML、远端图片和非 HTTP(S) 链接；载荷在线预览最多 1 MiB，运行输出按 50 条窗口展开。
 
@@ -262,7 +266,7 @@ bin/mass build-info
 
 产物为 `.cache/release/mass-<os>-<arch>.tar.gz` 及同名 `.sha256` 校验文件。压缩包内有 `bin/mass`、唯一配置模板 `mass.yaml`、README、四份文档及图片、`build-info.json`、逐文件 SHA-256 `manifest.json`。不打包工作区中的真实 `mass.yaml`、环境变量或凭证。相同源码、锁定工具链、`VERSION` 和 `SOURCE_DATE_EPOCH` 会生成相同字节；默认使用 Git 提交时间作为构建时间，未提交源码的版本含 `dirty`。目前打包入口支持构建主机的平台，不宣称已验证跨平台产物。
 
-部署机器解压后按 Quickstart 配置环境、执行 `bin/mass migrate`、`bin/mass user create` 和 `bin/mass serve --config mass.yaml`。仅应用进程不需要 Go、Node、npm 或仓库；MariaDB/TOS 是外部依赖。`serve` 不自动建库/迁移。用 `kill -TERM <mass-pid>` 停止并等待退出后再备份或升级，避免直接覆盖运行中的二进制。
+部署机器解压后按 Quickstart 配置环境，执行 `bin/mass migrate`、`bin/mass user create` 和 `bin/mass serve --config mass.yaml`。MariaDB/TOS 是外部依赖。使用 `run_code_go` 时须安装本机 Go 工具链。`serve` 不自动建库或迁移。备份或升级前用 `kill -TERM <mass-pid>` 停止并等待进程退出。
 
 停服维护时还可管理已有用户的空间成员关系；数据库操作者需指定现有空间 owner 的 ID，仍检查 owner 权限并写审计。运行期间通过页面/API 管理成员。
 

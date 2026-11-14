@@ -148,6 +148,7 @@ func (f *FileService) Mkdir(ctx context.Context, s run.Snapshot, directory strin
 	if !filePath(directory) {
 		return result, storage.ErrInvalid
 	}
+	result.SideEffect = "none"
 	err = f.Workspaces.With(ctx, s.SpaceID, s.SessionID, func(dir WorkspaceDir) error {
 		if err := f.Check(ctx, s); err != nil {
 			return err
@@ -156,7 +157,6 @@ func (f *FileService) Mkdir(ctx context.Context, s run.Snapshot, directory strin
 			return err
 		}
 		parts := strings.Split(directory, "/")
-		effect := "none"
 		for i := 1; i <= len(parts); i++ {
 			p := strings.Join(parts[:i], "/")
 			if err := f.Check(ctx, s); err != nil {
@@ -165,7 +165,7 @@ func (f *FileService) Mkdir(ctx context.Context, s run.Snapshot, directory strin
 			if err := dir.Root().Mkdir(p, 0700); err != nil && !errors.Is(err, fs.ErrExist) {
 				return err
 			} else if err == nil {
-				effect = "committed"
+				result.SideEffect = "committed"
 			}
 			if err := checkParents(dir.Root(), p); err != nil {
 				return err
@@ -175,7 +175,7 @@ func (f *FileService) Mkdir(ctx context.Context, s run.Snapshot, directory strin
 				return storage.ErrConflict
 			}
 		}
-		result = dataResult(map[string]any{"directory": directory}, effect)
+		result = dataResult(map[string]any{"directory": directory}, result.SideEffect)
 		return nil
 	})
 	return

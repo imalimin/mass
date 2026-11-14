@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"time"
 
@@ -52,7 +53,7 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 		return err
 	}
 	var schemaDoc, args any
-	if json.Unmarshal(spec.Schema, &schemaDoc) != nil || json.Unmarshal([]byte(call.Arguments), &args) != nil {
+	if json.Unmarshal(spec.Schema, &schemaDoc) != nil {
 		return run.ErrProtocol
 	}
 	compiler := jsonschema.NewCompiler()
@@ -64,13 +65,31 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 	if err != nil {
 		return err
 	}
-	if err = compiled.Validate(args); err != nil {
-		return run.ErrProtocol
+	var result run.ToolResult
+	var artifact *run.Artifact
+	var actionErr error
+	var elapsed *int64
+	argumentErr := json.Unmarshal([]byte(call.Arguments), &args)
+	if argumentErr == nil {
+		argumentErr = compiled.Validate(args)
 	}
-	at := time.Now()
-	d.Trace.Tool(s.ID, call.ID, "running", nil, nil)
-	result, artifact, actionErr := d.Handler.Execute(ctx, s, call, args.(map[string]any))
-	elapsed := time.Since(at).Milliseconds()
+	if argumentErr != nil {
+		if run.CodeLanguage(call.Name) == "" {
+			return run.ErrProtocol
+		}
+		detail := fmt.Sprintf("Invalid %s arguments: %.1024s", call.Name, argumentErr)
+		raw, _ := json.Marshal(map[string]string{"error_detail": detail})
+		result = run.ToolResult{
+			Status: "failed", Error: "invalid_tool_input", SideEffect: "none",
+			Complete: true, SourceRefs: []storage.Ref{}, Data: raw,
+		}
+	} else {
+		at := time.Now()
+		d.Trace.Tool(s.ID, call.ID, "running", nil, nil)
+		result, artifact, actionErr = d.Handler.Execute(ctx, s, call, args.(map[string]any))
+		ms := time.Since(at).Milliseconds()
+		elapsed = &ms
+	}
 	if actionErr != nil && result.Status == "" {
 		code := "tool_failed"
 		effect := "unknown"
@@ -122,7 +141,7 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 			return run.ErrProtocol
 		}
 	}
-	d.Trace.Tool(s.ID, call.ID, result.Status, &elapsed, raw)
+	d.Trace.Tool(s.ID, call.ID, result.Status, elapsed, raw)
 	recordCtx := ctx
 	if ctx.Err() != nil {
 		var cancel context.CancelFunc
@@ -148,6 +167,9 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 		}
 	}
 	if result.SideEffect == "unknown" {
+		if errors.Is(actionErr, run.ErrCodeTimeout) || errors.Is(actionErr, run.ErrNetworkTimeout) {
+			return actionErr
+		}
 		return run.ErrUnknownEffect
 	}
 	if actionErr != nil && ctx.Err() != nil {
