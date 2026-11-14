@@ -11,12 +11,13 @@ import (
 )
 
 var (
-	ErrConflict  = errors.New("event_conflict")
-	ErrSchema    = errors.New("unsupported_event_schema")
-	ErrInvalid   = errors.New("invalid_storage_request")
-	ErrIntegrity = errors.New("content_unavailable")
-	ErrWorkspace = errors.New("workspace_unavailable")
-	ErrActive    = errors.New("run_active")
+	ErrConflict     = errors.New("event_conflict")
+	ErrSchema       = errors.New("unsupported_event_schema")
+	ErrInvalid      = errors.New("invalid_storage_request")
+	ErrIntegrity    = errors.New("content_unavailable")
+	ErrWorkspace    = errors.New("workspace_unavailable")
+	ErrBlobNotFound = errors.New("blob_not_found")
+	ErrActive       = errors.New("run_active")
 )
 
 func ValidID(id string) bool { u, e := uuid.Parse(id); return e == nil && u.String() == id }
@@ -45,6 +46,7 @@ type RestoreResult struct {
 
 type BlobStore interface {
 	PutNew(context.Context, string, io.Reader, int64, string) (BlobInfo, error)
+	Overwrite(context.Context, string, io.Reader, int64, string) (BlobInfo, error)
 	Open(context.Context, string, string) (io.ReadCloser, error)
 	URI(string) string
 	Check(context.Context) error

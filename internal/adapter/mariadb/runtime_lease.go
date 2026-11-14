@@ -128,7 +128,7 @@ func (l *RuntimeLease) checkRun(ctx context.Context, tx *sql.Tx, s run.Snapshot)
 	var status, owner string
 	var cancelled bool
 	if err := tx.QueryRowContext(ctx, "SELECT status,COALESCE(owner_id,''),cancel_requested FROM runs WHERE space_id=? AND id=? AND snapshot IS NOT NULL", s.SpaceID, s.ID).Scan(&status, &owner, &cancelled); err != nil {
-		return err
+		return checkError("read_run", dbError(err))
 	}
 	if status != "running" || owner != l.ID {
 		return run.ErrState
@@ -137,7 +137,8 @@ func (l *RuntimeLease) checkRun(ctx context.Context, tx *sql.Tx, s run.Snapshot)
 		return run.ErrCancelled
 	}
 	var id string
-	return tx.QueryRowContext(ctx, "SELECT id FROM model_configs WHERE space_id=? AND id=? AND enabled=TRUE", s.SpaceID, s.Definition.Model.ID).Scan(&id)
+	err := tx.QueryRowContext(ctx, "SELECT id FROM model_configs WHERE space_id=? AND id=? AND enabled=TRUE", s.SpaceID, s.Definition.Model.ID).Scan(&id)
+	return checkError("check_model", dbError(err))
 }
 
 func (l *RuntimeLease) CheckRun(ctx context.Context, s run.Snapshot) error {
@@ -153,13 +154,24 @@ func (l *RuntimeLease) Heartbeat(ctx context.Context, s run.Snapshot) error {
 	if !l.alive.Load() {
 		return run.ErrUnavailable
 	}
-	return l.store.scoped(ctx, s.ActorID, s.SpaceID, false, func(tx *sql.Tx) error {
+	stage := "begin_heartbeat"
+	err := l.store.scoped(ctx, s.ActorID, s.SpaceID, false, func(tx *sql.Tx) error {
+		stage = "check_run"
 		if err := l.checkRun(ctx, tx, s); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE runs SET heartbeat_at=UTC_TIMESTAMP(6) WHERE space_id=? AND id=?", s.SpaceID, s.ID)
-		return err
+		stage = "update_heartbeat"
+		if _, err := tx.ExecContext(ctx, "UPDATE runs SET heartbeat_at=UTC_TIMESTAMP(6) WHERE space_id=? AND id=?", s.SpaceID, s.ID); err != nil {
+			return err
+		}
+		stage = "commit_heartbeat"
+		return nil
 	})
+	var checked *run.CheckError
+	if errors.As(err, &checked) {
+		return err
+	}
+	return checkError(stage, err)
 }
 
 // CleanupRepository is a capability for one claimed run. It cannot expose
@@ -204,7 +216,7 @@ func (c *CleanupRepository) AppendEvents(ctx context.Context, actor string, b jo
 			return nil, identity.ErrForbidden
 		}
 		switch e.Type {
-		case "run.finished", "workspace.snapshot.created", "workspace.snapshot.failed", "operation.reconciled", "model.attempt.failed":
+		case "run.finished", "workspace.snapshot.created", "workspace.snapshot.failed", "model.attempt.failed":
 		default:
 			return nil, identity.ErrForbidden
 		}

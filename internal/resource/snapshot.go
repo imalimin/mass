@@ -79,7 +79,7 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 		}
 		defer archive.Close()
 		if s.Journal != nil {
-			history, err := RunHistory(ctx, s.Journal, actor, r.SpaceID, r.SessionID, r.RunID, "plan.updated", "artifact.published", "tool.execution.completed")
+			history, err := RunHistory(ctx, s.Journal, actor, r.SpaceID, r.SessionID, r.RunID, "plan.updated", "artifact.published")
 			if err != nil {
 				return err
 			}
@@ -100,8 +100,6 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 					var a run.Artifact
 					journal.Decode(event.Data, &a)
 					artifacts = append(artifacts, a)
-					through = event.Sequence
-				case "tool.execution.completed":
 					through = event.Sequence
 				}
 			}

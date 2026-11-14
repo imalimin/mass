@@ -26,7 +26,7 @@ try {
   const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'))
   for (const [name, digest] of Object.entries(manifest.sha256)) assert.equal(hash(await readFile(join(directory, name))), digest, name)
   const binary = join(directory, 'bin/mass'), info = JSON.parse(execFileSync(binary, ['build-info'], { env: { PATH: '' } }))
-  assert.equal(info.schema, 9); assert.equal(info.revision, execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim())
+  assert.equal(info.schema, 14); assert.equal(info.revision, execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim())
   assert.equal((await readFile(archive+'.sha256', 'utf8')).split(' ')[0], originalHash)
   server = await startFixtureServer({ storage: true, model: true, binary, template: join(directory, 'mass.yaml'), emptyDatabase: true })
   const m = server.maintenance
@@ -43,16 +43,23 @@ try {
   const save = async () => { const response = page.waitForResponse(r => r.url().endsWith('/draft') && r.request().method() === 'PUT'); await page.getByRole('button', { name: '保存草稿', exact: true }).click(); assert.equal((await response).status(), 200) }
   const publish = async () => { const response = page.waitForResponse(r => r.url().endsWith('/versions') && r.request().method() === 'POST'); await page.getByRole('button', { name: '发布版本', exact: true }).click(); const r = await response; assert.equal(r.status(), 201); return r.json() }
   await page.getByLabel('定义名称').fill('retained-skill'); await page.getByRole('button', { name: '创建 Skill', exact: true }).click(); await edit('SKILL.md', '# Retained skill\nPreserve notes across runs.'); await save()
+  await page.getByText('添加资源', { exact: true }).click()
   await page.getByLabel('资源文件（最多 8 MiB）').setInputFiles({ name: 'rules.txt', mimeType: 'text/plain', buffer: Buffer.from('retained rule bytes') }); const upload = page.waitForResponse(r => r.url().endsWith('/resources')); await page.getByRole('button', { name: '上传资源', exact: true }).click(); assert.equal((await upload).status(), 200)
   const skill = await publish()
   await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByLabel('定义名称').fill('delivery-agent'); await page.getByRole('button', { name: '创建 Agent', exact: true }).click(); await edit('AGENTS.md', '# Delivery agent\nRead and write session files.')
-  await page.getByLabel('绑定模型').selectOption({ label: '恢复模型' }); await page.getByLabel('Skill 版本：retained-skill', { exact: true }).selectOption('v1'); await page.getByRole('button', { name: '应用配置选择', exact: true }).click(); await save(); const agent = await publish(); assert.equal(agent.bundle.bindings[0].version_id, skill.id)
+  await page.getByLabel('绑定模型').selectOption({ label: '恢复模型' }); await page.getByLabel('Skill 版本：retained-skill', { exact: true }).selectOption('v1'); const agent = await publish(); assert.equal(agent.bundle.bindings[0].version_id, skill.id)
   await page.locator('.app-sidebar').getByRole('link', { name: '会话与运行', exact: true }).click(); await page.getByLabel('使用 Agent').selectOption({ label: 'delivery-agent' }); await page.getByLabel('会话名称', { exact: true }).fill('恢复会话'); await page.getByRole('button', { name: '新建会话', exact: true }).click(); await page.getByRole('heading', { name: '恢复会话', exact: true }).waitFor()
   const space = new URL(page.url()).pathname.split('/')[2], session = new URL(page.url()).pathname.split('/')[4], headers = { Origin: server.url, 'Content-Type': 'application/json' }, base = `${server.url}/api/v1/spaces/${space}`
   const send = async text => { const r = await context.request.post(`${base}/sessions/${session}/runs`, { headers, data: { idempotency_key: randomUUID(), text } }); assert.equal(r.status(), 202); const run = await r.json(); for (let i=0;i<600;i++) { const v = await (await context.request.get(`${base}/runs/${run.id}`)).json(); if (v.status === 'succeeded') return v; if (['failed','cancelled'].includes(v.status)) throw Error(`Run failed: ${JSON.stringify(v)}`); await new Promise(r => setTimeout(r,50)) }; throw Error('run timed out') }
-  const first = await send('write, read and publish'); await page.goto(`${server.url}/spaces?space=${space}&session=${session}&run=${first.id}`); await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 15000 }); await page.getByText('Trace 与上下文', { exact: true }).click(); await page.getByText('model.request.recorded', { exact: false }).first().waitFor()
+  const first = await send('write, read and publish'); await page.goto(`${server.url}/spaces?space=${space}&session=${session}&run=${first.id}`); await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 15000 }); await page.getByText('Trace 与上下文', { exact: true }).click(); await page.getByText('model.attempt.started', { exact: false }).first().waitFor()
   const artifact = (await (await context.request.get(`${base}/runs/${first.id}/artifacts`)).json()).items[0]
   assert.equal(await (await context.request.get(server.url+artifact.download_url)).text(), 'hello workspace')
+  for (let i = 0; ; i++) {
+    const diagnostics = await (await context.request.get(`${server.url}/api/v1/diagnostics?run_id=${first.id}`)).json()
+    if (diagnostics.trace?.upload_status === 'uploaded') break
+    if (i >= 100) throw Error('trace was not uploaded before backup')
+    await new Promise(r => setTimeout(r, 50))
+  }
   const history = await (await context.request.get(`${base}/runs/${first.id}/ui-snapshot`)).json(), calls = server.modelCalls()
   // Provision only an independently randomized, empty test database.
   target = spawn('sh', ['scripts/go.sh', 'run', './scripts/test-database'], { env: { ...process.env, MASS_TEST_EMPTY_DATABASE: '1' }, stdio: ['pipe','pipe','pipe'] }); targetExit = once(target, 'exit'); target.stderr.setEncoding('utf8').on('data', b => { targetErrors += b })
@@ -75,8 +82,7 @@ try {
   assert.ok(objectCount>10)
   assert.notEqual((await mass([...restoreArgs.slice(0,-1),'wrong-database'])).status,0)
   const beforeWrongKey=m.tos.objects.size; const wrong=await mass(restoreArgs,{MASS_MASTER_KEY:Buffer.alloc(32,9).toString('base64')}); assert.notEqual(wrong.status,0); assert.match(wrong.stderr,/master key/); assert.equal(m.tos.objects.size,beforeWrongKey)
-  query(destination.name,"UPDATE content_objects SET state='uploading' WHERE (space_id,id) IN (SELECT space_id,object_id FROM event_objects) ORDER BY id LIMIT 1"); const unfinished=await mass(restoreArgs); assert.notEqual(unfinished.status,0); assert.match(unfinished.stderr,/unfinished referenced object/); query(destination.name,"UPDATE content_objects SET state='ready' WHERE state='uploading'")
-  const [eventID,eventDigest]=query(destination.name,'SELECT event_id,event_digest FROM runtime_events ORDER BY event_id LIMIT 1').split('\t'); query(destination.name,`UPDATE runtime_events SET event_digest=REPEAT('0',64) WHERE event_id='${eventID}'`); assert.notEqual((await mass(restoreArgs)).status,0,'corrupt journal accepted'); query(destination.name,`UPDATE runtime_events SET event_digest='${eventDigest}' WHERE event_id='${eventID}'`)
+  query(destination.name,"UPDATE content_objects SET state='uploading' WHERE (space_id,id) IN (SELECT space_id,content_id FROM messages) ORDER BY id LIMIT 1"); const unfinished=await mass(restoreArgs); assert.notEqual(unfinished.status,0); assert.match(unfinished.stderr,/unfinished referenced object/); query(destination.name,"UPDATE content_objects SET state='ready' WHERE state='uploading'")
   query(destination.name,`UPDATE runs SET status='queued' WHERE id='${first.id}'`); const queued=await mass(restoreArgs); assert.notEqual(queued.status,0); assert.match(queued.stderr,/quiescent backup/); query(destination.name,`UPDATE runs SET status='succeeded' WHERE id='${first.id}'`)
   assert.equal(m.tos.objects.size,beforeWrongKey,'invalid backup wrote destination objects')
   const [sourceKey, originalBytes]=[...m.tos.objects.entries()][0]; m.tos.objects.set(sourceKey,Buffer.from('corrupt backup bytes')); assert.notEqual((await mass(restoreArgs)).status,0); assert.equal(query(destination.name,'SELECT object_key FROM content_objects ORDER BY object_key'),originalLocations,'failed copy changed locations'); m.tos.objects.set(sourceKey,originalBytes)
@@ -86,12 +92,11 @@ try {
   const destinationKey=[...m.tos.objects.keys()].find(k=>k.includes('/restore-d10/')), destinationBytes=m.tos.objects.get(destinationKey); m.tos.objects.set(destinationKey,Buffer.from('corrupt destination')); assert.notEqual((await mass(restoreArgs)).status,0,'corrupt destination accepted'); m.tos.objects.set(destinationKey,destinationBytes)
   const sourceObjects=[...m.tos.objects.keys()].filter(k=>!k.includes('/restore-d10/')); for(const key of sourceObjects) m.tos.objects.delete(key)
   assert.equal((await mass(restoreArgs)).status,0,'idempotent relocation required original bytes after commit')
-  assert.equal((await mass(['rebuild-views'])).status,0,'restored journal and current object mapping cannot rebuild')
   await rm(join(m.directory,'workspaces'),{recursive:true,force:true}); await writeFile(m.configPath,restoredConfig); await m.start()
   assert.equal((await fetch(server.url+'/health/ready')).status,200)
   const busy=await mass(restoreArgs); assert.notEqual(busy.status,0); assert.match(busy.stderr,/stopped/)
   assert.equal(server.modelCalls(),calls,'restore/history replay called model')
-  assert.deepEqual(await (await context.request.get(`${base}/runs/${first.id}/ui-snapshot`)).json(),history)
+  assert.deepEqual((await (await context.request.get(`${base}/runs/${first.id}/ui-snapshot`)).json()).state, history.state)
   assert.equal(await (await context.request.get(server.url+artifact.download_url)).text(),'hello workspace')
   const restoredVersion=await context.request.get(`${base}/agents/${agent.definition_id}/versions/${agent.id}`); assert.equal(restoredVersion.status(),200)
   await page.reload(); await page.getByRole('heading',{name:'恢复会话',exact:true}).waitFor(); await page.getByText('已完成写入、读取和发布 notes.txt',{exact:true}).waitFor(); assert.equal(server.modelCalls(),calls)

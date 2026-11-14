@@ -2,18 +2,17 @@
 package dispatcher
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
 	"github.com/imalimin/mass/internal/resource"
+	"github.com/imalimin/mass/internal/resource/trace"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -32,7 +31,7 @@ type Dispatcher struct {
 	Handler  Handler
 	Control  Control
 	Journal  *journal.Journal
-	Content  *resource.ContentStore
+	Trace    *trace.Recorder
 }
 
 func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call run.Call) error {
@@ -68,14 +67,10 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 	if err = compiled.Validate(args); err != nil {
 		return run.ErrProtocol
 	}
-	data := journal.ToolData{CallID: call.ID, ResponseEventID: call.ResponseEventID, Name: call.Name, Version: spec.Version, ArgumentsSHA256: journal.Digest(call.Arguments)}
-	started := journal.New(s.ActorID, "tool.execution.started", s.ID, data)
-	started.CausationID = call.ResponseEventID
-	started.OperationID = call.ID
-	if _, err = resource.AppendRun(ctx, d.Journal, s, started); err != nil {
-		return err
-	}
+	at := time.Now()
+	d.Trace.Tool(s.ID, call.ID, "running", nil, nil)
 	result, artifact, actionErr := d.Handler.Execute(ctx, s, call, args.(map[string]any))
+	elapsed := time.Since(at).Milliseconds()
 	if actionErr != nil && result.Status == "" {
 		code := "tool_failed"
 		effect := "unknown"
@@ -103,7 +98,6 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 		result = run.ToolResult{CallID: call.ID, Status: "failed", Error: code, SideEffect: effect, Complete: true, SourceRefs: []storage.Ref{}, Data: json.RawMessage(`{}`)}
 	}
 	result.CallID = call.ID
-	result.DataRef = uuid.NewString()
 	raw, _ := json.Marshal(result)
 	if len(raw) > 2<<20 {
 		return run.ErrOverflow
@@ -128,49 +122,30 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 			return run.ErrProtocol
 		}
 	}
+	d.Trace.Tool(s.ID, call.ID, result.Status, &elapsed, raw)
 	recordCtx := ctx
 	if ctx.Err() != nil {
 		var cancel context.CancelFunc
 		recordCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 	}
-	o, err := d.Content.Put(recordCtx, s.ActorID, s.SpaceID, result.DataRef, "tool.result", "application/json", bytes.NewReader(raw))
-	if err != nil {
-		return err
-	}
-	data.ContentID = o.ID
-	data.Status = result.Status
-	data.SideEffect = result.SideEffect
-	previewRaw := raw
-	if len(previewRaw) > 4096 {
-		previewRaw, _ = json.Marshal(map[string]any{"status": result.Status, "truncated": true, "payloadRef": o.ID, "side_effect": result.SideEffect})
-	}
-	data.Preview = string(previewRaw)
-	refs := []storage.Ref{{Role: "result", ObjectID: o.ID, SHA256: o.SHA256}}
-	for i, ref := range result.SourceRefs {
-		ref.Ordinal = i
-		refs = append(refs, ref)
-	}
-	completed := journal.New(s.ActorID, "tool.execution.completed", s.ID, data, refs...)
-	completed.CausationID = started.EventID
-	completed.OperationID = call.ID
-	events := []journal.Proposed{}
+	var facts []journal.Proposed
 	if result.Plan != nil {
 		event := journal.New(s.ActorID, "plan.updated", s.ID, *result.Plan)
 		event.OperationID = call.ID
-		event.CausationID = started.EventID
-		events = append(events, event)
+		event.CausationID = call.ResponseEventID
+		facts = append(facts, event)
 	}
 	if artifact != nil {
-		e := journal.New(s.ActorID, "artifact.published", s.ID, artifact, storage.Ref{Role: "artifact", ObjectID: artifact.ObjectID, SHA256: artifact.SHA256})
-		e.OperationID = call.ID
-		e.CausationID = started.EventID
-		events = append(events, e)
+		event := journal.New(s.ActorID, "artifact.published", s.ID, artifact, storage.Ref{Role: "artifact", ObjectID: artifact.ObjectID, SHA256: artifact.SHA256})
+		event.OperationID = call.ID
+		event.CausationID = call.ResponseEventID
+		facts = append(facts, event)
 	}
-	events = append(events, completed)
-	_, err = resource.AppendRun(recordCtx, d.Journal, s, events...)
-	if err != nil {
-		return err
+	if len(facts) > 0 {
+		if _, err = resource.AppendRun(recordCtx, d.Journal, s, facts...); err != nil {
+			return err
+		}
 	}
 	if result.SideEffect == "unknown" {
 		return run.ErrUnknownEffect

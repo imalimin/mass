@@ -697,7 +697,6 @@ AguiRunClient 对快照运行时校验，帧经 Schema/reducer 后才推进 UI �
    ```sh
    bin/mass check-config --config restored.yaml
    bin/mass restore-storage --config restored.yaml --source-config original.yaml --expect-database mass_restore
-   bin/mass rebuild-views --config restored.yaml
    bin/mass serve --config restored.yaml
    ```
 

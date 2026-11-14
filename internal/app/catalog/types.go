@@ -31,16 +31,19 @@ type Asset struct {
 	SHA256    string `json:"sha256"`
 	Size      int64  `json:"size"`
 	MediaType string `json:"media_type"`
+	Package   bool   `json:"package,omitempty"`
 }
 type Document struct {
-	Markdown   string  `json:"markdown"`
-	ConfigYAML string  `json:"config_yaml"`
-	Assets     []Asset `json:"assets"`
+	Markdown    string   `json:"markdown"`
+	ConfigYAML  string   `json:"config_yaml"`
+	Assets      []Asset  `json:"assets,omitzero"`
+	Directories []string `json:"directories,omitempty"`
 }
 type Draft struct {
 	Definition
-	Revision int64    `json:"revision"`
-	Document Document `json:"document"`
+	Revision  int64    `json:"revision"`
+	Document  Document `json:"document"`
+	ContentID string   `json:"-"`
 }
 type SkillRef struct {
 	ID      string `json:"id" yaml:"id"`
@@ -102,7 +105,7 @@ type Repository interface {
 	CatalogList(context.Context, string, string, string, identity.Query) ([]Definition, error)
 	CatalogDraft(context.Context, string, string, string, string) (Draft, error)
 	CatalogSave(context.Context, string, string, Draft) error
-	CatalogPrepare(context.Context, string, string, string, string, int64) (Bundle, error)
+	CatalogPrepare(context.Context, string, string, string, int64) (Bundle, error)
 	CatalogPublish(context.Context, string, string, Version) error
 	CatalogVersions(context.Context, string, string, string, string, bool, identity.Query) ([]Version, error)
 	CatalogVersion(context.Context, string, string, string, string, string) (Version, error)

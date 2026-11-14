@@ -95,11 +95,11 @@ func (s *Store) RuntimeSessions(ctx context.Context, actor, space string, q iden
 	return
 }
 
-const runColumns = "snapshot,status,cancel_requested,COALESCE(final_response_event_id,''),error_code,snapshot_error,COALESCE(workspace_snapshot_id,''),started_at,finished_at,heartbeat_at,COALESCE(owner_id,'')"
+const runColumns = "snapshot,status,cancel_requested,COALESCE(final_response_event_id,''),error_code,snapshot_error,COALESCE(workspace_snapshot_id,''),started_at,finished_at,heartbeat_at,COALESCE(owner_id,''),trace_uploaded_at IS NOT NULL"
 
 func runInTx(ctx context.Context, tx *sql.Tx, space, id string) (v run.View, err error) {
 	var raw []byte
-	err = tx.QueryRowContext(ctx, "SELECT "+runColumns+" FROM runs WHERE space_id=? AND id=? AND snapshot IS NOT NULL", space, id).Scan(&raw, &v.Status, &v.CancelRequested, &v.FinalResponseEventID, &v.Error, &v.SnapshotError, &v.WorkspaceSnapshotID, &v.StartedAt, &v.FinishedAt, &v.HeartbeatAt, &v.OwnerID)
+	err = tx.QueryRowContext(ctx, "SELECT "+runColumns+" FROM runs WHERE space_id=? AND id=? AND snapshot IS NOT NULL", space, id).Scan(&raw, &v.Status, &v.CancelRequested, &v.FinalResponseEventID, &v.Error, &v.SnapshotError, &v.WorkspaceSnapshotID, &v.StartedAt, &v.FinishedAt, &v.HeartbeatAt, &v.OwnerID, &v.TraceUploaded)
 	if err != nil {
 		return v, err
 	}
@@ -124,6 +124,39 @@ func (s *Store) RuntimeRun(ctx context.Context, actor, space, id string) (v run.
 	err = s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error { var e error; v, e = runInTx(ctx, tx, space, id); return e })
 	return
 }
+
+func (s *Store) RuntimeDiagnosticSpace(ctx context.Context, actor, runID, snapshotID string) (string, error) {
+	id := runID
+	query := `SELECT m.space_id FROM space_members m
+		JOIN runs r ON r.space_id=m.space_id AND r.id=? AND r.snapshot IS NOT NULL
+		WHERE m.user_id=? LIMIT 2`
+	if snapshotID != "" {
+		id = snapshotID
+		query = `SELECT m.space_id FROM space_members m
+			JOIN workspace_snapshots s ON s.space_id=m.space_id AND s.id=?
+			WHERE m.user_id=? LIMIT 2`
+	}
+	rows, err := s.DB.QueryContext(ctx, query, id, actor)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err = rows.Err(); err != nil {
+			return "", err
+		}
+		return "", identity.ErrNotFound
+	}
+	var space string
+	if err = rows.Scan(&space); err != nil {
+		return "", err
+	}
+	if rows.Next() {
+		return "", identity.ErrConflict
+	}
+	return space, rows.Err()
+}
+
 func (s *Store) RuntimeMessages(ctx context.Context, actor, space, session string, after int64, limit int) (items []run.MessageView, err error) {
 	items = []run.MessageView{}
 	if after < 0 || limit < 1 || limit > 100 {
@@ -134,7 +167,7 @@ func (s *Store) RuntimeMessages(ctx context.Context, actor, space, session strin
 		if e := tx.QueryRowContext(ctx, "SELECT id FROM sessions WHERE space_id=? AND id=?", space, session).Scan(&exists); e != nil {
 			return e
 		}
-		rows, e := tx.QueryContext(ctx, "SELECT m.id,COALESCE(m.run_id,''),m.role,m.content_id,m.source_event_id,m.sequence,m.complete,e.data FROM messages m JOIN runtime_events e ON e.space_id=m.space_id AND e.event_id=m.source_event_id WHERE m.space_id=? AND m.session_id=? AND m.sequence>? ORDER BY m.sequence LIMIT ?", space, session, after, limit)
+		rows, e := tx.QueryContext(ctx, "SELECT m.id,COALESCE(m.run_id,''),m.role,m.content_id,m.source_event_id,m.sequence,m.complete,m.attachments FROM messages m WHERE m.space_id=? AND m.session_id=? AND m.sequence>? ORDER BY m.sequence LIMIT ?", space, session, after, limit)
 		if e != nil {
 			return e
 		}
@@ -145,12 +178,8 @@ func (s *Store) RuntimeMessages(ctx context.Context, actor, space, session strin
 			if e = rows.Scan(&m.ID, &m.RunID, &m.Role, &m.ContentID, &m.SourceEventID, &m.Sequence, &m.Complete, &raw); e != nil {
 				return e
 			}
-			if m.Role == "user" {
-				var accepted journal.UserMessageData
-				if e = json.Unmarshal(raw, &accepted); e != nil {
-					return storage.ErrIntegrity
-				}
-				m.Attachments = accepted.Attachments
+			if len(raw) > 0 && json.Unmarshal(raw, &m.Attachments) != nil {
+				return storage.ErrIntegrity
 			}
 			items = append(items, m)
 		}

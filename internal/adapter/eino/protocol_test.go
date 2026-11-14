@@ -14,22 +14,6 @@ import (
 	"github.com/imalimin/mass/internal/domain/run"
 )
 
-type traceRecorder struct {
-	request, response []byte
-	fail              bool
-}
-
-func (r *traceRecorder) Request(_ context.Context, b []byte) error {
-	r.request = append(r.request, b...)
-	return nil
-}
-func (r *traceRecorder) Response(_ context.Context, _ int, b []byte) error {
-	if r.fail {
-		return errors.New("storage unavailable")
-	}
-	r.response = append(r.response, b...)
-	return nil
-}
 func TestActualProtocolMatrix(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -62,23 +46,19 @@ func TestActualProtocolMatrix(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			recorder := &traceRecorder{}
 			transport := &ModelTransport{}
 			s := run.Snapshot{Definition: run.Definition{OutputTokens: 256, Model: run.ModelConfig{Endpoint: server.URL, ModelID: "fixture"}}}
 			p := run.Prepared{Spec: run.ProjectionSpec{Purpose: "task"}, Messages: []run.Message{{Role: "user", Content: "hello"}}}
 			text := ""
-			reply, err := transport.Stream(context.Background(), s, p, "secret-only-in-header", recorder, func(part string) error { text += part; return nil })
+			reply, err := transport.Stream(context.Background(), s, p, "secret-only-in-header", func(part string) error { text += part; return nil })
 			if (err == nil) != tc.valid {
 				t.Fatal("outcome", err)
 			}
 			if count != 1 {
 				t.Fatal("hidden SDK retry", count)
 			}
-			if !bytes.Equal(sent, recorder.request) || (tc.name != "invalid json" && !bytes.Equal([]byte(tc.body), recorder.response)) || (tc.name == "invalid json" && (len(recorder.response) == 0 || !bytes.HasPrefix([]byte(tc.body), recorder.response))) {
-				t.Fatal("wire mismatch")
-			}
-			if strings.Contains(string(recorder.request), "secret-only-in-header") {
-				t.Fatal("authorization in trace")
+			if !json.Valid(sent) || !bytes.Contains(sent, []byte(`"hello"`)) || strings.Contains(string(sent), "secret-only-in-header") {
+				t.Fatal("invalid SDK request")
 			}
 			var failure *run.ModelFailure
 			if errors.As(err, &failure) != tc.retry {
@@ -96,15 +76,6 @@ func TestActualProtocolMatrix(t *testing.T) {
 		})
 	}
 }
-func TestRecorderFailureNeverRetries(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503); w.Write([]byte(`{"error":"busy"}`)) }))
-	defer server.Close()
-	_, err := (&ModelTransport{}).Stream(context.Background(), run.Snapshot{Definition: run.Definition{OutputTokens: 20, Model: run.ModelConfig{Endpoint: server.URL, ModelID: "fixture"}}}, run.Prepared{Messages: []run.Message{{Role: "user", Content: "x"}}}, "fixture", &traceRecorder{fail: true}, func(string) error { return nil })
-	var failure *run.ModelFailure
-	if err == nil || errors.As(err, &failure) {
-		t.Fatal("storage failure retryable", err)
-	}
-}
 func TestUsageUnknownAndRawProtocol(t *testing.T) {
 	raw := []byte("data: {\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":null,\"prompt_tokens_details\":{\"cached_tokens\":4},\"cache_creation_input_tokens\":0}}\n\n")
 	u := wireUsage(raw)
@@ -115,20 +86,25 @@ func TestUsageUnknownAndRawProtocol(t *testing.T) {
 }
 
 func TestParallelToolArgumentFrames(t *testing.T) {
-	body := "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"a\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\"}},{\"index\":1,\"id\":\"b\",\"type\":\"function\",\"function\":{\"name\":\"list_files\",\"arguments\":\"{\"}}]}}]}\n\n" +
-		"data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"a.txt\\\"}\"}},{\"index\":1,\"function\":{\"arguments\":\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
+	body := "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"checking \",\"tool_calls\":[{\"index\":0,\"id\":\"a\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\"}},{\"index\":1,\"id\":\"b\",\"type\":\"function\",\"function\":{\"name\":\"list_files\",\"arguments\":\"{\"}}]}}]}\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"files\",\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"a.txt\\\"}\"}},{\"index\":1,\"function\":{\"arguments\":\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens_details\":{\"cached_tokens\":4},\"completion_tokens_details\":{\"reasoning_tokens\":9}}}\n\ndata: [DONE]\n\n"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Write([]byte(body))
 	}))
 	defer server.Close()
-	recorder := &traceRecorder{}
-	reply, err := (&ModelTransport{}).Stream(context.Background(), run.Snapshot{Definition: run.Definition{OutputTokens: 256, Model: run.ModelConfig{Endpoint: server.URL, ModelID: "fixture"}}}, run.Prepared{Messages: []run.Message{{Role: "user", Content: "two tools"}}}, "fixture", recorder, func(string) error { return nil })
+	reply, err := (&ModelTransport{}).Stream(context.Background(), run.Snapshot{Definition: run.Definition{OutputTokens: 256, Model: run.ModelConfig{Endpoint: server.URL, ModelID: "fixture"}}}, run.Prepared{Messages: []run.Message{{Role: "user", Content: "two tools"}}}, "fixture", func(string) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
 	calls := reply.Message.ToolCalls
 	if len(calls) != 2 || calls[0].ID != "a" || calls[1].ID != "b" || calls[0].Arguments != `{"path":"a.txt"}` || calls[1].Arguments != `{}` || !json.Valid(reply.Message.Native) {
 		t.Fatal("tool frames reordered or damaged", calls)
+	}
+	if reply.Trace.Reasoning == nil || *reply.Trace.Reasoning != "checking files" || len(reply.Trace.ToolCalls) != 2 ||
+		reply.Trace.ToolCalls[0].Function.Arguments != calls[0].Arguments || reply.Trace.ToolCalls[0].Type != "function" ||
+		!reply.Trace.UsagePresent || reply.Trace.ReasoningTokens == nil || *reply.Trace.ReasoningTokens != 9 ||
+		reply.Usage.Input != nil || reply.Usage.CacheRead == nil || *reply.Usage.CacheRead != 4 {
+		t.Fatalf("missing provider diagnostics: %+v, %+v", reply.Trace, reply.Usage)
 	}
 }

@@ -195,7 +195,14 @@ func (p *Planner) save(ctx context.Context, s run.Snapshot, prepared run.Prepare
 	prepared.ID = uuid.NewString()
 	event := journal.New(s.ActorID, "context.projected", s.ID, struct{}{})
 	prepared.EventID = event.EventID
-	raw, _ := json.Marshal(prepared)
+	stored := prepared
+	stored.Messages = append([]run.Message{}, prepared.Messages...)
+	for i := range stored.Messages {
+		if stored.Messages[i].Role == "tool" {
+			stored.Messages[i].Content = ""
+		}
+	}
+	raw, _ := json.Marshal(stored)
 	o, err := p.Content.Put(ctx, s.ActorID, s.SpaceID, uuid.NewString(), "context.projection", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		return prepared, err

@@ -17,6 +17,7 @@ type SkillResource struct {
 	SHA256    string `json:"sha256"`
 	Size      int64  `json:"size"`
 	MediaType string `json:"media_type"`
+	Package   bool   `json:"package,omitempty"`
 }
 type Attachment struct {
 	ID        string      `json:"id"`

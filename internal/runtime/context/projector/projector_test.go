@@ -106,7 +106,7 @@ func TestCompleteGroupsAndExplicitFailures(t *testing.T) {
 	if err != nil || a.Fingerprint != b.Fingerprint {
 		t.Fatal("future history changed projection", err)
 	}
-	// Partial terminal groups become one truthful notice; never paired fake success.
+	// A terminal run with an incomplete tool group contributes no tool messages.
 	history = partial
 	add("run.finished", journal.FinishData{Status: "cancelled", Error: "cancelled"})
 	b, err = p.Project(ctx, s, history, int64(len(history)), nil)
@@ -118,8 +118,8 @@ func TestCompleteGroupsAndExplicitFailures(t *testing.T) {
 			t.Fatal("partial tool group leaked")
 		}
 	}
-	if !strings.Contains(b.Messages[1].Content, "unknown (no terminal result)") || !strings.Contains(b.Messages[1].Content, "side_effect=none") || b.Spec.Blocks[1].Reason != "interrupted_group" {
-		t.Fatal("missing explicit effect facts")
+	if len(b.Spec.Blocks) < 2 || b.Spec.Blocks[1].Reason != "failed_run" {
+		t.Fatal("missing terminal failure after discarding tool state")
 	}
 	// Bad parser/schema, broken bytes, cross-space refs all fail closed.
 	spec := b.Spec

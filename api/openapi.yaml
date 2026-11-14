@@ -584,6 +584,11 @@ paths:
           required: true
           schema:
             $ref: '#/components/schemas/ResourceID'
+        - name: path
+          in: query
+          description: Resource path relative to the Skill root.
+          schema:
+            type: string
       responses:
         '200':
           description: >-
@@ -921,73 +926,6 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/DefinitionDraftInput'
-  /api/v1/spaces/{space_id}/agents/{id}/resources:
-    post:
-      operationId: catalog6
-      security:
-        - SessionCookie: []
-      parameters:
-        - name: space_id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        '200':
-          description: Successful definition operation.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DefinitionDraft'
-        '400':
-          description: Rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '503':
-          description: Rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/DefinitionUploadInput'
   /api/v1/spaces/{space_id}/agents/{id}/versions:
     get:
       operationId: catalog7
@@ -3001,6 +2939,51 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/diagnostics:
+    get:
+      operationId: getRunDiagnostics
+      description: Supply exactly one of run_id or snapshot_id. The lookup is limited to spaces the caller can access.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: run_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: snapshot_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: after_sequence
+          in: query
+          schema:
+            $ref: '#/components/schemas/Sequence'
+        - name: through_sequence
+          in: query
+          schema:
+            $ref: '#/components/schemas/Sequence'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Run state, workspace snapshot metadata, and a page of grouped session trace records.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunDiagnostics'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/runs/{run_id}/trace:
     get:
       operationId: getRuntrace
@@ -3372,6 +3355,12 @@ paths:
           in: query
           schema:
             type: string
+        - name: stream_id
+          in: query
+          description: Stream ID from the UI snapshot. Fetch a new snapshot if this stream has expired.
+          schema:
+            type: string
+            format: uuid
         - name: Last-Event-ID
           in: header
           schema:
@@ -3380,7 +3369,7 @@ paths:
       responses:
         '200':
           description: >-
-            Persisted AG-UI events with a continuous Run UI sequence. after and Last-Event-ID must agree. Heartbeats are
+            AG-UI events with a continuous cursor within the stream ID. after and Last-Event-ID must agree. Heartbeats are
             comments; terminal closes stream.
           content:
             text/event-stream:
@@ -3510,13 +3499,15 @@ components:
           maximum: 8388608
         media_type:
           type: string
+        package:
+          type: boolean
+          description: When true, object_id points to the Skill package and path identifies the file.
     DefinitionDocument:
       type: object
       additionalProperties: false
       required:
         - markdown
         - config_yaml
-        - assets
       properties:
         markdown:
           type: string
@@ -3525,10 +3516,19 @@ components:
           type: string
           maxLength: 65536
         assets:
+          description: Resources belonging to a Skill. Omitted for Agents.
           type: array
           maxItems: 100
           items:
             $ref: '#/components/schemas/DefinitionAsset'
+        directories:
+          description: Explicit directories relative to the Skill root. Parent paths are implied.
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items:
+            type: string
+            maxLength: 512
     DefinitionDraft:
       type: object
       additionalProperties: false
@@ -3796,6 +3796,7 @@ components:
           minimum: 1
         path:
           type: string
+          description: Resource path relative to the Skill root.
         media_type:
           type: string
         data_base64:
@@ -4716,6 +4717,174 @@ components:
           anyOf:
             - type: integer
             - type: 'null'
+    SessionTracePage:
+      type: object
+      additionalProperties: false
+      required: [items, through_sequence, next_after, has_more, upload_status]
+      properties:
+        items:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/TraceModelStep'
+              - $ref: '#/components/schemas/TraceRunFinished'
+        through_sequence:
+          $ref: '#/components/schemas/Sequence'
+        next_after:
+          $ref: '#/components/schemas/Sequence'
+        has_more:
+          type: boolean
+        upload_status:
+          type: string
+          enum: [recording, pending, uploaded]
+    TraceModelStep:
+      type: object
+      required: [type, run_id, step, attempt_id, purpose, started_at, model, tools]
+      properties:
+        type:
+          type: string
+          enum: [model_step]
+        run_id:
+          type: string
+          format: uuid
+        step:
+          type: integer
+          minimum: 1
+        attempt_id:
+          type: string
+          format: uuid
+        retry_of:
+          type: string
+          format: uuid
+        purpose:
+          type: string
+          enum: [task, summary]
+        started_at:
+          type: string
+          format: date-time
+        model:
+          type: object
+          required: [id, status, http_status, duration_ms, first_text_ms, finish_reason, text, reasoning, tool_calls, usage, error]
+          properties:
+            id:
+              type: string
+            status:
+              type: string
+              enum: [succeeded, failed, cancelled]
+            http_status:
+              type: integer
+              description: Zero when no HTTP status was observed.
+            duration_ms:
+              type: integer
+            first_text_ms:
+              type: [integer, 'null']
+            finish_reason:
+              type: string
+            text:
+              type: string
+            reasoning:
+              type: [string, 'null']
+            tool_calls:
+              type: array
+              items:
+                type: object
+                required: [id, type, function]
+                properties:
+                  id:
+                    type: string
+                  type:
+                    type: string
+                  function:
+                    type: object
+                    required: [name, arguments]
+                    properties:
+                      name:
+                        type: string
+                      arguments:
+                        type: string
+            usage:
+              description: Null when usage is absent. Individual missing counters are zero.
+              oneOf:
+                - type: 'null'
+                - type: object
+                  required: [input_tokens, input_cached_tokens, output_tokens, reasoning_tokens]
+                  properties:
+                    input_tokens:
+                      type: integer
+                    input_cached_tokens:
+                      type: integer
+                    output_tokens:
+                      type: integer
+                    reasoning_tokens:
+                      type: integer
+            error:
+              type: string
+        tools:
+          type: array
+          items:
+            type: object
+            required: [call_id, native_tool_call_id, name, arguments, status, duration_ms]
+            properties:
+              call_id:
+                type: string
+              native_tool_call_id:
+                type: string
+              name:
+                type: string
+              arguments: {}
+              status:
+                type: string
+              duration_ms:
+                type: [integer, 'null']
+              result: {}
+              result_ref:
+                type: string
+    TraceRunFinished:
+      type: object
+      required: [type, run_id, status, started_at, finished_at, duration_ms, error, snapshot_id]
+      properties:
+        type:
+          type: string
+          enum: [run_finished]
+        run_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [succeeded, failed, cancelled]
+        started_at:
+          type: [string, 'null']
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        duration_ms:
+          type: [integer, 'null']
+        error:
+          type: string
+        failure_detail:
+          type: object
+          additionalProperties: true
+        snapshot_id:
+          type: [string, 'null']
+          format: uuid
+    RunDiagnostics:
+      type: object
+      additionalProperties: false
+      required:
+        - run
+        - snapshot
+        - trace
+      properties:
+        run:
+          $ref: '#/components/schemas/RuntimeRun'
+        snapshot:
+          description: The selected snapshot, or the run's saved workspace snapshot. Null when the run has not saved a snapshot.
+          oneOf:
+            - $ref: '#/components/schemas/WorkspaceSnapshot'
+            - type: 'null'
+        trace:
+          $ref: '#/components/schemas/SessionTracePage'
     RuntimeRun:
       type: object
       additionalProperties: false
@@ -5080,6 +5249,9 @@ components:
         session_id:
           type: string
           format: uuid
+        stream_id:
+          type: string
+          format: uuid
         source_sequence:
           type: string
           pattern: ^(0|[1-9][0-9]{0,18})$
@@ -5191,6 +5363,9 @@ components:
           type: integer
         media_type:
           type: string
+        package:
+          type: boolean
+          description: When true, object_id points to the Skill package and path identifies the file.
     RuntimeToolPolicy:
       type: object
       additionalProperties: false

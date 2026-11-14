@@ -9,6 +9,10 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/imalimin/mass/db/migrations"
 	"github.com/imalimin/mass/internal/app/identity"
+	"github.com/imalimin/mass/internal/domain/run"
+	"github.com/imalimin/mass/internal/resource"
+	"github.com/imalimin/mass/internal/resource/trace"
+	"github.com/imalimin/mass/internal/transport/agui"
 	"github.com/pressly/goose/v3"
 )
 
@@ -16,6 +20,9 @@ type Store struct {
 	DB            *sql.DB
 	scopeOverride func(context.Context, *sql.Tx, string, string, bool) error
 	systemScope   bool
+	LiveUI        *agui.Live
+	UIContent     *resource.ContentStore
+	UIToolState   func(string, string) trace.Tool
 }
 
 func Open(ctx context.Context, dsn string) (*Store, error) {
@@ -49,7 +56,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 		db.Close()
 		return nil, errors.New("database connection failed")
 	}
-	return &Store{DB: db}, nil
+	return &Store{DB: db, LiveUI: &agui.Live{}}, nil
 }
 func (s *Store) Migrate(ctx context.Context) error {
 	p, err := goose.NewProvider(goose.DialectMySQL, s.DB, migrations.Files)
@@ -79,6 +86,18 @@ func dbError(err error) error {
 	}
 	return err
 }
+
+func checkError(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	detail := &run.CheckError{Stage: stage, Err: err}
+	var mysqlError *mysql.MySQLError
+	if errors.As(err, &mysqlError) {
+		detail.MySQLCode = mysqlError.Number
+	}
+	return detail
+}
 func (s *Store) transaction(ctx context.Context, fn func(*sql.Tx) error) error {
 	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
@@ -97,16 +116,16 @@ func authorize(ctx context.Context, tx *sql.Tx, actor, space string, owner bool)
 	var id string
 	if err := tx.QueryRowContext(ctx, "SELECT id FROM spaces WHERE id=? FOR UPDATE", space).Scan(&id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return identity.ErrForbidden
+			err = identity.ErrForbidden
 		}
-		return err
+		return checkError("lock_space", err)
 	}
 	var isOwner bool
 	if err := tx.QueryRowContext(ctx, "SELECT is_owner FROM space_members WHERE space_id=? AND user_id=?", space, actor).Scan(&isOwner); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return identity.ErrForbidden
+			err = identity.ErrForbidden
 		}
-		return err
+		return checkError("check_membership", err)
 	}
 	if owner && !isOwner {
 		return identity.ErrForbidden

@@ -6,13 +6,11 @@ import (
 	"errors"
 
 	"github.com/imalimin/mass/internal/domain/storage"
-	"github.com/imalimin/mass/internal/journal"
 )
 
-// RelocateStorage operates only on an offline restored database. Immutable
-// events retain their historical URIs; content_objects resolves current bytes.
+// RelocateStorage operates only on an offline restored database. Business rows reference objects by ID; content_objects resolves current bytes.
 // copyObject must verify both source and destination bytes before returning.
-func (s *Store) RelocateStorage(ctx context.Context, expectedDatabase string, checkKey func(string, string, string, []byte) error, copyObject func(context.Context, storage.Object) (storage.Object, error)) (result storage.RestoreResult, err error) {
+func (s *Store) RelocateStorage(ctx context.Context, expectedDatabase string, checkKey func(string, string, string, []byte) error, copyObject func(context.Context, storage.Object) (storage.Object, error), copyTrace func(context.Context, string, string) error) (result storage.RestoreResult, err error) {
 	var database string
 	if err := s.DB.QueryRowContext(ctx, "SELECT DATABASE()").Scan(&database); err != nil {
 		return result, err
@@ -57,8 +55,7 @@ func (s *Store) RelocateStorage(ctx context.Context, expectedDatabase string, ch
 		return result, errors.New("restore requires a quiescent backup with no queued or running runs")
 	}
 	// Every committed reference counts, including drafts and attachments that
-	// have not yet been accepted by a Run. Never infer this from event_objects
-	// alone. An unreferenced upload intent is not confirmed content; retain its
+	// have not yet been accepted by a Run. An unreferenced upload intent is not confirmed content; retain its
 	// original metadata without reading, copying, deleting or promoting bytes.
 	if err = s.DB.QueryRowContext(ctx, restoredInvalidObjects).Scan(&invalid); err != nil {
 		return result, err
@@ -66,9 +63,7 @@ func (s *Store) RelocateStorage(ctx context.Context, expectedDatabase string, ch
 	if invalid != 0 {
 		return result, errors.Join(storage.ErrIntegrity, errors.New("restore contains a missing or unfinished referenced object"))
 	}
-	if err = s.checkRestoredJournal(ctx); err != nil {
-		return result, err
-	}
+
 	var unreferencedUploads int
 	if err = s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM content_objects WHERE state='uploading'").Scan(&unreferencedUploads); err != nil {
 		return result, err
@@ -105,6 +100,12 @@ func (s *Store) RelocateStorage(ctx context.Context, expectedDatabase string, ch
 		}
 		relocated = append(relocated, next)
 	}
+	if copyTrace != nil {
+		if err = s.relocateTraces(ctx, copyTrace); err != nil {
+			return result, err
+		}
+	}
+
 	if err = lease.Check(ctx); err != nil {
 		return result, err
 	}
@@ -134,81 +135,39 @@ func (s *Store) RelocateStorage(ctx context.Context, expectedDatabase string, ch
 	return storage.RestoreResult{Relocated: len(relocated), UnreferencedUploads: unreferencedUploads}, nil
 }
 
+func (s *Store) relocateTraces(ctx context.Context, copyTrace func(context.Context, string, string) error) error {
+	rows, err := s.DB.QueryContext(ctx, "SELECT DISTINCT space_id,session_id FROM runs WHERE trace_uploaded_at IS NOT NULL ORDER BY space_id,session_id")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var space, session string
+		if err := rows.Scan(&space, &session); err != nil {
+			return err
+		}
+		if err := copyTrace(ctx, space, session); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 // Keep all content_objects foreign-key columns represented here. The schema
 // contract test checks this list against the embedded migrations so a new
 // reference cannot silently make an unfinished upload eligible for skipping.
 const restoredInvalidObjects = `SELECT COUNT(*) FROM (
- SELECT space_id,object_id FROM event_objects
- UNION ALL SELECT space_id,object_id FROM workspace_snapshots
+ SELECT space_id,object_id FROM workspace_snapshots
  UNION ALL SELECT space_id,manifest_ref FROM workspace_snapshots
  UNION ALL SELECT space_id,content_id FROM definition_versions
- UNION ALL SELECT space_id,object_id FROM definition_draft_objects
- UNION ALL SELECT space_id,object_id FROM definition_version_objects
+ UNION ALL SELECT space_id,content_id FROM skill_drafts
+ UNION ALL SELECT space_id,content_id FROM skill_versions
  UNION ALL SELECT space_id,definition_ref FROM sessions WHERE definition_ref IS NOT NULL
  UNION ALL SELECT space_id,content_id FROM messages
- UNION ALL SELECT space_id,result_ref FROM tool_executions WHERE result_ref IS NOT NULL
+ UNION ALL SELECT space_id,content_id FROM model_attempts WHERE content_id IS NOT NULL
+ UNION ALL SELECT space_id,summary_ref FROM model_attempts WHERE summary_ref IS NOT NULL
  UNION ALL SELECT space_id,object_id FROM artifacts
  UNION ALL SELECT space_id,object_id FROM attachments
  UNION ALL SELECT space_id,content_id FROM context_projections
 ) refs LEFT JOIN content_objects o ON o.space_id=refs.space_id AND o.id=refs.object_id
 WHERE o.id IS NULL OR o.state<>'ready'`
-
-// Verify event digests (including reconstructed object hashes) and contiguous
-// session sequences before changing any location. Paging bounds event memory.
-func (s *Store) checkRestoredJournal(ctx context.Context) error {
-	type session struct {
-		space, id string
-		last      int64
-	}
-	rows, err := s.DB.QueryContext(ctx, "SELECT space_id,id,last_sequence FROM sessions")
-	if err != nil {
-		return err
-	}
-	var sessions []session
-	for rows.Next() {
-		var v session
-		if err = rows.Scan(&v.space, &v.id, &v.last); err != nil {
-			rows.Close()
-			return err
-		}
-		sessions = append(sessions, v)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	for _, v := range sessions {
-		for after := int64(0); after < v.last; {
-			var events []journal.Event
-			err = s.transaction(ctx, func(tx *sql.Tx) error {
-				var e error
-				events, e = readEvents(ctx, tx, v.space, v.id, after, v.last, 1000)
-				return e
-			})
-			if err != nil {
-				return err
-			}
-			if len(events) == 0 {
-				return storage.ErrIntegrity
-			}
-			for _, event := range events {
-				if event.Sequence != after+1 {
-					return storage.ErrIntegrity
-				}
-				if err = journal.Validate(event.Proposed); err != nil {
-					return err
-				}
-				var digest string
-				if err = s.DB.QueryRowContext(ctx, "SELECT event_digest FROM runtime_events WHERE space_id=? AND event_id=?", v.space, event.EventID).Scan(&digest); err != nil {
-					return err
-				}
-				if digest != journal.Digest(event.Proposed) {
-					return storage.ErrIntegrity
-				}
-				after = event.Sequence
-			}
-		}
-	}
-	return nil
-}

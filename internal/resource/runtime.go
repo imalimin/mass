@@ -39,7 +39,7 @@ func walkHistory(ctx context.Context, j *journal.Journal, actor, space, session,
 		}
 		previous := after
 		for _, e := range page.Events {
-			if e.SpaceID != space || e.SessionID != session || e.Sequence <= previous || e.Sequence > *through || runID == "" && e.Sequence != previous+1 || runID != "" && e.RunID != runID {
+			if e.SpaceID != space || e.SessionID != session || e.Sequence <= previous || e.Sequence > *through || runID != "" && e.RunID != runID {
 				return 0, storage.ErrIntegrity
 			}
 			previous = e.Sequence
@@ -54,9 +54,6 @@ func walkHistory(ctx context.Context, j *journal.Journal, actor, space, session,
 		}
 		after = page.Next
 		if !page.HasMore {
-			if runID == "" && after != *through {
-				return 0, storage.ErrIntegrity
-			}
 			return *through, nil
 		}
 	}

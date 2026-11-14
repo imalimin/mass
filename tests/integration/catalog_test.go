@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -135,6 +136,12 @@ func exerciseCatalog(t *testing.T, blobs storage.BlobStore, prefix string) {
 	v21 := publish(s2, "v1")
 	api("POST", path(s1)+"/versions", map[string]any{"expected_revision": s1.Revision, "label": "v1"}, 409)
 	agent := create("agent", "assistant")
+	draftResponse := api("GET", path(agent)+"/draft", nil, 200)
+	if strings.Contains(draftResponse.Body.String(), `"assets"`) {
+		t.Fatal("Agent draft contains assets")
+	}
+	api("POST", path(agent)+"/resources", map[string]any{}, 404)
+	api("PUT", path(agent)+"/draft", map[string]any{"expected_revision": agent.Revision, "document": map[string]any{"assets": []any{}}}, 400)
 	config := func(version string) string {
 		c := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Skills: []catalog.SkillRef{{ID: s1.ID, Version: version}, {ID: s2.ID, Version: "v1"}}, Tools: []string{"read_file", "run_code"}}
 		c.Context.MaxInputTokens = 24000
@@ -172,7 +179,7 @@ func exerciseCatalog(t *testing.T, blobs storage.BlobStore, prefix string) {
 		t.Fatal("reverse references missing")
 	}
 	api("DELETE", path(s1)+"/versions/"+v11.ID, nil, 409)
-	if _, e = db.Store.DB.Exec("DELETE FROM definition_versions WHERE space_id=? AND id=?", space.ID, v11.ID); e == nil {
+	if _, e = db.Admin.DB.Exec("DELETE FROM skill_versions WHERE space_id=? AND id=?", space.ID, v11.ID); e == nil {
 		t.Fatal("referential integrity allowed deletion")
 	}
 	api("PUT", path(agent)+"/versions/"+a1.ID+"/archive", map[string]bool{"archived": true}, 409)
@@ -186,9 +193,24 @@ func exerciseCatalog(t *testing.T, blobs storage.BlobStore, prefix string) {
 	publish(copied, "v1")
 	// Removing a draft resource preserves historical published bytes.
 	asset := s1.Document.Assets[0]
+	var draftContent, versionContent, uri string
+	if e := db.Admin.DB.QueryRow(`SELECT d.content_id,v.content_id,o.tos_uri
+		FROM skill_drafts d JOIN skill_versions v ON v.space_id=d.space_id AND v.definition_id=d.definition_id
+		JOIN content_objects o ON o.space_id=v.space_id AND o.id=v.content_id WHERE d.space_id=? AND v.id=?`, space.ID, v12.ID).Scan(&draftContent, &versionContent, &uri); e != nil {
+		t.Fatal(e)
+	}
+	if draftContent != v12.ContentID || versionContent != v12.ContentID || !strings.HasPrefix(uri, "tos://") || !asset.Package || asset.ObjectID != v12.ContentID {
+		t.Fatal("Skill content was not stored as one referenced TOS package", draftContent, versionContent, uri)
+	}
+	var draftRefs, versionAssetRefs int
+	if e := db.Admin.DB.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM definition_drafts WHERE space_id=? AND definition_id=?),
+		(SELECT COUNT(*) FROM definition_versions WHERE space_id=? AND id=?)`, space.ID, s1.ID, space.ID, v12.ID).Scan(&draftRefs, &versionAssetRefs); e != nil || draftRefs != 0 || versionAssetRefs != 0 {
+		t.Fatal("unexpected Skill package reference count", draftRefs, versionAssetRefs, e)
+	}
 	s1.Document.Assets = []catalog.Asset{}
 	s1 = save(s1, s1.Document.Markdown, "")
-	if got := api("GET", root+"/payloads/"+asset.ObjectID, nil, 200).Body.String(); got != "original template" {
+	if got := api("GET", root+"/payloads/"+asset.ObjectID+"?path="+url.QueryEscape(asset.Path), nil, 200).Body.String(); got != "original template" {
 		t.Fatal("old resource changed")
 	}
 	api("GET", "/spaces/"+other.ID+"/skills/"+s1.ID+"/draft", nil, 404)
@@ -348,13 +370,19 @@ func TestD01UpgradeCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	j := &journal.Journal{Repo: db.Store}
-	session, run := uuid.NewString(), uuid.NewString()
-	event := proposed(user.ID, "run.created", run, struct{}{})
-	event.Refs = []storage.Ref{{Role: "payload", ObjectID: o.ID, SHA256: o.SHA256}}
-	before, err := j.Append(ctx, user.ID, appendRequest(space.ID, session, proposed(user.ID, "session.created", "", journal.SessionData{}), event))
-	if err != nil {
-		t.Fatal(err)
+	session, runID, eventID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for _, seed := range []struct {
+		sql  string
+		args []any
+	}{
+		{"INSERT INTO sessions(space_id,id,actor_id,last_sequence) VALUES(?,?,?,1)", []any{space.ID, session, user.ID}},
+		{"INSERT INTO runs(space_id,session_id,id,actor_id,status,source_event_id,applied_sequence) VALUES(?,?,?,?,'queued',?,1)", []any{space.ID, session, runID, user.ID, eventID}},
+		{"INSERT INTO runtime_events(space_id,session_id,event_id,sequence,run_id,event_type,schema_version,actor_kind,actor_id,occurred_at,data,event_digest) VALUES(?,?,?,1,?,'run.created',1,'user',?,UTC_TIMESTAMP(6),'{}',?)", []any{space.ID, session, eventID, runID, user.ID, journal.Digest("legacy")}},
+		{"INSERT INTO event_objects(space_id,event_id,object_id,role,ordinal) VALUES(?,?,?,'payload',0)", []any{space.ID, eventID, o.ID}},
+	} {
+		if _, err := db.Admin.DB.ExecContext(ctx, seed.sql, seed.args...); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for i := 0; i < 2; i++ {
 		if err = db.Admin.Migrate(ctx); err != nil {
@@ -364,20 +392,110 @@ func TestD01UpgradeCompatibility(t *testing.T) {
 	if err = db.Store.CheckSchema(ctx); err != nil {
 		t.Fatal(err)
 	}
-	after, err := j.Read(ctx, user.ID, space.ID, session, 0, nil, 100)
+	for _, table := range []string{"sessions", "runs"} {
+		var count int
+		if err := db.Admin.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil || count != 0 {
+			t.Fatal("legacy runtime data was retained", table, count, err)
+		}
+	}
+	if _, err := content.Repo.Object(ctx, user.ID, space.ID, o.ID, true); !errors.Is(err, identity.ErrNotFound) {
+		t.Fatal("old payload still exposed after runtime reset", err)
+	}
+	stored, err := blobs.Open(ctx, o.Key, o.VersionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !catalog.Equal(before, after.Events) {
-		t.Fatal("D01 journal changed during migration")
-	}
-	_, f, err := content.Read(ctx, user.ID, space.ID, o.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	raw, _ := io.ReadAll(f)
+	defer stored.Close()
+	raw, _ := io.ReadAll(stored)
 	if string(raw) != "D01 original payload" {
-		t.Fatal("D01 payload changed")
+		t.Fatal("runtime reset deleted the old TOS object")
+	}
+}
+
+func TestSkillPackageUpgrade(t *testing.T) {
+	if os.Getenv("MASS_TEST_ADMIN_DSN") == "" {
+		t.Skip("requires isolated MariaDB")
+	}
+	ctx := context.Background()
+	db, err := testdb.NewVersion(ctx, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cipher, _ := secrets.New(bytes.Repeat([]byte{3}, 32))
+	auth, _ := identity.New(db.Store, cipher, time.Hour, []byte("skill-package-upgrade"))
+	actor, err := auth.CreateUser(ctx, "alice", "correct-password-alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	space, err := auth.CreateSpace(ctx, actor.ID, "upgrade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := &resource.ContentStore{Repo: db.Store, Blobs: fakes.NewBlobs(), Prefix: "test/skills/", MaxBytes: 8 << 20}
+	svc := &catalog.Service{Repo: db.Store, Content: content}
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := db.Admin.DB.ExecContext(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed := func(kind, name string, doc catalog.Document) (string, string) {
+		t.Helper()
+		id, version := uuid.NewString(), uuid.NewString()
+		bundle, _ := json.Marshal(catalog.Bundle{FormatVersion: 1, DefinitionID: id, Kind: kind, Name: name, Revision: 1, Document: doc})
+		o, err := content.Put(ctx, actor.ID, space.ID, uuid.NewString(), "definition.bundle", "application/json", bytes.NewReader(bundle))
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(doc)
+		exec("INSERT INTO definitions(space_id,id,kind,name) VALUES(?,?,?,?)", space.ID, id, kind, name)
+		exec("INSERT INTO definition_drafts(space_id,definition_id,document) VALUES(?,?,?)", space.ID, id, raw)
+		exec(`INSERT INTO definition_versions(space_id,id,definition_id,label,debug,content_id,sha256,bundle,created_at)
+			VALUES(?,?,?,'v1',FALSE,?,?,?,UTC_TIMESTAMP(6))`, space.ID, version, id, o.ID, o.SHA256, bundle)
+		exec("INSERT INTO definition_version_objects(space_id,version_id,path,object_id) VALUES(?,?,?,?)", space.ID, version, "bundle.json", o.ID)
+		return id, version
+	}
+	file, err := content.Put(ctx, actor.ID, space.ID, uuid.NewString(), "definition.asset", "text/plain", strings.NewReader("legacy bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := catalog.Asset{Path: "assets/sample.txt", ObjectID: file.ID, SHA256: file.SHA256, Size: file.Size, MediaType: file.MediaType}
+	skill, skillVersion := seed("skill", "legacy", catalog.Document{Markdown: "# Legacy Skill", Assets: []catalog.Asset{asset}})
+	agent, agentVersion := seed("agent", "legacy-agent", catalog.Document{Markdown: "# Legacy Agent", Assets: []catalog.Asset{asset}})
+	exec("INSERT INTO definition_draft_objects(space_id,definition_id,path,object_id) VALUES(?,?,?,?)", space.ID, skill, asset.Path, file.ID)
+	exec("INSERT INTO definition_version_objects(space_id,version_id,path,object_id) VALUES(?,?,?,?)", space.ID, skillVersion, asset.Path, file.ID)
+	exec("INSERT INTO definition_draft_objects(space_id,definition_id,path,object_id) VALUES(?,?,?,?)", space.ID, agent, asset.Path, file.ID)
+	exec("INSERT INTO definition_version_objects(space_id,version_id,path,object_id) VALUES(?,?,?,?)", space.ID, agentVersion, asset.Path, file.ID)
+	exec("INSERT INTO definition_dependencies(space_id,version_id,ordinal,skill_id,skill_version_id) VALUES(?,?,0,?,?)", space.ID, agentVersion, skill, skillVersion)
+	exec("UPDATE definitions SET default_version_id=? WHERE space_id=? AND id=?", agentVersion, space.ID, agent)
+	session := uuid.NewString()
+	exec("INSERT INTO sessions(space_id,id,actor_id,definition_id,version_id) VALUES(?,?,?,?,?)", space.ID, session, actor.ID, agent, agentVersion)
+
+	if err = db.Admin.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	items, err := db.Store.CatalogList(ctx, actor.ID, space.ID, "skill", identity.Query{Limit: 10})
+	if err != nil || len(items) != 0 {
+		t.Fatal("legacy Skills were retained", items, err)
+	}
+	if _, err = content.Repo.Object(ctx, actor.ID, space.ID, file.ID, true); !errors.Is(err, identity.ErrNotFound) {
+		t.Fatal("legacy asset still has a catalog reference", err)
+	}
+	draft, err := svc.Draft(ctx, actor.ID, space.ID, "agent", agent)
+	if err != nil || draft.DefaultVersionID != agentVersion || draft.Document.Markdown != "# Legacy Agent" || draft.Document.Assets != nil {
+		t.Fatal("legacy Agent draft or default changed", draft, err)
+	}
+	v, err := svc.Version(ctx, actor.ID, space.ID, "agent", agent, agentVersion)
+	if err != nil || v.Bundle.Document.Markdown != "# Legacy Agent" || v.Bundle.Document.Assets != nil {
+		t.Fatal("legacy Agent version changed", v, err)
+	}
+	var sessions int
+	if err := db.Admin.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM sessions WHERE space_id=? AND id=?", space.ID, session).Scan(&sessions); err != nil || sessions != 0 {
+		t.Fatal("legacy session survived the schema 13 reset", sessions, err)
+	}
+	newSkill, err := svc.Create(ctx, actor.ID, space.ID, "skill", "legacy")
+	if err != nil || newSkill.ID == skill || newSkill.ContentID == "" {
+		t.Fatal("could not create a fresh Skill under the old name", newSkill, err)
 	}
 }

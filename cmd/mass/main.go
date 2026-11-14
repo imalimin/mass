@@ -36,7 +36,7 @@ func main() {
 
 func run(ctx context.Context, args []string, out, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: mass <serve|migrate|rebuild-views|restore-storage|user create|member add|member remove|check-config|version|build-info> [--config mass.yaml]")
+		return errors.New("usage: mass <serve|migrate|restore-storage|user create|member add|member remove|check-config|version|build-info> [--config mass.yaml]")
 	}
 	if args[0] == "build-info" {
 		if len(args) != 1 {
@@ -64,8 +64,8 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) error {
 		args = append([]string{"member-" + args[1]}, args[2:]...)
 	}
 	member := args[0] == "member-add" || args[0] == "member-remove"
-	if args[0] != "serve" && args[0] != "check-config" && args[0] != "migrate" && args[0] != "rebuild-views" && args[0] != "restore-storage" && args[0] != "user-create" && !member {
-		return errors.New("unknown command; available: serve, migrate, rebuild-views, restore-storage, user create, member add/remove, check-config, version, build-info")
+	if args[0] != "serve" && args[0] != "check-config" && args[0] != "migrate" && args[0] != "restore-storage" && args[0] != "user-create" && !member {
+		return errors.New("unknown command; available: serve, migrate, restore-storage, user create, member add/remove, check-config, version, build-info")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -108,13 +108,6 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) error {
 	}
 	if args[0] == "check-config" {
 		_, err = fmt.Fprintln(out, "configuration valid")
-		return err
-	}
-	if args[0] == "rebuild-views" {
-		if err := bootstrap.RebuildViews(ctx, c); err != nil {
-			return err
-		}
-		_, err = fmt.Fprintln(out, "views rebuilt from journal")
 		return err
 	}
 	if args[0] == "restore-storage" {

@@ -40,8 +40,8 @@ MVP 不增加 Redis、独立消息队列、向量数据库或独立认证服务�
 | M04—M06 运行 | database/sql、context、sync、time | 幂等、事务认领、并发与取消 |
 | M07 上下文 | SessionJournal、ContextPlanner/Projector + Eino schema/model | 固定日志边界、确定性投影、摘要与前缀稳定 |
 | M08 模型 | github.com/cloudwego/eino；对应 eino-ext 模型组件 | 统一模型接口、工具定义和流式结果 |
-| M08 Trace 捕获 | Eino callbacks + 自定义 http.RoundTripper | 语义事件和实际 HTTP 载荷分别记录 |
-| M10 日志与 Trace | MariaDB JSON、TOS、net/http | 会话原始事件、内容引用、AG-UI 事件投影与 SSE 续传 |
+| M08 Trace | Eino 模型适配与会话 Trace | 记录调用状态、用量、耗时和结构化回复 |
+| M10 日志与 Trace | MariaDB JSON、TOS、net/http | 会话业务事实、TOS Trace、内存 AG-UI 投影与 SSE 续传 |
 | M10/M12 交互协议 | AG-UI；Go SDK github.com/ag-ui-protocol/ag-ui/sdks/community/go；前端 @ag-ui/core | 标准事件类型/校验、服务端序列化、前端协议消费 |
 | M11 对象存储 | github.com/volcengine/ve-tos-golang-sdk/v2/tos | TOS 上传、读取、元信息与分片 |
 | M12 前端 | React、TypeScript、Vite、React Router、TanStack Query | frontend 工程中的页面、路由与查询 |
@@ -55,19 +55,19 @@ MVP 不增加 Redis、独立消息队列、向量数据库或独立认证服务�
 
 ### T00.3 MariaDB 数据与约束
 
-采用 InnoDB、utf8mb4、UTC 时间和明确的事务边界；ID 与幂等键用二进制或大小写敏感字段。SQL 占位符为 `?`，通过 database/sql 传参。JSON 字段存结构化查询数据，原始请求/响应字节存 TOS；MariaDB JSON 是带校验的文本类型，不依赖二进制 JSON 存储或其索引行为。[MariaDB JSON 文档](https://mariadb.com/docs/server/reference/data-types/string-data-types/json)
+采用 InnoDB、utf8mb4、UTC 时间和明确的事务边界；ID 与幂等键用二进制或大小写敏感字段。SQL 占位符为 `?`，通过 database/sql 传参。JSON 字段存结构化查询数据，完整回复与工作区等大对象存 TOS；MariaDB JSON 是带校验的文本类型，不依赖二进制 JSON 存储或其索引行为。[MariaDB JSON 文档](https://mariadb.com/docs/server/reference/data-types/string-data-types/json)
 
 | 数据对象 | 关键内容和约束 |
 | --- | --- |
 | users / auth_sessions | username、password_hash；会话令牌摘要、到期时间 |
 | spaces / space_members | 空间、成员归属、is_owner；不引入细粒度权限表 |
-| definitions / definition_drafts / definition_versions | Agent/Skill 共用结构，kind 区分；草稿 revision、不可变发布版本/调试快照、默认指针 |
-| definition_dependencies | Agent 发布版本/调试快照到准确 SkillVersion、显示版本号、摘要和顺序 |
-| definition_draft_objects / definition_version_objects | 分别保存草稿/历史版本的同空间 ready 内容引用 |
+| definitions / definition_drafts / definition_versions | 定义身份由 Agent 和 Skill 共享；Agent 草稿、发布版本和调试快照使用后两表 |
+| skill_drafts / skill_versions | Skill 草稿 revision 和发布版本各引用一个同空间 TOS ZIP |
+| definition_dependencies | Agent 发布版本或调试快照绑定到确切的 Skill 发布版本，保存绑定顺序 |
 | model_configs / credentials | Eino 组件类型、实际模型配置、加密供应商凭证 |
 | sessions | 空间归属、last_sequence、latest_workspace_snapshot_id、workspace_error；固定定义来自 session.created；本地目录位置由服务生成 |
-| runtime_events / event_objects | Session 内追加日志、事件格式版本、因果关系、有序内容对象关联 |
-| agui_streams / agui_events | 每个 Run 固定协议/映射版本、日志处理检查点、独立 ui_sequence、有序 AG-UI JSON；可重建的传输视图 |
+| 业务表与幂等记录 | 会话、消息、Run、上下文投影、计划、产物和快照分别持久化 |
+| 会话 trace.jsonl | 每个会话一个 TOS 对象，包含终态 Run 的模型与工具分组及终态 |
 | messages / runs / run_snapshots | 从日志同步维护的消息、运行状态及快照视图，保存来源事件位置 |
 | context_summaries / context_projections | 摘要来源、投影输入边界、策略/渲染版本、epoch、Manifest 与投影对象引用 |
 | session_active_runs | 每个 Session 唯一的活跃 Run 占用记录 |
@@ -92,14 +92,6 @@ CREATE TABLE session_active_runs (
       REFERENCES runs(space_id, id)
 ) ENGINE=InnoDB;
 
-CREATE UNIQUE INDEX runtime_events_session_sequence
-  ON runtime_events(space_id, session_id, sequence);
-CREATE UNIQUE INDEX runtime_events_event_id
-  ON runtime_events(space_id, event_id);
-CREATE INDEX runtime_events_run_sequence
-  ON runtime_events(space_id, run_id, sequence);
-CREATE UNIQUE INDEX request_idempotency
-  ON idempotency_keys(space_id, actor_id, operation, idempotency_key);
 ```
 
 版本及依赖、会话、对象元数据采用包含 space_id 的联合外键，避免跨空间关联；被引用版本使用删除限制。状态更新带旧状态条件，草稿使用 revision。版本内容不可修改，默认指针和归档状态单独可变。
@@ -225,8 +217,8 @@ WatchAccess 先登记取消订阅再查询权限，消除订阅和撤权的检�
 依赖：YAML v4、JSON Schema、database/sql、TOS ContentStore。内容结构如下：
 
 ```text
-agent: AGENTS.md + agent.yaml + assets/
-skill: SKILL.md + assets/
+agent: AGENTS.md + agent.yaml
+skill: SKILL.md + 用户自定义文件和目录
 ```
 
 配置示例中的限额只是演示值，实际值在平台策略内校验：
@@ -291,11 +283,15 @@ func (s *CatalogService) PublishAgent(ctx context.Context, in PublishInput) (Ver
 
 定义名称为 1—64 字节的小写字母/数字/连字符标识，首字符为字母。agent.yaml 的 model 和 skills[].id 分别使用本空间模型配置 ID 与 Skill ID，version 是准确显示版本；name 必须与定义名称一致。严格拒绝未知字段、重复键、多 YAML 文档、alias/anchor、合并键、非法类型、未知工具、重复 Skill/工具及越界限额。草稿允许空正文和空配置便于新建；非空配置保存时校验结构，发布和调试快照进一步要求非空正文、完整配置、已启用的模型和未归档的准确依赖。输入/输出预留总量不得超过模型上下文容量，输出预留不超过模型上限。平台上限为 1000 步、3600 秒；这里是配置校验，D04 已接入运行限额，D05 继续扩展工具。
 
-Document 包含 Markdown 原文、配置原文和资源清单；正文上限 256 KiB、配置 64 KiB、资源最多 100 个、单资源 8 MiB。资源路径只允许 assets/ 下的规范相对路径，拒绝穿越、绝对路径、大小写冲突及文件/目录前缀冲突。JSON 上传接口使用 data_base64，HTTP 请求上限 12 MiB；资源上传自动推进草稿 revision。上传先经 ContentStore 写 TOS 并验证 ready，再在普通管理事务中提交草稿与引用；失败的未引用对象不能下载。草稿移除资源只移除当前引用，历史版本引用仍有效。
+Agent 文档包含 Markdown 和配置原文，正文上限 256 KiB、配置上限 64 KiB。Skill 资源最多 100 个、单资源上限 8 MiB，资源和目录使用相对于根目录的规范路径。Skill 根目录的 SKILL.md 和 bundle.json 分别保留给正文和 ZIP 元数据。路径校验拒绝穿越、绝对路径、大小写冲突及文件/目录前缀冲突。JSON 上传接口使用 data_base64，HTTP 请求上限 12 MiB。上传写入新 ZIP 后提交草稿引用并推进 revision，已发布版本仍引用原 ZIP。
 
 发布准备阶段在授权事务中读取草稿、解析依赖和当前模型非秘密有效配置；随后在事务外将完整 Bundle 保存为 TOS 不可变对象，内容含原文、资源摘要、有序依赖 ID/label/hash 和非秘密模型配置，不含密钥。最终事务再次检查成员、归档状态、草稿 revision、模型/依赖和 Bundle 摘要，再原子写入版本、依赖、对象引用、审计及 Agent 首次默认指针。准备后模型或草稿变化返回 draft_conflict，不发布混合内容；唯一版本冲突返回 version_conflict。网络写入不占用 SQL 事务，SQL 回滚保留不可见孤立对象，无 GC。
 
 调试快照走相同准备/发布链，读取版本时验证 TOS 完整摘要并在远端读取后复核成员。默认版本切换只改指针；当前默认版本必须先切换后才能归档。归档阻止新的发布/依赖选择，已发布依赖与历史内容可继续读取。DELETE 版本不会物理删除；被引用返回 version_referenced，其他返回 invalid_definition，生命周期通过归档管理。复制定义创建独立新草稿，重写 Agent 配置 name，资源复用不可变对象。资源下载复用 D01 payloads 鉴权读取。
+
+Skill 草稿以文件目录和 Monaco 编辑器展示 SKILL.md 和用户添加的文件。UTF-8 资源可按文件保存，切换文件保留未保存的文本。文件树由资源路径和显式创建的目录生成。每次保存将 SKILL.md、目录清单、资源字节和媒体类型写入一个新的 TOS ZIP，对象校验成功后以现有草稿 revision 原子切换引用。MariaDB 的 Skill 草稿和版本只保留业务元数据及一个对象引用，URI 和摘要由 content_objects 解析。发布直接固定草稿 ZIP，后续修改不会改变已发布内容。单文件下载、Skill 运行读取和备份恢复沿用对象授权与校验。ZIP 受现有对象大小上限约束。
+
+schema 11 从共享定义表删除旧 Skill 数据，新建 `skill_drafts` 和 `skill_versions`，重建 Agent 到 Skill 版本的依赖表。旧 Agent 版本仍能查看原绑定信息，创建新会话需要使用绑定有效的新版本。会话与日志保留。
 
 前端使用延迟加载的 Monaco 编辑器和只读差异视图；支持模型/Skill 准确版本选择、工具选择、Markdown 预览、上传/移除资源、发布、默认版本、归档、复制、反向引用和调试快照。409 保留本地内容，读取服务器草稿展示差异，仅在显式点击后载入服务器内容。Markdown 不执行原始 HTML、不显示外部图片，只开放 http/https 链接。run_code 选择项说明文件与网络权限范围。调试快照固定定义；D04 会话创建可选择该快照执行任务。
 
@@ -317,7 +313,7 @@ Run 固定模型 ID 和非秘密执行参数。每次实际调用重新检查当
 
 ## T04 M04 会话、消息与 Run
 
-依赖：database/sql、SessionJournal、ContentStore、crypto/sha256、context。会话与执行链路以 T10 的 runtime_events 为权威事实来源；messages、runs、run_snapshots 是与事件同事务更新的查询/调度视图，记录 applied_sequence 和 reducer_version，不允许脱离日志单独改变业务事实。Session 的游标、执行锁和心跳属于协调数据，不要求逐次转成模型输入或审计事件。
+依赖：database/sql、SessionJournal、ContentStore、crypto/sha256、context。会话与执行链路直接使用 messages、runs、workspace_snapshots 等业务表。Session 的游标、执行锁和心跳属于协调数据，不要求逐次转成模型输入或审计事件。
 
 创建 Session 时追加 session.created，固定 Agent/Skill 准确版本、指令原文对象、有序 Skill 清单、平台指令内容及版本；不能只保存可变配置 ID。Agent/Skill 发布库负责编辑与版本管理，日志用不可变引用复用内容，投影通过日志和它引用的对象读取定义。
 
@@ -382,7 +378,7 @@ Supervisor 以服务生命周期创建有界 Run context，每 500ms 在同一�
 
 Finisher 的系统身份是一个绑定已认领 Run、主体、空间/Session 和 owner 的窄 Repository 能力，仅允许收尾/核实事实及该 Run 的归档/Manifest；调用方伪造 actor.kind=system 不能绕过鉴权。成功提交再次检查成员资格和取消标记；竞态发生时复用相同归档改为失败/取消收尾。收尾计划和稳定 UUID/时间写入数据库，以便核实未知提交；SQL 失败保留占用并停止接单，快照上传失败则提交明确失败和文件阻塞状态。
 
-启动取得单实例锁后，将遗留 running 认领为 interrupted 收尾，未结束的模型 attempt 记失败、工具操作记 operation.reconciled/unknown；丢弃遗留脏目录，保留最近已提交快照指针，不重做动作。queued 继续正常调度。锁不提供分布式恰好一次或外部副作用 fencing。
+启动取得单实例锁后，将遗留 running 认领为 interrupted 收尾，未结束的模型 attempt 记失败，进程内工具状态随进程丢弃；清理遗留工作目录，保留最近已提交快照指针，不重做动作。queued 继续正常调度。锁不提供分布式恰好一次或外部副作用 fencing。
 
 ## T06 Runtime 子模块与 M06 执行循环
 
@@ -403,7 +399,7 @@ Finisher 的系统身份是一个绑定已认领 Run、主体、空间/Session �
 | runtime/tool/dispatcher | M09 | 已完成响应中的 ToolCall → 已记录的工具结果；授权、参数校验、限额、超时、调用及结果提交 | 不把 TOOL_CALL_END 当作执行结果、不直接写 SQL |
 | runtime/tool/builtin | M09 | 已校验参数与受限资源接口 → PreparedToolResult；T09 的 14 个内置工具具体实现 | 不越过 resource 直接访问任意宿主文件、不自行提交 tool 终结事件、不控制执行循环 |
 
-包内再按实现职责拆文件：supervisor 分为 supervise/cancel/recover，planner 分为 prepare/epoch/summary，projector 分为 history/units/render/manifest，modelgateway 分为 attempt/stream/retry/usage，dispatcher 分为 authorize/validate/execute/commit；文件共享该包的内部类型，不再为每个函数增加子包。供应商帧解码与实际 HTTP 捕获仍属于 adapter/eino。
+包内再按实现职责拆文件：supervisor 分为 supervise/cancel/recover，planner 分为 prepare/epoch/summary，projector 分为 history/units/render/manifest，modelgateway 分为 attempt/stream/retry/usage，dispatcher 分为 authorize/validate/execute/commit；文件共享该包的内部类型，不再为每个函数增加子包。供应商帧解码属于 adapter/eino。
 
 拆分仍是同一个 Go 进程内的方法调用，不引入 RPC、消息队列或插件系统。`scheduler` 的并发名额与 `control` 的 Run 调用/用量预算是两类资源，不能用同一个计数器代替。
 
@@ -415,11 +411,11 @@ Finisher 的系统身份是一个绑定已认领 Run、主体、空间/Session �
 | app | 接受会话/Run/取消请求、权限校验与查询编排；M04 通过 Journal 提交事件，不直接调用 Executor |
 | journal | SessionJournal 的可信追加与读取服务、事件校验及纯 reducer；状态、消息、用量和快照引用进入统一事务；本地文件动作不属于 SQL 事务，供 app/runtime 共用 |
 | resource | 内容完整性、版本资源读取、会话真实目录管理、文件操作与快照准备；通过 adapter/workspace 执行文件系统动作，返回内容摘要与实际效果，不宣称 SQL 回滚可撤销文件 |
-| adapter/mariadb、adapter/tos、adapter/workspace、adapter/eino | 分别实现事务/查询、对象访问、会话文件与快照、Eino 模型/原文捕获；供应商配置与框架类型限定在模型适配边界 |
-| transport/agui、transport/http | Journal 到 AG-UI 的持久化派生视图，以及 API/SSE 传输；不成为执行器、模型网关或投影器的依赖 |
+| adapter/mariadb、adapter/tos、adapter/workspace、adapter/eino | 分别实现事务/查询、对象访问、会话文件与快照、Eino 模型与流式解析；供应商配置与框架类型限定在模型适配边界 |
+| transport/agui、transport/http | 业务事实和实时模型文本到 AG-UI 的内存投影，以及 API/SSE 传输；不成为执行器、模型网关或投影器的依赖 |
 | bootstrap | 构造具体组件并注入依赖、注册内置 Handler、启动/关闭后台任务；不包含业务状态转换 |
 
-`domain` 按 run/event/context/model/tool/content 的概念拆文件或小包，禁止变成存放所有业务逻辑的公共工具包。Trace 查询和 usage 汇总复用 journal 的事实/视图；不再额外建立可写的 runtime/trace 历史库。
+`domain` 按 run/event/context/model/tool/content 的概念拆文件或小包，禁止变成存放所有业务逻辑的公共工具包。用量汇总复用业务事实。诊断 Trace 由会话 JSONL 提供。
 
 ### T06.2 依赖方向与接口所有权
 
@@ -451,7 +447,7 @@ bootstrap → 上述具体实现及 adapter/*，完成组装
 | dispatcher | ToolResolver（Registry）、RunControl、授权接口、ToolOutcomeWriter（Journal） | 终结事件与业务视图同事务；本地/网络动作先发生，实际效果及结果入日志，下一轮从日志读取 |
 | builtin | ContentReader、SessionWorkspace、SkillResourceReader（resource）；CodeRunner（JS adapter）、NetworkClient、受限 I/O 记录接口（Dispatcher 注入） | 只获得当前空间/Session/版本范围能力，报告实际效果与结果，不自行提交终结事件 |
 
-Eino 的 `schema.Message`/`ToolInfo` 转换由 `adapter/eino` 负责；domain 的有序内容块和供应商扩展字段必须能无损保留后续对话所需信息，不能以“通用 DTO”为由删除协议字段。网关面向领域 ModelTransport；T08 的 Eino 流示例属于该适配边界，SDK 的真实传输仍统一捕获。
+Eino 的 `schema.Message`/`ToolInfo` 转换由 `adapter/eino` 负责；domain 的有序内容块和供应商扩展字段必须能无损保留后续对话所需信息，不能以“通用 DTO”为由删除协议字段。网关面向领域 ModelTransport；T08 的 Eino 流示例属于该适配边界，模型传输在适配层解析。
 
 Planner 可调用 Gateway，Gateway 永远不依赖 Planner。摘要使用显式 `purpose=summary` 的固定来源输入和独立投影，关闭工具；摘要的输入预算不足则按版本化策略分段或失败，不递归触发另一轮 Planner.Prepare。上下文容量计算属于 M07；Run 的累计额度检查属于 control，摘要和重试均计入同一 Run。
 
@@ -510,7 +506,7 @@ Supervisor 区分 cancelled、deadline、模型失败、持久化失败及 panic
 
 scheduler 取得并发名额，认领失败自行释放；认领成功后 Supervisor 接收 Run 与名额并承担一次性释放责任。交接失败由 scheduler 调用 Supervisor 的启动失败收尾入口；认领成功后不重新入队重放。取消后必须等待执行栈和子调用退出才能释放执行名额；会话占用仅随终态事务释放。收尾持久化失败时可以释放已停止执行的内存名额，但 Run/会话仍保持待恢复状态，停止继续认领并暴露运行子系统异常，不能假报结束。
 
-Run context 由 Supervisor 从服务生命周期派生；模型流、摘要和工具获得其子 context。scheduler/AG-UI 投影是服务级后台任务，Run 内 goroutine 由启动它的组件负责等待退出；不得在取消后遗留未跟踪的工具工作。无法停止的动作等待进程退出并在恢复时标记中断。
+Run context 由 Supervisor 从服务生命周期派生；模型流、摘要和工具获得其子 context。scheduler 和 Trace 归档是服务级后台任务，Run 内 goroutine 由启动它的组件负责等待退出；不得在取消后遗留未跟踪的工具工作。无法停止的动作等待进程退出并在恢复时标记中断。
 
 工具业务错误可以形成结构化工具结果继续交互；访问越权、预算耗尽或记录失败按策略终止。所有 call_id 必须有结果或按 T07 明确转换为中断说明。模型参数先保存再校验；长度截断不能成为正常完整回复；副作用未知的工具不自动重试。
 
@@ -566,7 +562,7 @@ ContextPlanner 保存上述内容并追加 context.projected
 | model.response.completed，purpose=task | 采用完整结构化响应及必要供应商协议字段，工具调用按原顺序保留 |
 | tool.execution.completed / failed | 依据 tool_call_id 配对；可恢复业务错误形成工具结果 |
 | context.summary.created | 仅在被本次投影选中时替代指定完整历史单元，原文不删除 |
-| model.response.chunk.recorded / attempt.failed | 原文用于审计；流式片段和失败尝试不拼成成功助手消息 |
+| model.response.delta / model.attempt.failed | 记录可见文本增量和失败尝试，失败流在界面标为未完成 |
 | purpose=summary 的模型响应 | 仅通过摘要记录使用，不作为用户任务回复 |
 | tool.execution.input_resolved / tool.io.recorded / workspace.snapshot.created / workspace.snapshot.failed / plan.updated / artifact.published | 审计/业务事实；对应工具结果已经进入对话，不重复加入，也不读取当前计划视图 |
 | workspace.restored | 正常恢复只审计；若从中断/快照失败回退到旧快照，追加一次带事件来源的文件状态说明，标明哪些 Run 的未保存改动不保证存在，不能修改旧工具事实或旧投影 |
@@ -592,9 +588,9 @@ context_projections 的核心字段如下；大清单/消息体进入 TOS，记�
 | projected_messages_ref、tools_schema_ref、content_digest | 已保存的逻辑输入和确定性比较依据 |
 | token_estimate、counter_version、prefix_change_reason | 容量估计、计数方法和前缀变化解释 |
 
-context.projected 自身序号晚于 through_sequence；实际 model.request.prepared 引用 projection_id 和确切请求体。为了审计，保留最终逻辑输入与实际请求，不能只依赖未来重新执行旧版本代码。内容缺失或损坏时明确标记不能完整重建；首版不设置历史过期策略。
+context.projected 自身序号晚于 through_sequence。model.attempt.started 关联对应的投影事件，固定逻辑输入可用于审计。内容缺失或损坏时明确标记不能完整重建。
 
-来源事件序号和 Run ID 存在 Manifest 中，默认不写进模型可见内容。摘要引用、模型配置、内容摘要等字段用于平台校验，不等于供应商缓存键，也不证明缓存命中。context_projections 是已执行投影的历史记录；页面查询索引可重建，但历史摘要和实际请求原文必须保留。
+来源事件序号和 Run ID 存在 Manifest 中，默认不写进模型可见内容。摘要引用、模型配置、内容摘要等字段用于平台校验，不等于供应商缓存键，也不证明缓存命中。context_projections 是已执行投影的历史记录；页面查询索引可重建，但历史摘要和固定投影应随会话保留。
 
 ### T07.4 容量与摘要阶段
 
@@ -644,7 +640,7 @@ MVP 先实现固定前缀、阶段压缩与真实命中观测；不把显式缓�
 
 第二项仅对两项统计齐全且口径一致的请求求和；额外报告统计覆盖率，按供应商/模型/用途分组，不混合不同字段口径。冷启动、正常追加、压缩切换和过期分组对比，零分母显示无数据。平台侧公共前缀长度只作为诊断估计，不能替代供应商 usage。
 
-检查界面提供原始事件 → 投影 Manifest → 实际请求的导航；展示选取/省略原因、epoch、前缀变化以及真实缓存数据。稳定性测试可以有确定通过标准，真实云缓存收益只能基于测量报告，不能伪造“每次必命中”的验收要求。
+检查界面提供原始事件与投影 Manifest 的导航；展示选取/省略原因、epoch、前缀变化以及真实缓存数据。稳定性测试可以有确定通过标准，真实云缓存收益只能基于测量报告，不能伪造“每次必命中”的验收要求。
 
 ### T07.7 D04 的最小投影实现范围
 
@@ -666,7 +662,7 @@ D06 使用 `stage-summary-v1` / `mass-context-v2` / parser 1，保留 `utf8-byte
 
 Projector 的不可变字节读取缓存每实例最多 128 项 / 8 MiB，单项最大 1 MiB；缓存只复用按空间、对象 ID 和 SHA 标识的原始字节，语义投影始终按水位、版本、配置及摘要引用重建，每次缓存读取重新检查当前授权。递归摘要校验最多 64 层，超限明确失败，不自动清理历史。原来的统一 20000 事件限制已由 T07.9 的分页与投影容量规则替换。
 
-检查 API `GET /api/v1/spaces/{space_id}/runs/{run_id}/contexts/{projection_id}` 返回固定投影、采用的源事件、摘要及实际请求引用；界面在 Trace 的 context.projected 下提供入口。来源事件及原始载荷继续走空间授权与下载校验。阶段前缀稳定只作平台诊断，D06 未据此声明供应商缓存命中；真实模型工具/摘要与缓存测量仍在 D07。
+检查 API `GET /api/v1/spaces/{space_id}/runs/{run_id}/contexts/{projection_id}` 返回固定投影、采用的源事件、摘要及已有的历史请求引用；界面在 Trace 的 context.projected 下提供入口。来源事件及原始载荷继续走空间授权与下载校验。阶段前缀稳定只作平台诊断，D06 未据此声明供应商缓存命中；真实模型工具/摘要与缓存测量仍在 D07。
 
 
 ### T07.9 长历史读取与故障收尾
@@ -726,19 +722,13 @@ func StreamWithTools(ctx context.Context, base model.ToolCallingChatModel,
 
 此片段假定外层已限制总输出容量，生产实现按界限聚合或外存；不能无限累积 chunks。`io.EOF` 只代表流结束，是否完整仍需检查 finish reason、工具 JSON、截断和供应商 usage。使用 Eino 对应版本的消息合并能力处理工具参数增量，不能逐片段当作完整工具调用执行。
 
-### T08.3 两层 Trace
+### T08.3 模型调用 Trace
 
-Eino callbacks 用于模型输入输出、错误、耗时等语义层记录，但不能当作供应商实际 HTTP 原文。实际 input/output 捕获通过注入组件 HTTPClient 的自定义 `http.RoundTripper` 完成，两者通过 Run/span/attempt 关联，写入同一 SessionJournal；回调不是第二套权威历史。[Eino callbacks 概述](https://www.cloudwego.io/docs/eino/overview/)
-
-请求在 Eino/供应商 SDK 完成序列化后由 Transport 捕获：限制容量、保存最终请求体至 TOS、提交引用及 model.request.prepared，之后才发送相同字节；认证头和签名查询参数不记录。拒绝不受支持的请求流，不默默跳过捕获。
-
-响应以包装的 Body 接收并按有界块写入 TOS，再把已保存的字节交给 Eino 解码；保留原始顺序、错误状态码和解码失败的原文。慢存储可产生有界背压，持久化失败立即取消模型请求。原文区块形成 model.response.chunk.recorded；解析后的语义增量可作为同一记录的派生展示，完整结构化响应在 model.response.completed 关联相应区块清单和 parser_version；流被提前 Close 或中断时标记 incomplete。
-
-最终请求体在 SDK 传输层捕获，不能由平台重新序列化并当作实际请求。元信息里去掉 API Key，载荷如果必须脱敏则明确标记，不能冒充逐字原文。
+模型请求通过 Eino 发送。HTTP 响应流在内存中按大小限制读取，保留调用期间检查 SSE 完整性和提取用量所需的字节。SessionJournal 记录模型尝试及结构化终态。可见文本增量供内存 AG-UI 投影，模型与工具的完整 Trace 在 Run 终结后持久化。
 
 ### T08.4 首个供应商与重试
 
-Eino 的选择不自动确定模型供应商。首个组件固定为 `github.com/cloudwego/eino-ext/components/model/ark` v0.1.71，实际 model/endpoint 由部署配置确认；若使用其他 Eino 组件，必须同样支持自定义 HTTP 捕获和完整协议数据。
+Eino 的选择不自动确定模型供应商。首个组件固定为 `github.com/cloudwego/eino-ext/components/model/ark` v0.1.71，实际 model/endpoint 由部署配置确认；若使用其他 Eino 组件，需要支持完整性检查和用量提取。
 
 Ark 组件配置可注入 HTTPClient 并设置 RetryTimes；初版将 RetryTimes 显式设为 0，网关负责有界重试和每次尝试记录。以下是已批准端点和凭证解析后的构造片段：
 
@@ -753,25 +743,25 @@ chatModel, err := ark.NewChatModel(ctx, &ark.ChatModelConfig{
 })
 ```
 
-`tracedHTTPClient` 同时负责批准端点/重定向检查和请求记录，必须传递调用 context；不因使用 SDK 而启用看不见的重试。非成功响应、流中断及部分输出后的失败分别记录，不拼接新尝试为同一个成功响应。[Ark 官方组件源码](https://github.com/cloudwego/eino-ext/blob/main/components/model/ark/chatmodel.go)
+`tracedHTTPClient` 同时负责端点与重定向检查，必须传递调用 context；不因使用 SDK 而启用看不见的重试。非成功响应、流中断及部分输出后的失败分别记录，不拼接新尝试为同一个成功响应。[Ark 官方组件源码](https://github.com/cloudwego/eino-ext/blob/main/components/model/ark/chatmodel.go)
 
-FakeChatModel 实现同一个 Eino 模型接口；本地假 HTTP 供应商验证真实 Eino 扩展组件的序列化和原文捕获。完整 Trace 验证通过前不将该组件标记为接入完成。
+FakeChatModel 实现同一个 Eino 模型接口；本地假 HTTP 供应商验证真实 Eino 扩展组件的序列化和流式解析。完整 Trace 验证通过前不将该组件标记为接入完成。
 
 ### T08.5 D04 Gateway 与真实传输
 
-生产采用 adapter/eino.ModelTransport，测试可注入实现 Eino ToolCallingChatModel 的 FakeChatModel，并明确 source。实际 SDK 配置 RetryTimes=0、120s HTTP 上限、禁止重定向；请求最多 4 MiB、响应最多 8 MiB。HTTP 捕获在正文消费前将实际请求/响应字节写入 TOS 并登记 wire 事实，不记录授权头或密钥；无法保存原文或语义事件立即停止消费。
+生产采用 adapter/eino.ModelTransport，测试可注入实现 Eino ToolCallingChatModel 的 FakeChatModel，并明确 source。实际 SDK 配置 RetryTimes=0、120s HTTP 上限、禁止重定向；请求最多 4 MiB、响应最多 8 MiB。调用期间在内存中检查 SSE 结束标记并提取用量，Trace 保存模型尝试、可见文本增量和结构化结果。
 
 Gateway 统一接受显式 purpose=task/summary 的 Prepared 输入，summary 必须禁用工具；D04 仅编排 task。每个 attempt 先记录固定 projection、message、purpose、来源及 credential revision。完整聚合必须包含 SSE 结束标记和合法 finish_reason；工具参数必须为完整 JSON、单次至多 16 个调用，部分输出/截断不升级为 completed。最终完整回复对象保存 Eino Native 字段、原始 usage 和准确 response_event_id；工具只接受该完成事件中的调用 ID、名称及参数摘要。用量缺失与明确 0 分开处理，缓存字段不可用时为未知。本阶段没有自动模型重试、摘要调用或缓存命中推断。
 
 ### T08.6 D07 实现进展
 
-每个新 Run 固定 `model_attempts`，由部署配置 `llm.max_attempts`（1—3，省略为 1）提供。SDK RetryTimes 仍显式为 0；平台仅在未输出文本、失败与用量结算已经持久化、状态为 HTTP 429/502/503/504 时，按 250ms/500ms 有界等待重试。每次尝试独立 attempt/message、retry_of、凭证 revision、原文和预算；重试复用同一固定投影。部分输出、协议错误、取消、存储失败不自动重试。Journal reducer 校验 retry_of 为同一 Run/投影/用途的失败尝试。
+每个新 Run 固定 `model_attempts`，由部署配置 `llm.max_attempts`（1—3，省略为 1）提供。SDK RetryTimes 仍显式为 0；平台仅在未输出文本、失败与用量结算已经持久化、状态为 HTTP 429/502/503/504 时，按 250ms/500ms 有界等待重试。每次尝试独立 attempt/message、retry_of、凭证 revision 和预算；重试复用同一固定投影。部分输出、协议错误、取消、存储失败不自动重试。Journal reducer 校验 retry_of 为同一 Run/投影/用途的失败尝试。
 
-每个完成/失败响应附 observation，保存耗时、首个模型文本片段延迟（无文本为 null）、HTTP 状态（尚无响应为 0）与组件版本。响应捕获对空非成功正文也保存状态；错误 JSON 可使解析提前停止，只保留已实际接收的字节前缀，不为填满原文而无界继续消费。失败流从已保存原文恢复实际 usage，null usage 帧不覆盖此前统计。请求及失败响应正文仍以同一 TOS/Journal 路径保存，不保存认证头。
+每个完成/失败响应附 observation，保存耗时、首个模型文本片段延迟（无文本为 null）、HTTP 状态（尚无响应为 0）与组件版本。空响应仍记录 HTTP 状态。失败流从调用期间已读到的帧提取用量，null usage 帧不覆盖此前统计。
 
 MeasureCache 单独统计 attempts、可用 cache_read 覆盖数、命中数及同口径 input/cache 配对数；零分母返回 null。缓存输入占比只使用配对完整的样本，未知不补 0。真实冒烟最多 8 次模型请求，报告按 task/summary 及 initial/append/history_compressed 分组保留实际 usage 与耗时；真实验证尚待授权执行，不能以单元统计测试或前缀比较代替云端命中证据。
 
-D07 回归发现 D06 的 SummaryAttempts 只留在内存、跨事件批次时丢失。现在该内部标记随 agui_streams 检查点持久化，HTTP/AG-UI State 不暴露内部字段，防止摘要片段成为任务助手输出；兼容读取旧状态 JSON。
+摘要尝试从已提交的 model.attempt.started 获取用途，内存检查点在投影批次间保留该标记。HTTP UI 状态不暴露此内部字段。
 
 ## T09 M09 内置工具、计算与产物交付
 
@@ -873,7 +863,7 @@ log({ count: rows.length });
 return { total, path: "summary.json" };
 ```
 
-执行顺序：持久化 tool.execution.started（原始代码/input）→ 保存 tool.execution.input_resolved（Session、工作目录逻辑标识、起始快照）→ 启动 VM → 每次宿主 I/O 先保存 prepared 意图，再操作、保存 completed/failed 的输入/结果和实际效果 → 保存工具终结结果。I/O 记录共享 operation_id，使用递增 io_sequence 和 phase，由 tool.io.recorded 表达；不另建日志库。读取文件/网络得到的数据保存不可变引用后才返回 VM，写入意图保存目标及内容引用。文件或请求已经发生而记录失败时停止代码，缺证据为 unknown，不自动重放。
+执行代码时由当前 Run 在内存中维护工具状态和结果，宿主 I/O 不创建单独的持久化记录。下一次模型调用复用已校验结果，Run 终结时将模型与工具分组追加到会话 Trace。进程退出时未归档的工具状态随进程丢弃。
 
 工具返回有界 JSON 值、日志及 I/O 引用，拒绝循环引用、函数、Promise、超深结构和不可表达数字。代码长度、文件/网络调用次数、读取/写入/返回总量、日志与耗时都计限额；CSV 和 Go 宿主 I/O 持续检查 context。代码异常、取消或序列化失败不撤销此前文件修改/外部请求，结果明确 none/committed/unknown 及已完成操作，Run 收尾仍保存工作目录快照。需要交付下载文件时使用 publish_artifact。
 
@@ -895,7 +885,7 @@ D05 延续三个 v1 工具的兼容参数，新增 range、分页及其余十一
 
 skill_binding_id 使用固定绑定的 SkillVersion ID，资源从该不可变版本清单解析；Run 事件不重复内联完整资源清单，读取时依据 session.created 的准确版本引用和摘要取得，避免大清单突破事件容量。附件上传先保存本 Session 元数据，再由 user.message.accepted 的准确清单与对象引用接受；上传成功本身不授予模型读取权。附件被接受后，原始字节可从历史消息下载，工具仅支持 UTF-8 text/JSON/CSV，并记录解析版本。
 
-run_code 使用同步函数体、单 VM/单 goroutine，与工具 context、全局代码并发名额及实际退出等待绑定。默认工具限额沿用 tools.code；每次 I/O 先保存脱敏意图，再执行，再保存结果，记录失败停止后续代码。关闭外部 source map，文件操作共享 FileService 校验；HTTP 不自动重试、最多 3 次重定向并逐次复核授权。代码异常保留已经确认的写入/请求；日志、返回值和完整性单独报告，不声称生产沙箱或硬内存隔离。
+run_code 使用同步函数体、单 VM/单 goroutine，与工具 context、全局代码并发名额及实际退出等待绑定。默认工具限额沿用 tools.code；宿主操作直接返回结果给 VM，在内存中累计 I/O 次数、字节数和副作用状态。关闭外部 source map，文件操作共享 FileService 校验；HTTP 不自动重试、最多 3 次重定向并逐次复核授权。代码异常保留已经确认的写入/请求；日志、返回值和完整性单独报告，不声称生产沙箱或硬内存隔离。
 
 计划变更与工具终结同事务，产物继续保存独立字节。Manifest 可选 runtime_state 保存该 Run 的计划/产物及其准确来源水位；水位采用最后一条相关业务事实，不因随后取消或收尾审计而变化，从而保持未知提交/快照重试的稳定对象摘要。旧 Manifest 仍按格式 1 恢复，跨会话复制只复制文件。
 
@@ -906,20 +896,19 @@ D05 新投影使用 utf8-byte-upper-bound-v2：工具计数只含发送给模型
 
 ## T10 M10 统一会话日志、Trace、用量与审计
 
-依赖：database/sql、MariaDB JSON、TOS ContentStore、net/http。SessionJournal 是会话和执行链路的唯一事实入口，Trace 是它的查询视图，不再另写一套 trace_events。Agent/Skill 草稿、身份及空间管理仍使用普通业务表与 audit_logs，MVP 不把整个系统改成事件溯源架构。
+SessionJournal 将运行所需的业务事实提交到 MariaDB。会话诊断 Trace 单独归档为 JSONL。Agent、Skill、身份和空间管理使用业务表与 audit_logs。
 
 ### T10.1 统一存储与事件契约
 
 | 结构 | 职责与约束 |
 | --- | --- |
 | sessions | 同空间会话标识、last_sequence 和协调状态；序号贯穿全部 Run |
-| runtime_events | event_id、space/session/run、sequence、event_type、schema_version、operation_id、causation_event_id、correlation_id、actor、occurred_at、recorded_at、data、event_digest；追加后不改写 |
-| content_objects | 不可变原文/结构化内容；object_id、空间、media_type、size、SHA-256、TOS key/version_id、存储状态 |
-| event_objects | event_id、object_id、role、ordinal；区分指令、请求体、响应块、工具结果、附件等用途及顺序 |
+| journal_appends | 批次幂等键、摘要和序号范围 |
+| content_objects | 不可变消息、投影、结构化回复、工具结果及快照内容；object_id、空间、media_type、size、SHA-256、TOS key/version_id、存储状态 |
 | context_projections / context_summaries | 由对应事件提交的不可变派生产物及来源清单；字段见 T07 |
 | runs / messages / run_snapshots | 事务内同步维护的状态和展示视图，保留源事件与 applied_sequence；不能成为另一套独立历史 |
 
-事件 data 只存结构化语义与非秘密索引；用户正文、工具结果、实际模型载荷统一通过事件对象引用访问。TOS 原始字节与解析后结构化对象分开保存并关联，不能用重序列化结果冒充原文。事件格式按 event_type + schema_version 演进，未知版本拒绝投影并明确诊断，不静默跳过。
+业务事实 data 保存结构化语义与索引。用户正文、工具结果和结构化模型回复通过授权的对象引用访问。事件格式按 event_type + schema_version 演进。
 
 事件示例（HTTP 中 sequence 为十进制字符串）：
 
@@ -945,7 +934,7 @@ D05 新投影使用 utf8-byte-upper-bound-v2：工具计数只含发送给模型
 }
 ```
 
-数据库 event_objects 是 content_refs 的关系存储，API 组装时返回数组。所有引用使用同空间联合外键；causation 指向本会话更早的事件，correlation 仅负责关联，不替代顺序或权限校验。模型原生 tool_call_id 只在相应模型调用范围内唯一，平台 operation_id 单独生成。
+历史 API 根据消息、快照、投影和产物中的引用组装 content_refs。模型原生 tool_call_id 只在相应模型调用范围内唯一，平台 operation_id 单独生成。
 
 | 事件类型 | 确认的事实及投影语义 |
 | --- | --- |
@@ -953,37 +942,36 @@ D05 新投影使用 utf8-byte-upper-bound-v2：工具计数只含发送给模型
 | user.message.accepted | 用户内容已接受并持久化，提供对话输入 |
 | run.created / run.started | 运行配置固定并排队 / 已被认领；不重复用户消息 |
 | context.projected | 固定边界的逻辑输入和 Manifest 已保存，提供审计关联 |
-| model.request.prepared | 最终请求原文已保存、准备发送；不能证明到达供应商 |
-| model.response.chunk.recorded | 已保存原始响应字节区块，带 attempt 和块序号；不当作完整消息 |
+| model.attempt.started | 关联固定投影、用途、来源和凭证修订号 |
 | model.response.completed | 协议完整、可解释的响应及结构化结果已保存；task 用于上下文，summary 用于摘要 |
-| model.attempt.failed | 非成功响应、截断、流/解析/保存失败等；保留已存区块和完整性状态 |
+| model.attempt.failed | 非成功响应、截断、流/解析/保存失败等，记录观测数据和可获得的用量 |
 | model.usage.reported | 供应商后续补充的用量及缓存统计，关联原 attempt 和统计版本；汇总按最新已确认统计替换，不能重复累加 |
-| tool.execution.started | 调用意图和参数已保存，即将执行；不能证明已产生副作用 |
-| tool.execution.input_resolved | run_code 的会话工作目录逻辑标识和起始快照已确认保存，属于工具原始输入，不单独作为对话消息 |
-| tool.io.recorded | 一次代码文件/网络 I/O 的 prepared/completed/failed 及原文引用、效果；tool 结果按需引用，不另当一条对话消息 |
+| tool.execution.started | 历史事件，保存工具调用意图 |
+| tool.execution.input_resolved | 历史事件，保存代码工具输入引用 |
+| tool.io.recorded | 历史事件，保存代码工具单次 I/O 状态 |
 | workspace.snapshot.created / workspace.restored | 目录快照及 URI 已入库 / 已从指定快照恢复；用于文件恢复与审计；异常回退的恢复说明按 T07 投影，不注入归档正文 |
 | workspace.snapshot.failed | 目录快照未确认保存，记录失败原因及最后可恢复快照 |
-| tool.execution.completed | 工具结果及允许的业务变更已确认保存，提供配对结果 |
+| tool.execution.completed | 历史事件，保存工具结果引用 |
 | plan.updated / artifact.published | 计划新版本 / 文件版本已登记为产物；与工具完成同事务，审计/UI 使用，不再重复进入模型输入 |
 | tool.execution.failed | 错误、拒绝、取消或未执行等已确认，保留 side_effect 和错误结果 |
 | context.summary.created | 摘要、准确来源事件及生成调用已保存，供明确选择后投影 |
 | run.cancel.requested / run.finished | 请求取消 / 实际终结；最终回复引用已有响应 |
-| operation.reconciled | 中断恢复时对遗留调用追加核实结论；未知保持 unknown，不追写假成功 |
+| operation.reconciled | 历史事件，保存中断核实结论 |
 | content.unavailable | 发现对象缺失或损坏，记录受影响引用；不修改历史事件 |
 
 事件类型、actor 和作用域由服务端可信执行路径赋值，外部文本不能直接成为可信事件。事件是否参与上下文由版本化投影器决定，不接受客户端提供 include_in_prompt 开关。purpose=task/summary、attempt_id、projection_id 等由模型事件 data 携带；Run/span 父子关系可用于 Trace 展示。
 
-plan.updated/artifact.published 与对应工具终结组成一个 Append 批次，批次使用稳定 append_key 和事件 ID；业务事件以 tool.execution.started 为因果来源并共享 operation_id，operation 的唯一终结约束仅作用于工具 completed/failed，不误将业务事件计为第二次完成。run_plans、artifacts 和 workspace_snapshots 索引均由可信 reducer 维护；工作目录由 SessionWorkspace 操作，不以数据库视图替代真实文件。
+plan.updated/artifact.published 是独立业务记录，使用来源模型响应作为因果事件并关联工具调用 ID。run_plans、artifacts 和 workspace_snapshots 索引由 reducer 维护。
 
 每个模型 attempt 只允许一个终结事实 completed 或 failed；同一 operation 的重复完成按幂等规则处理，不能选择两份响应同时进入上下文。协议完整性同时检查结束原因、工具参数、配对所需标识及必要状态。终结后追加的核实或用量补充是独立事实，不原地改写原事件。
 
-工具 side_effect 明确为 none、committed 或 unknown；failed 不等于没有副作用。本地文件/网络动作与 tool.execution.completed 不在共同事务中，已发生效果不会因日志失败回滚；目录快照单独记录持久状态。执行完成但记录前崩溃时，恢复追加 operation.reconciled；缺证据保持 unknown，不能依据只有 started 推断未执行，也不自动重放。
+工具结果的 side_effect 为 none、committed 或 unknown。工具结果供当前 Run 使用，并随 Trace 归档用于诊断。文件与网络动作发生后，丢弃进程内工具状态不会撤销已经产生的效果。目录快照单独记录持久状态。
 
-原始 HTTP 字节区块可以跨协议帧，解析器负责帧组装。大内容按有界区块写 TOS，成功后提交事件引用；尚未完成的 multipart 不能作为已可读区块。完成标识需全部已收到内容保存且协议完整；崩溃前未持久化尾部明确 incomplete。认证秘密不保存，必要脱敏记录规则和位置，不能声称脱敏后的内容为逐字原文。
+每次模型调用及其工具结果在内存中组成一条 `model_step`。重试共用 step 序号，并通过 `retry_of` 关联上次尝试。成功、失败或取消的 Run 终结后，追加各步骤和一条 `run_finished` 到会话 `trace.jsonl`，再覆盖同一个 TOS 对象。上传状态单独记录，失败时从完整本地文件重试。通过 `GET /api/v1/diagnostics` 按 Run 或快照 ID 分页读取。
 
 ### T10.2 追加、事务与恢复
 
-唯一写入口为 Journal.Append，调用者提供同一逻辑写入重试时稳定的 event_id 或 append_key；服务端校验事件 schema、权限、操作状态、同空间引用和 ready 对象。权限失效后的结果、快照及终态使用 T01 限定的系统收尾身份，保留原 actor 关联，不再次要求已撤销的主体授权。使用 event_digest 比较类型、因果字段、data 和有序内容摘要，排除提交序号/记录时间；同 ID 同内容返回已提交结果，不同内容返回冲突。
+Journal.Append 在事务中应用批量业务变更。调用方重试时沿用 append_key 或批次首条记录的 event_id。服务端校验 schema、权限、操作状态、同空间引用和 ready 对象，并以批次摘要校验重试内容。权限失效后的快照及终态使用 T01 限定的系统收尾身份。
 
 ```text
 Append(session_id, expected_sequence?, append_key, proposed_events)
@@ -993,7 +981,7 @@ Append(session_id, expected_sequence?, append_key, proposed_events)
 1. 授权并保存内容至 TOS，事务外完成上传；记录上传意图和 ready 状态。
 2. 事务内锁定 Session，先核实幂等结果，再按需校验 expected_sequence。
 3. 由服务端 reducer 校验状态转换，为批量事件分配连续序号；业务视图不能由外部任意指定更新值。
-4. 插入 runtime_events/event_objects，同事务更新必要视图、context_projections/summary 索引、对象引用和幂等结果。
+4. 同事务提交业务记录、对象引用及幂等结果。
 5. 提交后才能发布通知、确认 SSE 可读或开始后续动作。通知丢失由数据库轮询补齐。
 
 ```sql
@@ -1002,18 +990,18 @@ SELECT last_sequence FROM sessions
 WHERE space_id = ? AND id = ? FOR UPDATE;
 -- 先核实 append_key/event_id；必要时检查 expected_sequence。
 -- 服务端 reducer 为本次 N 条事件分配 last_sequence+1 ... +N。
--- INSERT runtime_events / event_objects，并更新业务视图及引用。
+-- 直接更新业务记录及引用。
 UPDATE sessions SET last_sequence = ? WHERE space_id = ? AND id = ?;
 COMMIT;
 ```
 
 同一事务失败整体回滚，不使用无锁 max(sequence)+1。所有业务更新遵循 Session → Run → 其他视图/引用的锁顺序。期望序号用于依赖特定状态的命令；外部动作返回的结果必须按稳定 operation/event ID 追加，不能因期间插入取消事件就丢弃结果或重做动作。冲突仅重试无外部副作用的追加事务。
 
-投影读取 through_sequence 后追加自己的 context.projected；其间出现的审计事件不改变该历史输入，当前权限/取消仍在真正调用前重新检查。已启动操作的结果须保存，终态等待它们收尾；进程异常后的核实采用明确的新事件。
+投影按 through_sequence 读取业务记录，再保存自己的 context.projected。模型调用前重新检查权限和取消状态。同一 Run 使用内存中的工具结果，终态归档已收集的步骤。
 
-关键事件或引用保存失败时停止后续动作；数据库不可用时不能保证失败事件立即落库，重启后依据遗留操作追加中断核实。事件只追加与内容摘要校验不等于防管理员篡改，也不保证模型/工具结果恰好一次。
+业务记录或引用保存失败时停止后续动作。服务重启后将遗留的运行中 Run 标为中断，并从最后一次已保存的工作区快照恢复。
 
-视图重建固定 reducer_version，读取已有事实，不触发模型/工具。重建结果与线上视图对比，覆盖失败、取消、重复追加和未知副作用；完整重建依赖完好的内容对象。MVP 不自动过期或删除历史；发现对象缺失/损坏则追加 content.unavailable 并明确不可重建范围。
+历史接口和 UI 从业务表与内容对象读取。历史序号可以有空档，计划读取当前版本。完整的诊断步骤通过会话 Trace 查询。
 
 usage 按 attempt 记录并汇总，摘要和失败尝试均计入；缺失用量为 unknown，价格估算保存价格版本。缓存统计口径见 T07.6。运维日志不复制原始用户内容，空间授权同样用于日志和载荷读取。
 
@@ -1031,9 +1019,9 @@ D01 注册 schema_version=1 的最小事件子集：session.created、run.create
 
 ### T10.3 AG-UI 协议边界与依赖
 
-确定使用 AG-UI 作为运行交互事件协议，SSE 作为 HTTP 传输方式。MASS 内部 runtime_events 保持 T10.1 的事实语义，由 AguiProjector 投影成标准 AG-UI 事件；ContextProjector 仍读取原始日志，不读取前端事件。
+确定使用 AG-UI 作为运行交互事件协议，SSE 作为 HTTP 传输方式。AguiProjector 使用业务表和进程内输出生成 AG-UI 事件。上下文读取业务历史和当前 Run 的内存工具结果。
 
-Go 使用协议官方仓库中的 community Go SDK 的 core/events 类型及 JSON 编码能力，前端使用 @ag-ui/core 类型与事件 Schema。D00 锁定兼容的 SDK/Schema 版本，校验本方案使用的事件子集；SSE framing 由 MASS 包装以支持持久化游标。[AG-UI Go SDK](https://docs.ag-ui.com/sdk/go/overview)、[TypeScript 事件契约](https://docs.ag-ui.com/sdk/js/core/events)。
+Go 使用协议官方仓库中的 community Go SDK 的 core/events 类型及 JSON 编码能力，前端使用 @ag-ui/core 类型与事件 Schema。D00 锁定兼容的 SDK/Schema 版本，校验本方案使用的事件子集；SSE framing 由 MASS 包装以支持每个内存流的游标。[AG-UI Go SDK](https://docs.ag-ui.com/sdk/go/overview)、[TypeScript 事件契约](https://docs.ag-ui.com/sdk/js/core/events)。
 
 继续使用 MASS 的 POST /sessions/{id}/runs 接受请求并返回 Run ID，再通过 GET /runs/{id}/events 订阅同一 Run。前端提供这一提交/订阅方式的适配器。官方 HttpAgent 默认使用 POST RunAgentInput 并直接读取事件流，不能直接把它指向这里的 GET 地址；本版本提供 AG-UI 事件兼容性，MASS 的提交、鉴权及续传方式是应用约定。[AG-UI 传输与客户端架构](https://docs.ag-ui.com/concepts/architecture)
 
@@ -1041,7 +1029,7 @@ Go 使用协议官方仓库中的 community Go SDK 的 core/events 类型及 JSO
 
 ### T10.4 内部事实到 AG-UI 的映射
 
-threadId 映射 Session ID，runId 映射 Run ID。messageId 由 Run/attempt/响应消息位置确定；toolCallId 由平台模型调用标识和供应商调用 ID 确定，防止不同尝试复用供应商 ID 造成冲突。run.created 保存 protocol_profile、mapper/parser_version，同事务初始化 agui_streams；这些是 UI 映射配置，不进入 LLM 指令。重连不能重新生成标识或改变映射版本。
+threadId 映射 Session ID，runId 映射 Run ID。messageId 由 Run/attempt/响应消息位置确定；toolCallId 由平台模型调用标识和供应商调用 ID 确定，防止不同尝试复用供应商 ID 造成冲突。Run 固定 protocol_profile 和 mapper/parser_version。这些是 UI 映射配置。
 
 | 原始事实或条件 | AG-UI 输出 | MASS 语义 |
 | --- | --- | --- |
@@ -1049,9 +1037,9 @@ threadId 映射 Session ID，runId 映射 Run ID。messageId 由 Run/attempt/响
 | run.started | CUSTOM mass.run.status.v1 | status=running，不重复 RUN_STARTED |
 | task 模型回复的可展示文本增量 | TEXT_MESSAGE_START / CONTENT / END | 同一 messageId，非空 delta；按协议边界闭合 |
 | task 模型的完整工具调用描述 | TOOL_CALL_START / ARGS / END | 同一 toolCallId，参数是 JSON 字符串；MVP 在响应完成校验后输出完整参数，后续可流式优化 |
-| tool.execution.started | CUSTOM mass.tool.status.v1 | 工具执行中；与参数结束分开 |
+| 内存中的工具状态 | CUSTOM mass.tool.status.v1 | 工具执行中、已完成或失败 |
 | tool.io.recorded / workspace.snapshot.created / workspace.snapshot.failed / workspace.restored | CUSTOM mass.trace.v1 | 展示 I/O 和目录快照来源/状态，不能当作对话或运行终态；无 run_id 的恢复事实仅在 Session 查询展示 |
-| tool.execution.completed | TOOL_CALL_RESULT | messageId、toolCallId、role=tool、content 为字符串 |
+| 已校验的内存工具结果 | TOOL_CALL_RESULT | messageId、toolCallId、role=tool、content 为字符串 |
 | 可恢复工具业务错误 | TOOL_CALL_RESULT + CUSTOM mass.tool.status.v1 | content 中明确错误结构，不伪装成功；最终是否终止由 Run 状态决定 |
 | 未知副作用、未执行或协议不完整 | CUSTOM mass.tool.status.v1 / mass.message.status.v1 | 明确 unknown/incomplete/not_executed，不能补造成功结果 |
 | 投影、摘要、模型 attempt 状态 | CUSTOM mass.context.v1 / mass.trace.v1 | 提供来源 ID、状态及载荷引用，不把摘要任务输出当作用户回复 |
@@ -1066,9 +1054,9 @@ threadId 映射 Session ID，runId 映射 Run ID。messageId 由 Run/attempt/响
 
 TOOL_CALL_END 仅结束工具调用参数，不表示工具执行成功；结果由 TOOL_CALL_RESULT 或自定义状态给出。[AG-UI 工具事件语义](https://docs.ag-ui.com/concepts/events)
 
-标准事件字段采用 AG-UI camelCase 和 type 判别字段；仅凭改名将原始 event_type/payload 包进 data 不算完成协议接入。自定义信息统一采用 CUSTOM 的 name/value，命名为 mass.<topic>.v1，value 包含 schemaVersion、threadId、runId、sourceEventIds 及经授权的业务摘要。原始模型请求、敏感协议块和大结果通过受控 payload API 按需读取，不直接塞入 rawEvent。
+标准事件字段采用 AG-UI camelCase 和 type 判别字段；仅凭改名将原始 event_type/payload 包进 data 不算完成协议接入。自定义信息统一采用 CUSTOM 的 name/value，命名为 mass.<topic>.v1，value 包含 schemaVersion、threadId、runId、sourceEventIds 及经授权的业务摘要。历史请求载荷及大结果通过受控 payload API 按需读取，不直接塞入 rawEvent。
 
-文本增量只能来自已持久化原始响应的解码结果。投影器按固定 parser_version 维护跨区块解码状态，不能把网络区块当作文本 delta；完成响应不再重复发送已发文本。非流式回复可产生一次完整文本 CONTENT。消息 END 只关闭展示边界，流中断时先标记 incomplete，再闭合已打开的文本消息；重试使用新 attempt/messageId，不拼接成同一回答。
+文本增量来自模型适配器解析后的可见内容，在内存中投影给客户端。完成响应不重复发送已发文本。非流式回复可产生一次完整文本 CONTENT。消息 END 只关闭展示边界，流中断时先标记 incomplete，再闭合已打开的文本消息；重试使用新 attempt/messageId，不拼接成同一回答。
 
 TOOL_CALL_RESULT 的大内容只传明确标注的节选及受控引用，并由 CUSTOM 标记 truncated/payloadRef；完整结果仍在原始日志。工具参数超过 UI 传输上限时只发送 CUSTOM 说明及载荷引用，不伪造 ARGS。没有发出标准 TOOL_CALL_START 的工具，也不单独发无对应关系的 TOOL_CALL_RESULT。
 
@@ -1076,23 +1064,11 @@ MVP 使用显式 START/CONTENT/END 事件；不使用自动展开的 CHUNK 简�
 
 ### T10.5 AG-UI 传输视图与断线续传
 
-一条 runtime_event 可以生成零个、一个或多个 AG-UI 事件，因此 SSE id 使用独立 ui_sequence，不能直接使用 Session sequence。原始日志用于审计，agui_events 是可重建的传输视图：
+SSE 使用独立的连续 UI 游标。投影器读取该 Run 的已提交业务事实，并合并内存中的可见模型文本。检查点和 SSE 帧在内存中维护。
 
-| 结构 | 必要字段与约束 |
-| --- | --- |
-| agui_streams | space_id、session_id、run_id、protocol_profile、mapper/parser_version、source_sequence、投影器状态、last_ui_sequence、终态标识 |
-| agui_events | space_id、run_id、ui_sequence、source_event_id、source_ordinal、event_json 或不可变对象引用 |
-| 唯一约束 | (space_id, run_id, ui_sequence)；(space_id, run_id, source_event_id, source_ordinal) |
+`GET /spaces/{space_id}/runs/{run_id}/events` 使用 Cookie 和空间鉴权。客户端可携带 UI 快照返回的 `stream_id` 和游标续传。进程重启或内存流过期后，客户端重新读取 `ui-snapshot` 获取状态和新游标。已完成的消息、工具结果和终态由业务事实与已保存的结构化内容恢复。未归档的进程内分片随进程退出丢失。
 
-投影器在同一 Go 进程运行，读取已提交原始日志及对象；解析可在事务外准备，再锁定 agui_streams、复核检查点，在同一事务追加该批输出并推进检查点/解析状态。投影器不能反向改变原始日志或执行工具；崩溃重试不会重复分配输出。输出事件先落库，再发送 SSE，不能针对不同连接重新切分文本。受限大小的投影状态保存到数据库或不可变内容对象，不能只放进程内存。
-
-protocol_profile、分块与标识规则在 Run 创建时锁定；同一流后续重建必须保留相同游标和输出，不原地换映射器。原始 source_sequence 允许因其他 Run/会话事件跳跃；本 Run 的 ui_sequence 连续递增，分页与 SSE 使用同一顺序。
-
-GET /spaces/{space_id}/runs/{run_id}/events 使用 Cookie 空间鉴权，返回 text/event-stream；Last-Event-ID 或 after 是该 Run 的 ui_sequence，两者同时出现且不同返回错误。按已提交 ui_sequence > cursor 升序补齐，不以连接打开时间作为起点。首连从 0 读取完整生命周期；续传是旧流的后缀，不能再添加一次 RUN_STARTED。
-
-游标、已应用界面状态和协议版本必须配套。页面刷新时若只有游标而没有对应状态，应从 0 回放；大历史可调用 GET /runs/{id}/ui-snapshot 获取同一水位的 reducerState、cursor、protocolProfile，再从该 cursor 续传。快照需要包含尚未结束的消息/工具状态以及同水位的计划 revision 和产物清单。MVP 不过期或裁剪 SSE 历史；非法游标返回 invalid_cursor，存储缺失则明确返回历史不可用。不得跳过缺失数据并返回成功。
-
-断线、代理超时和 UI 投影服务错误不改变 Run 状态；客户端查询 Run 并按已应用游标重连。鉴权失败按 T01 关闭连接并停止重连；若 Run 主体也已失去权限，由 Supervisor 以实际权限错误终结 Run，AG-UI 从该终态派生 RUN_ERROR，不由订阅连接伪造。慢客户端有界超时断开，不阻塞执行器；投影延迟显示为同步中。终态提交并投影后，发送终态事件关闭流，客户端停止订阅；已应用终态后无需再连接。终态后的用量补充或核实仍可追加原始日志并通过查询展示，但不能继续向已终结 AG-UI 流追加事件或改写旧帧。定期复核成员与登录状态。
+断线和投影错误独立于 Run 状态。慢客户端使用写入超时，终态事件发送后关闭流。服务定期复核登录和成员权限。
 
 ### T10.6 SSE 帧与编码示例
 
@@ -1145,11 +1121,7 @@ func WriteAGUIEvent(w http.ResponseWriter, cursor string, body json.RawMessage) 
 
 ### T10.7 D04 AG-UI 与离线视图重建
 
-transport/agui.Projector 使用已锁定 SDK 的构造/验证方法，以 mapper/parser=1 映射 journal。agui_events 使用每 Run 连续 ui_sequence，源事件和 ordinal 唯一；与 agui_streams 的来源水位、UI 状态及游标同事务 CAS 提交。单条事实可生成多条 UI 帧，原始 Session 序号不作为 SSE ID。终态之后不生成新的该 Run 帧。
-
-SSE 从持久化帧发送，支持 canonical 十进制 after/Last-Event-ID，拒绝未来游标及互相冲突的参数；每批/发送期间检查 Cookie 与成员。流不套用普通接口 15s 超时，使用 3s 心跳和每次写入 5s deadline。后台投影不依赖浏览器存活，撤权后仍可通过受限派生视图能力完成终态；这项能力不能追加动作事实。前端从 ui-snapshot 原子状态/游标起步，事件通过 SDK Schema 和纯 reducer 后才推进游标，协议错误或 401/403 停止重连。
-
-`mass rebuild-views` 必须离线取得同一运行锁。先校验事件版本/摘要及全部被引用的 TOS 对象大小/摘要，再在单事务清空并重建消息、attempt、工具、产物、占用和 AG-UI 派生视图，以及 Run 可变状态/Session 快照指针。为保留不可变日志和跨会话快照外键，Run 身份行和不可变快照索引作为锚点保留；心跳等协调数据不当业务事实重放。过程不注入 Gateway/工具，任意损坏导致失败，不接受半份重建结果。
+UI 在读取时根据业务记录重新投影。Schema 14 删除通用会话事件表和离线事件回放命令。
 
 ## T11 M11 TOS 持久化、工作区与产物
 
@@ -1164,8 +1136,8 @@ SSE 从持久化帧发送，支持 canonical 十进制 after/Last-Event-ID，拒
 | AGENTS.md、SKILL.md、模板、版本 assets | 不可变 TOS 对象 + MariaDB 发布版本清单 |
 | 用户附件、工具产物 | TOS 对象 + 授权元数据 |
 | 会话工作目录 | 本地临时目录连续使用；每个 Run 收尾生成 TOS 全量 tar.gz 快照，MariaDB 保存 URI/摘要/清单引用及来源 |
-| 模型实际请求/响应、工具完整大结果 | 有序 TOS 区块 + Trace 清单/完整性状态 |
-| 运行、会话、runtime_events、event_objects、空间和权限 | MariaDB；不依赖本地文件 |
+| 结构化模型回复、工具完整大结果 | TOS 对象 + Trace 引用 |
+| 运行、会话、空间和权限 | MariaDB；不依赖本地文件 |
 | 用户原文、摘要、投影消息/Manifest、结构化模型响应 | TOS 不可变对象 + 事件/投影引用 |
 
 同一不可变对象可被多个事件引用，避免重复复制定义或结果；MVP 不设置自动过期或 GC。普通载荷使用有界流上传，目录快照采用 archive/tar + compress/gzip 打包后上传，允许使用工作目录之外的临时归档文件，上传完成即清理该临时归档。Agent 不可访问临时根目录、其他会话目录或归档中间文件。
@@ -1233,7 +1205,7 @@ publish_artifact 和 Trace 原文仍在调用期间单独上传，不等待目�
 
 ContentStore 将输入流写到权限受限的临时文件，边写边计数和计算 SHA-256；记录包含唯一 key、媒体类型、长度、摘要和 uploading 状态的意图后，使用锁定的 TOS SDK PutObjectV2/ForbidOverwrite。SDK 隐式重试关闭，重试由稳定 object_id 驱动：已有元数据必须完全一致，再通过完整读回核实已上传字节。Put 响应丢失或禁止覆盖冲突不等于失败/成功，只有读回长度和摘要相同才可将意图置为 ready；SQL 失败保留不可见意图/对象供核实。ETag 不作为 SHA-256。临时文件完成即清理，不作为本地持久 BlobStore。
 
-生产只使用 TOS 适配器；tests/fakes 是测试专用内存替身。对象元数据、事件引用和快照均使用带 space_id 的联合外键。下载必须同时满足当前授权、ready 和已提交 event_objects 引用；未引用的成功上传不会因猜到 UUID 而可见。主数据没有自动 TTL、删除或 GC。新增 ready 探针使用 MariaDB schema 校验和 TOS HeadBucket，单次最多 3 秒、缓存 5 秒；HeadBucket 证明连接/桶级授权，对象读写/不可变性必须由独立真实 smoke 验收，不夸大探针结果。
+生产只使用 TOS 适配器；tests/fakes 是测试专用内存替身。对象元数据、事件引用和快照均使用带 space_id 的联合外键。下载必须同时满足当前授权、ready 和已提交的业务记录引用；未引用的成功上传不会因猜到 UUID 而可见。主数据没有自动 TTL、删除或 GC。新增 ready 探针使用 MariaDB schema 校验和 TOS HeadBucket，单次最多 3 秒、缓存 5 秒；HeadBucket 证明连接/桶级授权，对象读写/不可变性必须由独立真实 smoke 验收，不夸大探针结果。
 
 storage 配置是向后兼容的可选段：max_object_bytes 默认 256 MiB（配置上限 1 GiB）、max_file_bytes 32 MiB、max_workspace_bytes 128 MiB、max_entries 10000；文件/目录上限不超过对象上限，Manifest 上限 4 MiB。SnapshotStore 使用已有 runtime.snapshot_timeout；临时根沿用 workspace_temp_root。生成的 Session 目录名只含经过规范 UUID 校验的 space/session ID，使用 os.Root 与可取消的 Session 目录锁。快照要求调用者先停止所有工作目录写入；D04 Supervisor 统一持有占用并使用相同目录入口。
 
@@ -1283,7 +1255,7 @@ onFrame(message):
 
 TEXT_MESSAGE_CONTENT 按 messageId 追加，工具参数按 toolCallId 聚合，TOOL_CALL_END 只关闭参数，结果到达后才展示执行结果。失败 attempt 的已显示文本标为 incomplete，重试新建消息；RUN_CANCELLED 显示已取消，其他 RUN_ERROR 显示失败，终态关闭订阅。事件回放只更新界面，不发起工具调用。
 
-调试页同时展示原始日志、投影 Manifest、实际模型请求、epoch/前缀变化、真实缓存统计和载荷引用；摘要调用放在 Trace 区而非聊天助手回复中。普通 AG-UI 消息流不能冒充完整模型原文。空间切换立即关闭订阅并清空私有视图，大历史通过水位一致的 ui-snapshot 恢复并采用窗口展示。
+调试页同时展示运行日志、投影 Manifest、epoch/前缀变化、真实缓存统计和载荷引用；摘要调用放在 Trace 区而非聊天助手回复中。普通 AG-UI 消息流不能冒充完整模型原文。空间切换立即关闭订阅并清空私有视图，大历史通过水位一致的 ui-snapshot 恢复并采用窗口展示。
 
 ### T12.3 D08 工作台实现
 
@@ -1291,7 +1263,7 @@ Catalog 的固定版本直接创建幂等调试 Session 并导航到对话；保
 
 AguiRunClient 管理 GET 快照、EventSource 生命周期和单一重连计时器。快照经 Zod 校验协议、会话、状态、唯一实体及产物空间/会话/Run/下载路径，游标校验独立于 Session 日志水位。帧先过 @ag-ui/core/custom Schema 与 reducer，成功后才确认游标；重复忽略、缺口/应用错误关闭旧连接，经权限查询后使用最后应用的 after 重连。500ms—5s 有界退避，连续失败超过五次转为手动同步；401/403 清除私有状态并停止。只有标准 RUN_FINISHED/RUN_ERROR 或 closed 快照停止订阅，CUSTOM 状态不能提前跳过标准终态。旧连接及卸载后的回调不能更新新作用域。
 
-Trace 与安全 Markdown 延迟加载；原文查看是可取消的空间查询，按实际流字节限制为 1 MiB，不依赖 Content-Length。运行消息/工具各按最近 50 条展示，可逐窗展开；旧消息和 Trace 保留分页。Trace 分类不改变固定日志水位，每页空结果明确显示。上下文检查继续导航到源事件和实际请求，工具参数、结果、代码与 I/O 均可从原始事件载荷下载。
+Trace 与安全 Markdown 延迟加载；原文查看是可取消的空间查询，按实际流字节限制为 1 MiB，不依赖 Content-Length。运行消息/工具各按最近 50 条展示，可逐窗展开；旧消息和 Trace 保留分页。Trace 分类不改变固定日志水位，每页空结果明确显示。上下文检查继续导航到源事件和历史请求载荷，工具参数、结果、代码与 I/O 均可从原始事件载荷下载。
 
 新增 `GET /api/v1/spaces/{space_id}/runs/{run_id}/metrics`，按固定 Run 配置、task/summary 及 prefix_change_reason 聚合缓存覆盖率/命中率/输入占比、结束尝试数和可用耗时；零分母为 null，查询水位明确展示。统计最多读取 20000 个已授权事件；无隐式模型调用或当前草稿读取。公共 ui-snapshot 不暴露内部 SummaryAttempts；该字段仍用于后端跨批次回放。
 
@@ -1337,9 +1309,9 @@ func Assets() (fs.FS, error) {
 
 停服且没有排队/运行中的 Run 后，以 MariaDB 原生逻辑导出保存关系和密文；TOS 对象及其版本独立保留，主密钥由操作者另行安全保存。恢复先将导出导入空的隔离库，再执行 `mass restore-storage --config restored.yaml --source-config original.yaml --expect-database NAME`。源配置只提供留存 TOS 及原库名边界，命令不连接源数据库；目标配置仍采用统一 Config。源/目标库名必须不同，对象前缀必须互不包含。
 
-目标库持有运行监督器同名数据库锁，运行中服务阻止恢复；核对 schema、目标库名、全部凭证解密、日志连续序列/事件摘要及对象引用，拒绝任何已引用的未完成对象和未终结 Run。引用检查覆盖所有指向 content_objects 的联合外键，包括 event_objects、定义 Bundle/草稿/版本资源、Session 定义、消息、工具结果、产物、未发送附件、快照归档/Manifest 和上下文投影；不能仅凭无事件引用判断为未引用。无任何已提交引用的 uploading 意图保留原元数据/状态/位置，不访问或复制其 TOS 字节，不删除、不自动置 ready，仍不可下载。命令输出迁移对象数与保留意图数；它们不是已确认内容，不作为历史恢复成功的内容依据。所有 ready 对象即使暂未引用也维持完整复制校验，不引入 GC。按对象大小/SHA-256 校验源字节，使用 ForbidOverwrite 写目标独立前缀并读回校验；同一源 Bucket 使用原版本 ID；独立备份 Bucket 按原 key 查找留存副本并核对内容哈希，不套用原 Bucket 的版本 ID。版本 ID/ETag 以新对象为准。全部对象验证通过后在单个事务里校正 content_objects 的 key/URI/版本与 workspace_snapshots URI。不可变 runtime_events、event_digest、对象 ID/内容摘要保持原值，历史日志中的 URI 表示原位置；当前内容和快照恢复从对象索引解析，不直接访问历史 URI。迁移失败不改变位置索引，已上传的独立副本留存以便重试；同参数重试校验已有字节，不覆盖或删除源对象。
+目标库持有运行监督器同名数据库锁，运行中服务阻止恢复；核对 schema、目标库名、全部凭证解密、业务对象引用，拒绝任何已引用的未完成对象和未终结 Run。引用检查覆盖所有指向 content_objects 的联合外键，包括定义 Bundle/草稿/版本资源、Session 定义、消息、工具结果、产物、未发送附件、快照归档/Manifest 和上下文投影；不能仅凭无事件引用判断为未引用。无任何已提交引用的 uploading 意图保留原元数据/状态/位置，不访问或复制其 TOS 字节，不删除、不自动置 ready，仍不可下载。命令输出迁移对象数与保留意图数；它们不是已确认内容，不作为历史恢复成功的内容依据。所有 ready 对象即使暂未引用也维持完整复制校验，不引入 GC。按对象大小/SHA-256 校验源字节，使用 ForbidOverwrite 写目标独立前缀并读回校验；同一源 Bucket 使用原版本 ID；独立备份 Bucket 按原 key 查找留存副本并核对内容哈希，不套用原 Bucket 的版本 ID。版本 ID/ETag 以新对象为准。全部对象验证通过后在单个事务里校正 content_objects 的 key/URI/版本与 workspace_snapshots URI。对象 ID 和内容摘要保持原值，当前内容和快照恢复从对象索引解析。迁移失败不改变位置索引，已上传的独立副本留存以便重试；同参数重试校验已有字节，不覆盖或删除源对象。
 
-随后离线 rebuild-views 校验日志/对象并重建视图；启动后历史读取不执行模型/工具，新 Run 才解密原凭证并恢复最后确认的会话快照。无法解密、源或目标字节损坏、丢失 ready 对象/版本、已引用的未完成对象都必须先处理，不能忽略校验。无引用 uploading 意图不会阻止幂等重试；恢复后仍保留原源位置作为失败意图的证据，不视为已迁移内容。完整操作步骤与当前真实云验证边界见 E15.11。
+启动后历史查询使用恢复的业务表，新 Run 才解密原凭证并恢复最后确认的会话快照。无法解密、源或目标字节损坏、丢失 ready 对象/版本、已引用的未完成对象都必须先处理，不能忽略校验。无引用 uploading 意图不会阻止幂等重试；恢复后仍保留原源位置作为失败意图的证据，不视为已迁移内容。完整操作步骤与当前真实云验证边界见 E15.11。
 
 D10 真实恢复验收使用交付包提取的二进制、两个随机隔离 MariaDB 库和实际 TOS Bucket 内互斥的 `tmp/mass-d10-UUID/source/` / `restored/` 前缀。源对象持续保留至迁移校验成功，再删除本次源对象验证恢复实例独立性；本次没有新建 Bucket，跨 Bucket 仅保留本地协议测试证据。测试先持久化精确 key/版本账本，再允许上传或预登记恢复目标；清理依据账本和测试库清单，不列举整个 Bucket，不操作其他前缀。账本不序列化 SDK 客户端或凭证，失败后保留以核对清理。模型始终为本地夹具，传入 mass 的环境没有真实模型密钥；恢复读取本身不调用模型，新 Run 的两次 HTTP 仅访问回环端点。结果及版本限制见工程文档 E15.11。
 
@@ -1406,7 +1378,7 @@ mass/
 │   │   ├── mariadb/                # 事务持久化与查询接口实现
 │   │   ├── tos/                    # TOS 对象访问，不拥有工作区业务规则
 │   │   ├── workspace/             # 当前会话真实文件、tar.gz 打包与受控恢复
-│   │   ├── eino/                   # Eino 组件、DTO 转换和原文捕获
+│   │   ├── eino/                   # Eino 组件、DTO 转换和流式解析
 │   │   └── javascript/             # goja 引擎及注入的 fs/net 接口，不能越过授权范围
 │   ├── transport/agui/             # 协议事件映射与持久化传输视图
 │   ├── transport/http/ui/          # assets.go + 生成的 dist 嵌入目录

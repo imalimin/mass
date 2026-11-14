@@ -26,7 +26,6 @@ import (
 	"github.com/imalimin/mass/internal/journal"
 	"github.com/imalimin/mass/internal/resource"
 	"github.com/imalimin/mass/internal/runtime/context/projector"
-	"github.com/imalimin/mass/internal/runtime/modelgateway"
 	"github.com/imalimin/mass/tests/testdb"
 )
 
@@ -60,12 +59,12 @@ type limitedModel struct {
 }
 
 func (l *limitedModel) Source() string { return "ark" }
-func (l *limitedModel) Stream(ctx context.Context, s run.Snapshot, p run.Prepared, key string, r modelgateway.Recorder, d func(string) error) (run.Reply, error) {
+func (l *limitedModel) Stream(ctx context.Context, s run.Snapshot, p run.Prepared, key string, d func(string) error) (run.Reply, error) {
 	l.calls++
 	if l.calls > 7 {
 		return run.Reply{}, run.ErrBudget
 	}
-	return l.transport.Stream(ctx, s, p, key, r, d)
+	return l.transport.Stream(ctx, s, p, key, d)
 }
 func exerciseD07(t *testing.T, blobs storage.BlobStore, prefix string) {
 	t.Helper()
@@ -108,7 +107,7 @@ func exerciseD07(t *testing.T, blobs storage.BlobStore, prefix string) {
 	config.Limits.MaxSteps = 8
 	config.Limits.TimeoutSeconds = 180
 	raw, _ := json.Marshal(config)
-	agent, err = catalogue.Save(ctx, actor.ID, space.ID, "agent", agent.ID, agent.Revision, catalog.Document{Markdown: "Preserve task history.", ConfigYAML: string(raw), Assets: []catalog.Asset{}})
+	agent, err = catalogue.Save(ctx, actor.ID, space.ID, "agent", agent.ID, agent.Revision, catalog.Document{Markdown: "Preserve task history.", ConfigYAML: string(raw)})
 	if err != nil {
 		t.Fatal(err)
 	}

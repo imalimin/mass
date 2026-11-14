@@ -19,7 +19,7 @@ type Files interface {
 	Publish(context.Context, run.Snapshot, string, resource.PublishInput) (run.Artifact, run.ToolResult, error)
 }
 type CodeRunner interface {
-	Run(context.Context, run.Snapshot, string, run.CodeInput) (run.ToolResult, error)
+	Run(context.Context, run.Snapshot, run.CodeInput) (run.ToolResult, error)
 }
 type Handler struct {
 	Files   Files
@@ -87,7 +87,7 @@ func (h *Handler) Execute(ctx context.Context, s run.Snapshot, call run.Call, ar
 			return result, nil, run.ErrTool
 		}
 		input, _ := json.Marshal(args["input"])
-		result, err = h.Code.Run(ctx, s, call.ID, run.CodeInput{Language: text("language"), Code: text("code"), Input: input})
+		result, err = h.Code.Run(ctx, s, run.CodeInput{Language: text("language"), Code: text("code"), Input: input})
 	case "publish_artifact":
 		var a run.Artifact
 		a, result, err = h.Files.Publish(ctx, s, call.ID, resource.PublishInput{Path: text("path"), ExpectedSHA256: text("expected_sha256"), DisplayName: text("display_name"), MediaType: text("media_type")})

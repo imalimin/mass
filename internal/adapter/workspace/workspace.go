@@ -62,7 +62,8 @@ func New(base string, limits storage.Limits) (*Manager, error) {
 	}
 	return &Manager{root: root, limits: limits, gates: map[string]*gate{}}, nil
 }
-func (m *Manager) Close() error { return m.root.Close() }
+func (m *Manager) LocalPath() string { return m.root.Name() }
+func (m *Manager) Close() error      { return m.root.Close() }
 func (m *Manager) With(ctx context.Context, space, session string, fn func(resource.WorkspaceDir) error) error {
 	if !storage.ValidID(space) || !storage.ValidID(session) {
 		return storage.ErrInvalid

@@ -11,7 +11,7 @@ import (
 
 func TestReservationsAndUnknownUsage(t *testing.T) {
 	s := run.Snapshot{Definition: run.Definition{MaxSteps: 2, MaxInputTokens: 100, OutputTokens: 10, TimeoutSeconds: 60}}
-	c := New(s, time.Now(), nil, nil)
+	c := New(s, time.Now(), nil)
 	ctx := context.Background()
 	if err := c.Reserve(ctx, "a", "model", 110); err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestReservationsAndUnknownUsage(t *testing.T) {
 	if !errors.Is(c.Reserve(ctx, "c", "model", 1), run.ErrBudget) {
 		t.Fatal("call limit exceeded")
 	}
-	expired := New(s, time.Now().Add(-time.Hour), nil, nil)
+	expired := New(s, time.Now().Add(-time.Hour), nil)
 	if !errors.Is(expired.Check(ctx), run.ErrBudget) {
 		t.Fatal("deadline ignored")
 	}
@@ -55,7 +55,7 @@ func TestReservationsAndUnknownUsage(t *testing.T) {
 
 func TestActualUsageExceedingBudgetRemainsSettled(t *testing.T) {
 	s := run.Snapshot{Definition: run.Definition{MaxSteps: 1, MaxInputTokens: 100, OutputTokens: 10, TimeoutSeconds: 60}}
-	c := New(s, time.Now(), nil, nil)
+	c := New(s, time.Now(), nil)
 	if err := c.Reserve(context.Background(), "attempt", "model", 110); err != nil {
 		t.Fatal(err)
 	}

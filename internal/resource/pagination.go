@@ -1,13 +1,13 @@
 package resource
 
 import (
-	"context"
 	"encoding/json"
+	"strconv"
+
 	"github.com/google/uuid"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
-	"strconv"
 )
 
 type CursorSigner interface {
@@ -23,9 +23,6 @@ type PageInput struct {
 	Limit     int    `json:"limit"`
 }
 type queryResult struct {
-	Space    string            `json:"space"`
-	Session  string            `json:"session"`
-	Query    string            `json:"query"`
 	Items    []json.RawMessage `json:"items"`
 	Complete bool              `json:"complete"`
 	Scanned  int               `json:"scanned"`
@@ -36,7 +33,11 @@ type pageCursor struct {
 	Offset int    `json:"offset"`
 }
 
-func (f *FileService) page(ctx context.Context, s run.Snapshot, kind string, in PageInput, build func() (queryResult, error)) (run.ToolResult, error) {
+func (f *FileService) EnableRunPagination() {
+	f.queries = make(map[string]queryResult)
+}
+
+func (f *FileService) page(s run.Snapshot, kind string, in PageInput, build func() (queryResult, error)) (run.ToolResult, error) {
 	if in.Limit == 0 {
 		in.Limit = 50
 	}
@@ -47,12 +48,12 @@ func (f *FileService) page(ctx context.Context, s run.Snapshot, kind string, in 
 	in.Cursor = ""
 	limit := in.Limit
 	in.Limit = 0
-	scope := "tool-page-v1:" + s.ActorID + ":" + s.SpaceID + ":" + s.SessionID + ":" + kind + ":" + journal.Digest(in)
+	scope := "tool-page-v2:" + s.SpaceID + ":" + s.SessionID + ":" + s.ActorID + ":" + s.ID + ":" + kind + ":" + journal.Digest(in)
 	var q queryResult
-	var ref storage.Ref
+	var queryID string
 	offset := 0
 	if cursor != "" {
-		if f.Cursors == nil {
+		if f.Cursors == nil || f.queries == nil {
 			return run.ToolResult{}, run.ErrCursor
 		}
 		payload, err := f.Cursors.OpenPage(scope, cursor)
@@ -63,46 +64,21 @@ func (f *FileService) page(ctx context.Context, s run.Snapshot, kind string, in 
 		if json.Unmarshal([]byte(payload), &c) != nil || !storage.ValidID(c.Object) || c.Offset < 1 {
 			return run.ToolResult{}, run.ErrCursor
 		}
-		o, err := f.Content.Repo.Object(ctx, s.ActorID, s.SpaceID, c.Object, true)
-		if err != nil || o.Kind != "tool.query" {
+		var exists bool
+		q, exists = f.queries[c.Object]
+		if !exists {
 			return run.ToolResult{}, run.ErrCursor
 		}
-		if err = ReadJSON(ctx, f.Content, s.ActorID, s.SpaceID, c.Object, 4<<20, &q); err != nil {
-			return run.ToolResult{}, err
-		}
-		if q.Space != s.SpaceID || q.Session != s.SessionID || q.Query != scope {
-			return run.ToolResult{}, run.ErrCursor
-		}
-		ref = storage.Ref{Role: "query", ObjectID: o.ID, SHA256: o.SHA256}
-		offset = c.Offset
+		queryID, offset = c.Object, c.Offset
 	} else {
 		var err error
 		q, err = build()
 		if err != nil {
 			return run.ToolResult{}, err
 		}
-		q.Space = s.SpaceID
-		q.Session = s.SessionID
-		q.Query = scope
-		// Keep every saved query readable under the same object bound on later pages.
-		header := q
-		header.Items = []json.RawMessage{}
-		base, _ := json.Marshal(header)
-		remaining := (4 << 20) - len(base) - 128
-		for i, item := range q.Items {
-			remaining -= len(item) + 1
-			if remaining < 0 {
-				q.Items = q.Items[:i]
-				q.Complete = false
-				break
-			}
+		if len(q.Items) > limit {
+			queryID = uuid.NewString()
 		}
-		raw, _ := json.Marshal(q)
-		o, err := f.Content.Put(ctx, s.ActorID, s.SpaceID, uuid.NewString(), "tool.query", "application/json", bytesReader(raw))
-		if err != nil {
-			return run.ToolResult{}, err
-		}
-		ref = storage.Ref{Role: "query", ObjectID: o.ID, SHA256: o.SHA256}
 	}
 	if offset > len(q.Items) {
 		return run.ToolResult{}, run.ErrCursor
@@ -110,12 +86,13 @@ func (f *FileService) page(ctx context.Context, s run.Snapshot, kind string, in 
 	end := min(offset+limit, len(q.Items))
 	var next any
 	if end < len(q.Items) {
-		if f.Cursors == nil {
+		if f.Cursors == nil || f.queries == nil {
 			return run.ToolResult{}, run.ErrCursor
 		}
-		raw, _ := json.Marshal(pageCursor{Object: ref.ObjectID, Offset: end})
+		f.queries[queryID] = q
+		raw, _ := json.Marshal(pageCursor{Object: queryID, Offset: end})
 		next = f.Cursors.SealPage(scope, string(raw))
 	}
-	data, _ := json.Marshal(map[string]any{"items": q.Items[offset:end], "next_cursor": next, "query_ref": ref.ObjectID, "complete": q.Complete, "truncated": !q.Complete, "scanned_entries": q.Scanned, "scanned_bytes": q.Bytes, "offset": strconv.Itoa(offset), "parser_version": "mass-tools-v1"})
-	return run.ToolResult{Status: "completed", Data: data, SideEffect: "none", Complete: q.Complete, Truncated: !q.Complete, SourceRefs: []storage.Ref{ref}}, nil
+	data, _ := json.Marshal(map[string]any{"items": q.Items[offset:end], "next_cursor": next, "complete": q.Complete, "truncated": !q.Complete, "scanned_entries": q.Scanned, "scanned_bytes": q.Bytes, "offset": strconv.Itoa(offset), "parser_version": "mass-tools-v1"})
+	return run.ToolResult{Status: "completed", Data: data, SideEffect: "none", Complete: q.Complete, Truncated: !q.Complete, SourceRefs: []storage.Ref{}}, nil
 }

@@ -15,9 +15,9 @@ import (
 )
 
 type ContentRepository interface {
+	Object(context.Context, string, string, string, bool) (storage.Object, error)
 	BeginObject(context.Context, string, storage.Object) (storage.Object, error)
 	ReadyObject(context.Context, string, storage.Object) error
-	Object(context.Context, string, string, string, bool) (storage.Object, error)
 }
 type ContentStore struct {
 	Repo     ContentRepository

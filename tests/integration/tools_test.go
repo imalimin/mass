@@ -3,14 +3,13 @@ package integration
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	einoadapter "github.com/imalimin/mass/internal/adapter/eino"
+	"github.com/imalimin/mass/internal/adapter/mariadb"
 	"github.com/imalimin/mass/internal/adapter/secrets"
 	"github.com/imalimin/mass/internal/adapter/workspace"
 	"github.com/imalimin/mass/internal/app/catalog"
@@ -21,6 +20,7 @@ import (
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
 	"github.com/imalimin/mass/internal/resource"
+	"github.com/imalimin/mass/internal/resource/trace"
 	"github.com/imalimin/mass/internal/runtime/tool/registry"
 	transport "github.com/imalimin/mass/internal/transport/http"
 	"github.com/imalimin/mass/tests/fakes"
@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -114,7 +115,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	config.Limits.MaxSteps = 40
 	config.Limits.TimeoutSeconds = 300
 	raw, _ := json.Marshal(config)
-	agent, err = catalogue.Save(ctx, actor.ID, space.ID, "agent", agent.ID, agent.Revision, catalog.Document{Markdown: "Use the selected tools and preserve source provenance.", ConfigYAML: string(raw), Assets: []catalog.Asset{}})
+	agent, err = catalogue.Save(ctx, actor.ID, space.ID, "agent", agent.ID, agent.Revision, catalog.Document{Markdown: "Use the selected tools and preserve source provenance.", ConfigYAML: string(raw)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,10 +389,21 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if first.Status != "succeeded" || requests.Load() != 1 {
 		t.Fatal("full scenario", first.Status, first.Error, requests.Load())
 	}
-	var count int
-	db.Admin.DB.QueryRow("SELECT COUNT(DISTINCT c.name) FROM tool_executions t JOIN model_calls c ON c.space_id=t.space_id AND c.run_id=t.run_id AND c.call_id=t.call_id WHERE t.space_id=? AND t.run_id=? AND t.status='completed'", space.ID, first.ID).Scan(&count)
-	if count != 14 {
-		t.Fatal("tools not covered", count)
+	firstTrace := awaitToolTrace(t, ctx, runtime.Trace, db.Store, first)
+	names := map[string]bool{}
+	for _, line := range firstTrace.Items {
+		var step trace.ModelStep
+		if err := json.Unmarshal(line, &step); err != nil {
+			t.Fatal(err)
+		}
+		for _, tool := range step.Tools {
+			if tool.Status == "completed" {
+				names[tool.Name] = true
+			}
+		}
+	}
+	if len(names) != 14 {
+		t.Fatal("tools not covered", names)
 	}
 	plan, err := db.Store.RuntimePlan(ctx, actor.ID, space.ID, first.ID)
 	if err != nil || plan.Revision != 2 || plan.Steps[0].Status != "completed" {
@@ -417,38 +429,10 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if !strings.Contains(string(manifest.State), `"revision":2`) || !strings.Contains(string(manifest.State), artifact.ID) {
 		t.Fatal("snapshot missing plan or artifact", string(manifest.State))
 	}
-	history, _, err := resource.History(ctx, j, actor.ID, space.ID, session.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ioPhases := map[int]map[string]bool{}
-	for _, event := range history {
-		if event.Type != "tool.io.recorded" {
-			continue
-		}
-		var d journal.IOData
-		journal.Decode(event.Data, &d)
-		if ioPhases[d.Sequence] == nil {
-			ioPhases[d.Sequence] = map[string]bool{}
-		}
-		ioPhases[d.Sequence][d.Phase] = true
-		if d.Name == "net.request" {
-			raw, e := resource.ReadBytes(ctx, content, actor.ID, space.ID, d.ContentID, 4<<20)
-			if e != nil {
-				t.Fatal(e)
-			}
-			if strings.Contains(string(raw), "fixture-network-secret") || strings.Contains(string(raw), "fixture-query-secret") || strings.Contains(string(raw), "fixture-response-secret") {
-				t.Fatal("network trace disclosed redacted fields")
-			}
-		}
-	}
-	if len(ioPhases) < 7 {
-		t.Fatal("missing IO audit", len(ioPhases))
-	}
-	for sequence, phases := range ioPhases {
-		if !phases["prepared"] || !phases["completed"] {
-			t.Fatal("incomplete IO", sequence, phases)
-		}
+	var ioRecords int
+	err = db.Admin.DB.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('session_facts','tool_executions')").Scan(&ioRecords)
+	if err != nil || ioRecords != 0 {
+		t.Fatal("tool execution wrote audit rows", ioRecords, err)
 	}
 	cp, err := runtime.UI.CatchUp(ctx, actor.ID, space.ID, first.ID)
 	if err != nil || cp.State.Plan == nil || cp.State.Plan.Revision != 2 {
@@ -582,9 +566,8 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	}
 	written := false
 	for i := 0; i < 1000; i++ {
-		var n int
-		db.Admin.DB.QueryRow("SELECT COUNT(*) FROM runtime_events WHERE run_id=? AND event_type='tool.io.recorded' AND JSON_UNQUOTE(JSON_EXTRACT(data,'$.name'))='fs.writeFile' AND JSON_UNQUOTE(JSON_EXTRACT(data,'$.phase'))='completed'", cancelling.ID).Scan(&n)
-		if n > 0 {
+		raw, _ := os.ReadFile(filepath.Join(manager.LocalPath(), space.ID+"_"+session.ID, "cancelled.txt"))
+		if string(raw) == "kept" {
 			written = true
 			break
 		}
@@ -621,31 +604,8 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		if requests.Load() != 4 {
 			t.Fatal("network quota did not stop third request", requests.Load())
 		}
-		// A failed terminal IO record must not rerun an already performed write.
-		if _, err = db.Admin.DB.Exec("CREATE TRIGGER reject_io_result BEFORE INSERT ON runtime_events FOR EACH ROW BEGIN IF NEW.event_type='tool.io.recorded' AND JSON_UNQUOTE(JSON_EXTRACT(NEW.data,'$.phase'))='completed' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='injected'; END IF; END"); err != nil {
-			t.Fatal(err)
-		}
-		callsBefore := modelCalls.Load()
-		unknown, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "unknown io"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		unknown = wait(unknown.ID)
-		if unknown.Status != "failed" || unknown.Error != "tool_effect_unknown" || modelCalls.Load() != callsBefore+1 {
-			t.Fatal("unknown effect repeated or hidden", unknown.Status, unknown.Error)
-		}
-		if _, err = db.Admin.DB.Exec("DROP TRIGGER reject_io_result"); err != nil {
-			t.Fatal(err)
-		}
-		manager.With(ctx, space.ID, session.ID, func(dir resource.WorkspaceDir) error {
-			raw, e := dir.Root().ReadFile("unknown.txt")
-			if e != nil || string(raw) != "once" {
-				t.Error("performed effect lost", e)
-			}
-			return nil
-		})
-		// Plan and its tool result cannot commit independently.
-		if _, err = db.Admin.DB.Exec("CREATE TRIGGER reject_plan_result BEFORE INSERT ON runtime_events FOR EACH ROW BEGIN IF NEW.event_type='tool.execution.completed' AND JSON_UNQUOTE(JSON_EXTRACT(NEW.data,'$.name'))='update_plan' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='injected'; END IF; END"); err != nil {
+		// A failed plan write must not update the durable plan.
+		if _, err = db.Admin.DB.Exec("CREATE TRIGGER reject_plan_result BEFORE INSERT ON run_plans FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='injected'"); err != nil {
 			t.Fatal(err)
 		}
 		rejected, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "plan failure"})
@@ -664,10 +624,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		if rows != 0 {
 			t.Fatal("plan committed without tool result")
 		}
-		db.Admin.DB.QueryRow("SELECT COUNT(*) FROM runtime_events WHERE run_id=? AND event_type='plan.updated'", rejected.ID).Scan(&rows)
-		if rows != 0 {
-			t.Fatal("plan fact escaped rollback")
-		}
+
 		large, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "large code"})
 		if err != nil {
 			t.Fatal(err)
@@ -686,41 +643,8 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, _ := db.Store.RuntimeRun(ctx, actor.ID, space.ID, first.ID)
-	beforeFrames, _, _ := db.Store.ReadFrames(ctx, actor.ID, space.ID, first.ID, 0, 1000)
-	callsBefore := modelCalls.Load()
-	requestsBefore := requests.Load()
-	for _, table := range []string{"agui_events", "agui_streams", "run_plans", "artifacts", "tool_executions", "model_calls", "model_attempts", "messages", "session_active_runs"} {
-		if _, err = db.Admin.DB.Exec("DELETE FROM " + table); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err = db.Store.RebuildViews(ctx, func(ctx context.Context, o storage.Object) error {
-		reader, e := blobs.Open(ctx, o.Key, o.VersionID)
-		if e != nil {
-			return e
-		}
-		defer reader.Close()
-		sum := sha256.New()
-		n, e := io.Copy(sum, reader)
-		if e != nil {
-			return e
-		}
-		if n != o.Size || hex.EncodeToString(sum.Sum(nil)) != o.SHA256 {
-			return storage.ErrIntegrity
-		}
-		return nil
-	}); err != nil {
-		t.Fatal("D05 offline rebuild", err)
-	}
-	after, _ := db.Store.RuntimeRun(ctx, actor.ID, space.ID, first.ID)
-	afterFrames, _, _ := db.Store.ReadFrames(ctx, actor.ID, space.ID, first.ID, 0, 1000)
-	afterPlan, _ := db.Store.RuntimePlan(ctx, actor.ID, space.ID, first.ID)
-	before.HeartbeatAt, after.HeartbeatAt = nil, nil
-	if !catalog.Equal(before, after) || !catalog.Equal(beforeFrames, afterFrames) || !catalog.Equal(plan, afterPlan) || callsBefore != modelCalls.Load() || requests.Load() != requestsBefore {
-		t.Fatal("D05 rebuild changed views or repeated effects")
-	}
-	t.Log("D05: all 14 tools, accepted attachment/fixed Skill, file/query/code/network/CSV, atomic plan, immutable artifact, IO redaction, snapshot state and offline rebuild passed")
+
+	t.Log("D05: all 14 tools, accepted attachment/fixed Skill, file/query/code/network/CSV, atomic plan, immutable artifact, in-memory tool results and snapshot state passed")
 }
 func toolReply(name string, args any) []*schema.Message {
 	raw, _ := json.Marshal(args)
@@ -728,4 +652,24 @@ func toolReply(name string, args any) []*schema.Message {
 }
 func textReply(text string) []*schema.Message {
 	return []*schema.Message{{Role: schema.Assistant, Content: text, ResponseMeta: &schema.ResponseMeta{FinishReason: "stop", Usage: &schema.TokenUsage{PromptTokens: 100, CompletionTokens: 10}}}}
+}
+
+func awaitToolTrace(t *testing.T, ctx context.Context, archive *trace.Archive, store *mariadb.Store, v run.View) trace.Page {
+	t.Helper()
+	for i := 0; i < 250; i++ {
+		current, err := store.RuntimeRun(ctx, v.ActorID, v.SpaceID, v.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.TraceUploaded {
+			page, err := archive.Read(ctx, current, 0, nil, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return page
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("trace archive was not uploaded")
+	return trace.Page{}
 }

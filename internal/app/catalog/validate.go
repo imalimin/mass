@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"io/fs"
+	"path"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/imalimin/mass/internal/domain/storage"
+	"github.com/imalimin/mass/internal/resource"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -22,25 +23,45 @@ func ValidName(s string) bool { return namePattern.MatchString(s) }
 func ValidLabel(s string) bool {
 	return versionPattern.MatchString(s) && !strings.EqualFold(s, "latest")
 }
-func ValidPath(s string) bool {
-	return utf8.ValidString(s) && fs.ValidPath(s) && strings.HasPrefix(s, "assets/") && len(s) <= 512 && !strings.ContainsAny(s, "\\:\x00") && !strings.HasSuffix(s, "/")
-}
 func ValidateDocument(kind, name string, doc Document, publish bool) (*Config, error) {
 	if !ValidName(name) || (kind != "agent" && kind != "skill") || !utf8.ValidString(doc.Markdown) || !utf8.ValidString(doc.ConfigYAML) || len(doc.Markdown) > MaxDocument || len(doc.ConfigYAML) > 64<<10 || len(doc.Assets) > 100 {
+		return nil, ErrConfig
+	}
+	if kind == "agent" && doc.Assets != nil {
 		return nil, ErrConfig
 	}
 	seen := map[string]bool{}
 	for _, a := range doc.Assets {
 		key := strings.ToLower(a.Path)
-		if !ValidPath(a.Path) || seen[key] || !storage.ValidID(a.ObjectID) || !hashPattern.MatchString(a.SHA256) || a.Size < 0 || a.Size > MaxResource {
+		if !resource.ValidSkillPath(a.Path) || seen[key] || !storage.ValidID(a.ObjectID) || !hashPattern.MatchString(a.SHA256) || a.Size < 0 || a.Size > MaxResource {
 			return nil, ErrConfig
 		}
 		seen[key] = true
 	}
-	for p := range seen {
-		parts := strings.Split(p, "/")
-		for i := 1; i < len(parts); i++ {
-			if seen[strings.Join(parts[:i], "/")] {
+	// Only user-created directories are stored. Their ancestors are implied.
+	if len(doc.Directories) > 100 || kind != "skill" && len(doc.Directories) > 0 {
+		return nil, ErrConfig
+	}
+	explicit := map[string]bool{}
+	folders := map[string]string{}
+	for _, dir := range doc.Directories {
+		key := strings.ToLower(dir)
+		if !resource.ValidSkillPath(dir) || explicit[key] {
+			return nil, ErrConfig
+		}
+		explicit[key] = true
+		for p := dir; p != "."; p = path.Dir(p) {
+			key := strings.ToLower(p)
+			if name := folders[key]; seen[key] || name != "" && name != p {
+				return nil, ErrConfig
+			}
+			folders[key] = p
+		}
+	}
+	for _, file := range doc.Assets {
+		for p := path.Dir(file.Path); p != "."; p = path.Dir(p) {
+			key := strings.ToLower(p)
+			if name := folders[key]; seen[key] || name != "" && name != p {
 				return nil, ErrConfig
 			}
 		}

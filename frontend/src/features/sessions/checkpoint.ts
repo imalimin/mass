@@ -11,7 +11,7 @@ const state = z.object({
   artifacts: z.array(z.object({ id: z.string(), space_id: z.string(), session_id: z.string(), run_id: z.string(), call_id: z.string(), object_id: z.string(), sha256: z.string(), name: z.string(), media_type: z.string(), path: z.string(), download_url: z.string() })),
   plan: z.object({ revision: z.number().int().positive(), steps: z.array(step).max(100) }).optional(),
 })
-const checkpoint = z.object({ session_id: z.string(), cursor: z.string(), source_sequence: z.string(), protocol_profile: z.literal('mass-agui-v1'), mapper_version: z.literal(1), parser_version: z.literal(1), closed: z.boolean(), state })
+const checkpoint = z.object({ session_id: z.string(), stream_id: z.string().uuid().optional(), cursor: z.string(), source_sequence: z.string(), protocol_profile: z.literal('mass-agui-v1'), mapper_version: z.literal(1), parser_version: z.literal(1), closed: z.boolean(), state })
 export function parseCheckpoint(input: unknown, space: string, session: string, run: string): Schema['UICheckpoint'] {
   const cp = checkpoint.parse(input)
   parseCursor(cp.cursor); parseCursor(cp.source_sequence)

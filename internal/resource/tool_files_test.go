@@ -133,6 +133,7 @@ func TestFileEditingAndMutationBoundaries(t *testing.T) {
 }
 func TestBoundedReadAndStableQueryPages(t *testing.T) {
 	f, s, _ := fileFixture(t)
+	f.EnableRunPagination()
 	ctx := context.Background()
 	for p, c := range map[string]string{"a.txt": "alpha\nbeta\n", "b.txt": "alpha two", "nested/c.csv": "x,y\n1,2\n"} {
 		if _, err := f.Write(ctx, s, resource.WriteFileInput{Path: p, Content: c, MediaType: "text/plain", ExpectedSHA256: "missing"}); err != nil {

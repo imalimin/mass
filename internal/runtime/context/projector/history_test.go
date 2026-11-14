@@ -37,7 +37,10 @@ func (r *generatedHistory) ReadEvents(_ context.Context, actor, space, session s
 		end = *through
 	}
 	p := journal.Page{Through: end, Next: after, Events: []journal.Event{}}
-	for n := after + 1; n <= min(after+int64(limit), end); n++ {
+	for n := after + 1; n <= end && len(p.Events) < limit; n++ {
+		if r.gap && n == 101 {
+			continue
+		}
 		e := journal.New(actor, "workspace.restored", "", journal.RestoreData{Reason: "explicit_restore"})
 		if r.large {
 			e = journal.New(actor, "context.projected", r.snapshot.ID, journal.ProjectionData{ID: uuid.NewString(), ContentID: uuid.NewString(), Fingerprint: strings.Repeat("a", 64), Through: 1, Counter: strings.Repeat("c", 32<<10), Epoch: 1})
@@ -46,11 +49,7 @@ func (r *generatedHistory) ReadEvents(_ context.Context, actor, space, session s
 			e.SchemaVersion = 99
 		}
 		e.OccurredAt = time.Unix(1, 0)
-		sequence := n
-		if r.gap && n == 101 {
-			sequence++
-		}
-		p.Events = append(p.Events, journal.Event{Proposed: e, SpaceID: space, SessionID: session, Sequence: sequence})
+		p.Events = append(p.Events, journal.Event{Proposed: e, SpaceID: space, SessionID: session, Sequence: n})
 		p.Next = n
 	}
 	if r.calls == 1 && !r.large {
@@ -70,8 +69,9 @@ func TestPagedHistoryBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.gap = true
-	if _, _, _, err = ReadHistory(context.Background(), &journal.Journal{Repo: r}, s); !errors.Is(err, storage.ErrIntegrity) {
-		t.Fatal("gap accepted", err)
+	_, ranges, _, err = ReadHistory(context.Background(), &journal.Journal{Repo: r}, s)
+	if err != nil || len(ranges) != 2 || ranges[0].Through != 100 || ranges[1].From != 102 {
+		t.Fatal("gap from discarded records not reflected in ranges", ranges, err)
 	}
 	r.gap = false
 	r.unknown = true

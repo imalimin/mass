@@ -82,8 +82,9 @@ func TestRestoreSkipsOnlyUnreferencedUploads(t *testing.T) {
 	j := &journal.Journal{Repo: db.Store}
 	session := uuid.NewString()
 	created := proposed(actor.ID, "session.created", "", journal.SessionData{})
-	created.Refs = []storage.Ref{{Role: "raw", ObjectID: confirmed.ID, SHA256: confirmed.SHA256}}
-	if _, err = j.Append(ctx, actor.ID, appendRequest(space.ID, session, created)); err != nil {
+	message := proposed(actor.ID, "user.message.accepted", "", journal.UserMessageData{ID: uuid.NewString(), ContentID: confirmed.ID})
+	message.Refs = []storage.Ref{{Role: "content", ObjectID: confirmed.ID, SHA256: confirmed.SHA256}}
+	if _, err = j.Append(ctx, actor.ID, appendRequest(space.ID, session, created, message)); err != nil {
 		t.Fatal(err)
 	}
 	attachment := put("attachment", "unaccepted attachment")
@@ -104,7 +105,7 @@ func TestRestoreSkipsOnlyUnreferencedUploads(t *testing.T) {
 		t.Fatal(err)
 	}
 	var draftID string
-	if err = db.Store.DB.QueryRow("SELECT object_id FROM definition_draft_objects WHERE space_id=? AND definition_id=?", space.ID, skill.ID).Scan(&draftID); err != nil {
+	if err = db.Store.DB.QueryRow("SELECT content_id FROM skill_drafts WHERE space_id=? AND definition_id=?", space.ID, skill.ID).Scan(&draftID); err != nil {
 		t.Fatal(err)
 	}
 	copies := 0
@@ -126,7 +127,7 @@ func TestRestoreSkipsOnlyUnreferencedUploads(t *testing.T) {
 		return o, err
 	}
 	restore := func() (storage.RestoreResult, error) {
-		return db.Store.RelocateStorage(ctx, db.Name, func(string, string, string, []byte) error { return nil }, copyObject)
+		return db.Store.RelocateStorage(ctx, db.Name, func(string, string, string, []byte) error { return nil }, copyObject, nil)
 	}
 	rejectUnfinished := func(t *testing.T, id string) {
 		t.Helper()
@@ -141,7 +142,7 @@ func TestRestoreSkipsOnlyUnreferencedUploads(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	t.Run("journal", func(t *testing.T) { rejectUnfinished(t, confirmed.ID) })
+	t.Run("message", func(t *testing.T) { rejectUnfinished(t, confirmed.ID) })
 	t.Run("unaccepted_attachment", func(t *testing.T) { rejectUnfinished(t, attachment.ID) })
 	t.Run("draft_without_event", func(t *testing.T) { rejectUnfinished(t, draftID) })
 	version, err := catalogue.Publish(ctx, actor.ID, space.ID, "skill", skill.ID, "v1", skill.Revision, false)

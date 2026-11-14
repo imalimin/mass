@@ -48,12 +48,6 @@ type AttemptData struct {
 	Source             string `json:"source"`
 	CredentialRevision int64  `json:"credential_revision"`
 }
-type WireData struct {
-	AttemptID string `json:"attempt_id"`
-	Ordinal   int    `json:"ordinal"`
-	Status    int    `json:"http_status"`
-	ContentID string `json:"content_id"`
-}
 type DeltaData struct {
 	AttemptID string `json:"attempt_id"`
 	MessageID string `json:"message_id"`
@@ -74,6 +68,7 @@ type AttemptFailedData struct {
 	AttemptID   string                `json:"attempt_id"`
 	MessageID   string                `json:"message_id"`
 	Error       string                `json:"error"`
+	Preview     string                `json:"preview,omitempty"`
 	Usage       run.Usage             `json:"usage"`
 }
 type ToolData struct {
@@ -134,16 +129,6 @@ func validateRuntime(e Proposed) (bool, error) {
 		if Decode(e.Data, &d) != nil || (d.RetryOf != "" && !storage.ValidID(d.RetryOf)) || !storage.ValidID(d.ID) || !storage.ValidID(d.ProjectionEventID) || !storage.ValidID(d.MessageID) || (d.Purpose != "task" && d.Purpose != "summary") || (d.Source != "ark" && d.Source != "fake") || d.CredentialRevision < 0 {
 			return bad()
 		}
-	case "model.request.recorded", "model.response.recorded":
-		var d WireData
-		if Decode(e.Data, &d) != nil || !storage.ValidID(d.AttemptID) || !storage.ValidID(d.ContentID) || d.Ordinal < 0 || d.Status < 0 || d.Status > 599 {
-			return bad()
-		}
-	case "model.response.delta":
-		var d DeltaData
-		if Decode(e.Data, &d) != nil || !storage.ValidID(d.AttemptID) || !storage.ValidID(d.MessageID) || len(d.Text) == 0 || len(d.Text) > 8192 {
-			return bad()
-		}
 	case "model.response.completed":
 		var d ResponseData
 		if Decode(e.Data, &d) != nil || !storage.ValidID(d.AttemptID) || !storage.ValidID(d.MessageID) || !storage.ValidID(d.ContentID) || (d.FinishReason != "stop" && d.FinishReason != "tool_calls") || len(d.Calls) > 16 || len(d.Preview) > 8192 {
@@ -171,7 +156,7 @@ func validateRuntime(e Proposed) (bool, error) {
 		}
 	case "model.attempt.failed":
 		var d AttemptFailedData
-		if Decode(e.Data, &d) != nil || !storage.ValidID(d.AttemptID) || !storage.ValidID(d.MessageID) || d.Error == "" || len(d.Error) > 64 || !validUsage(d.Usage) || !validObservation(d.Observation) {
+		if Decode(e.Data, &d) != nil || !storage.ValidID(d.AttemptID) || !storage.ValidID(d.MessageID) || d.Error == "" || len(d.Error) > 64 || len(d.Preview) > 8192 || !validUsage(d.Usage) || !validObservation(d.Observation) {
 			return bad()
 		}
 	case "tool.execution.started", "tool.execution.completed":

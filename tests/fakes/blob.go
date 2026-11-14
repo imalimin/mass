@@ -21,12 +21,18 @@ func NewBlobs() *Blobs                           { return &Blobs{Data: map[strin
 func (b *Blobs) URI(key string) string           { return "tos://test-bucket/" + key }
 func (b *Blobs) Check(ctx context.Context) error { return ctx.Err() }
 func (b *Blobs) PutNew(ctx context.Context, key string, r io.Reader, size int64, media string) (storage.BlobInfo, error) {
+	return b.put(ctx, key, r, true)
+}
+func (b *Blobs) Overwrite(ctx context.Context, key string, r io.Reader, size int64, media string) (storage.BlobInfo, error) {
+	return b.put(ctx, key, r, false)
+}
+func (b *Blobs) put(ctx context.Context, key string, r io.Reader, immutable bool) (storage.BlobInfo, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.Fail {
 		return storage.BlobInfo{}, errors.New("injected TOS outage")
 	}
-	if _, ok := b.Data[key]; ok {
+	if _, ok := b.Data[key]; ok && immutable {
 		return storage.BlobInfo{}, errors.New("overwrite forbidden")
 	}
 	data, err := io.ReadAll(storage.ContextReader{Context: ctx, Reader: r})
@@ -44,7 +50,7 @@ func (b *Blobs) Open(ctx context.Context, key, version string) (io.ReadCloser, e
 	}
 	data, ok := b.Data[key]
 	if !ok {
-		return nil, storage.ErrIntegrity
+		return nil, storage.ErrBlobNotFound
 	}
 	return io.NopCloser(bytes.NewReader(append([]byte(nil), data...))), nil
 }

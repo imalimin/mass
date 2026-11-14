@@ -51,10 +51,34 @@ func (r *Sources) skill(ctx context.Context, s run.Snapshot, id string) (run.Ski
 							Assets []run.SkillResource `json:"assets"`
 						} `json:"document"`
 					}
-					if err = ReadJSON(ctx, r.Files.Content, s.ActorID, s.SpaceID, ref.ObjectID, 16<<20, &bundle); err != nil {
+					o, f, err := r.Files.Content.Read(ctx, s.ActorID, s.SpaceID, ref.ObjectID)
+					if err != nil {
 						return skill, err
 					}
+					defer f.Close()
+					var raw []byte
+					if o.Kind == SkillPackageKind {
+						z, e := OpenSkillPackage(f, o)
+						if e != nil {
+							return skill, e
+						}
+						raw, err = ReadSkillEntry(z, SkillManifestPath, 4<<20)
+					} else {
+						raw, err = io.ReadAll(io.LimitReader(f, (16<<20)+1))
+						if len(raw) > 16<<20 {
+							err = storage.ErrIntegrity
+						}
+					}
+					if err != nil || json.Unmarshal(raw, &bundle) != nil {
+						return skill, storage.ErrIntegrity
+					}
 					skill.Resources = bundle.Document.Assets
+					if o.Kind == SkillPackageKind {
+						for j := range skill.Resources {
+							skill.Resources[j].ObjectID = o.ID
+							skill.Resources[j].Package = true
+						}
+					}
 					return skill, nil
 				}
 			}
@@ -74,7 +98,7 @@ func (r *Sources) List(ctx context.Context, s run.Snapshot, binding, prefix, cur
 	if len(prefix) > 1024 || strings.ContainsAny(prefix, "\\\x00") || strings.Contains(prefix, "..") {
 		return run.ToolResult{}, storage.ErrInvalid
 	}
-	return r.Files.page(ctx, s, "skill:"+binding, PageInput{Pattern: prefix, Cursor: cursor, Limit: limit}, func() (queryResult, error) {
+	return r.Files.page(s, "skill:"+binding, PageInput{Pattern: prefix, Cursor: cursor, Limit: limit}, func() (queryResult, error) {
 		q := queryResult{Items: []json.RawMessage{}, Complete: true}
 		for _, a := range skill.Resources {
 			q.Scanned++
@@ -101,7 +125,15 @@ func (r *Sources) ReadSkill(ctx context.Context, s run.Snapshot, in SourceInput)
 		if a.Path != in.Path {
 			continue
 		}
-		raw, err := ReadBytes(ctx, r.Files.Content, s.ActorID, s.SpaceID, a.ObjectID, 8<<20)
+		var raw []byte
+		source := storage.Ref{Role: "source", ObjectID: a.ObjectID, SHA256: a.SHA256}
+		if a.Package {
+			var o storage.Object
+			raw, o, err = ReadSkillPackageFile(ctx, r.Files.Content, s.ActorID, s.SpaceID, a.ObjectID, a.Path)
+			source.SHA256 = o.SHA256
+		} else {
+			raw, err = ReadBytes(ctx, r.Files.Content, s.ActorID, s.SpaceID, a.ObjectID, SkillFileMaxBytes)
+		}
 		if err != nil {
 			return run.ToolResult{}, err
 		}
@@ -115,7 +147,7 @@ func (r *Sources) ReadSkill(ctx context.Context, s run.Snapshot, in SourceInput)
 		data["skill_binding_id"] = skill.VersionID
 		data["path"] = a.Path
 		data["version"] = skill.Version
-		result := dataResult(data, "none", storage.Ref{Role: "source", ObjectID: a.ObjectID, SHA256: a.SHA256})
+		result := dataResult(data, "none", source)
 		result.Complete = data["complete"].(bool)
 		result.Truncated = !result.Complete
 		return result, nil

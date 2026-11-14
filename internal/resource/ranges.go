@@ -1,7 +1,6 @@
 package resource
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"github.com/imalimin/mass/internal/domain/run"
@@ -10,8 +9,6 @@ import (
 )
 
 const PreviewBytes = 64 << 10
-
-func bytesReader(raw []byte) *bytes.Reader { return bytes.NewReader(raw) }
 
 // Ranges describe complete source bytes; a bounded view never masquerades as the full source.
 func rangeData(raw []byte, r *run.Range) (map[string]any, error) {

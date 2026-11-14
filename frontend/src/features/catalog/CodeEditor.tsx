@@ -2,10 +2,19 @@ import { useEffect, useRef } from 'react'
 import * as monaco from 'monaco-editor/editor/editor.api'
 import 'monaco-editor/languages/definitions/markdown/register'
 import 'monaco-editor/languages/definitions/yaml/register'
+import 'monaco-editor/languages/definitions/javascript/register'
+import 'monaco-editor/languages/definitions/typescript/register'
+import 'monaco-editor/languages/definitions/python/register'
+import 'monaco-editor/languages/features/json/register'
+import 'monaco-editor/languages/definitions/shell/register'
+import 'monaco-editor/languages/definitions/html/register'
+import 'monaco-editor/languages/definitions/css/register'
+import 'monaco-editor/languages/definitions/sql/register'
+import 'monaco-editor/languages/definitions/go/register'
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker'
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
-export default function CodeEditor({ value, onChange, label, language = 'markdown', original }: { value: string; onChange?: (value: string) => void; label: string; language?: string; original?: string }) {
+export default function CodeEditor({ value, onChange, label, language = 'markdown', original, readOnly }: { value: string; onChange?: (value: string) => void; label: string; language?: string; original?: string; readOnly?: boolean }) {
   const root = useRef<HTMLDivElement>(null), editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null), latest = useRef(onChange)
   useEffect(() => { latest.current = onChange }, [onChange])
   useEffect(() => {
@@ -15,12 +24,13 @@ export default function CodeEditor({ value, onChange, label, language = 'markdow
       const diff = monaco.editor.createDiffEditor(root.current, { automaticLayout: true, readOnly: true, renderSideBySide: false, minimap: { enabled: false }, ariaLabel: label })
       diff.setModel({ original: a, modified: b }); return () => { diff.dispose(); a.dispose(); b.dispose() }
     }
-    const instance = monaco.editor.create(root.current, { value, language, automaticLayout: true, ariaLabel: label, readOnly: !onChange, editContext: false, accessibilitySupport: 'on', minimap: { enabled: false }, wordWrap: 'on', scrollBeyondLastLine: false, fontSize: 13 })
+    const instance = monaco.editor.create(root.current, { value, language, automaticLayout: true, ariaLabel: label, readOnly: readOnly ?? !onChange, editContext: false, accessibilitySupport: 'on', minimap: { enabled: false }, wordWrap: 'on', scrollBeyondLastLine: false, fontSize: 13 })
     editor.current = instance
     const change = instance.onDidChangeModelContent(() => latest.current?.(instance.getValue()))
     return () => { change.dispose(); const model = instance.getModel(); instance.dispose(); model?.dispose(); editor.current = null }
     // Editor/model lifetime follows the document; controlled text updates happen below.
   }, [label, language, original])
   useEffect(() => { if (editor.current && editor.current.getValue() !== value) editor.current.setValue(value) }, [value])
+  useEffect(() => { editor.current?.updateOptions({ readOnly: readOnly ?? !onChange }) }, [label, language, onChange, readOnly])
   return <div className="code-editor" ref={root} data-editor={label} />
 }

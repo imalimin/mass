@@ -77,16 +77,10 @@ type provider struct {
 }
 
 func (p *provider) Source() string { return "fake" }
-func (p *provider) Stream(ctx context.Context, snapshot run.Snapshot, _ run.Prepared, key string, r Recorder, delta func(string) error) (run.Reply, error) {
+func (p *provider) Stream(_ context.Context, snapshot run.Snapshot, _ run.Prepared, key string, delta func(string) error) (run.Reply, error) {
 	p.calls++
 	p.endpoints = append(p.endpoints, snapshot.Definition.Model.Endpoint)
 	p.keys = append(p.keys, key)
-	if err := r.Request(ctx, []byte(`{"messages":[]}`)); err != nil {
-		return run.Reply{}, err
-	}
-	if err := r.Response(ctx, 503, []byte(`{"error":"busy"}`)); err != nil {
-		return run.Reply{}, err
-	}
 	if p.calls == 1 {
 		if p.partial {
 			if err := delta("partial"); err != nil {

@@ -10,8 +10,9 @@ export async function startTOSFixture() {
     if (req.method === 'HEAD') { res.writeHead(200); res.end(); return }
     const key = req.url.split('?')[0]
     if (req.method === 'PUT') {
-      if (req.headers['x-tos-forbid-overwrite'] !== 'true') { res.writeHead(400); res.end('{}'); return }
-      if (objects.has(key)) { res.writeHead(409); res.end('{"Code":"FileAlreadyExists"}'); return }
+      const trace = key.endsWith('/trace.jsonl')
+      if (!trace && req.headers['x-tos-forbid-overwrite'] !== 'true') { res.writeHead(400); res.end('{}'); return }
+      if (!trace && objects.has(key)) { res.writeHead(409); res.end('{"Code":"FileAlreadyExists"}'); return }
       const chunks = []; let size = 0
       for await (const chunk of req) { size += chunk.length; if (size > 32 * 1024 * 1024) { res.writeHead(413); res.end('{}'); return }; chunks.push(chunk) }
       const data = Buffer.concat(chunks), etag = createHash('md5').update(data).digest('hex')

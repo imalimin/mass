@@ -16,3 +16,22 @@ type ModelObservation struct {
 	HTTPStatus   int    `json:"http_status"`
 	Component    string `json:"component"`
 }
+
+// ModelTrace is the merged provider output retained for diagnostics during a run.
+type ModelTrace struct {
+	Reasoning       *string
+	ToolCalls       []NativeToolCall
+	UsagePresent    bool
+	ReasoningTokens *int64
+}
+
+type NativeToolCall struct {
+	ID       string             `json:"id"`
+	Type     string             `json:"type"`
+	Function NativeFunctionCall `json:"function"`
+}
+
+type NativeFunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}

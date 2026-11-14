@@ -20,41 +20,6 @@ func sensitiveHeader(name string) bool {
 	name = strings.ToLower(name)
 	return name == "authorization" || name == "proxy-authorization" || name == "cookie" || name == "set-cookie" || strings.Contains(name, "api-key") || strings.Contains(name, "token") || strings.Contains(name, "secret")
 }
-func redactedRequest(args map[string]any) map[string]any {
-	result := map[string]any{}
-	for k, v := range args {
-		result[k] = v
-	}
-	redactions := []string{}
-	if text, ok := args["url"].(string); ok {
-		if u, e := url.Parse(text); e == nil {
-			q := u.Query()
-			for k := range q {
-				lower := strings.ToLower(k)
-				if strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "key") || strings.Contains(lower, "password") || strings.Contains(lower, "signature") || lower == "sig" {
-					q.Set(k, "[REDACTED]")
-					redactions = append(redactions, "query:"+k)
-				}
-			}
-			u.RawQuery = q.Encode()
-			result["url"] = u.String()
-		}
-	}
-	if headers, ok := args["headers"].(map[string]any); ok {
-		safe := map[string]any{}
-		for k, v := range headers {
-			if sensitiveHeader(k) {
-				safe[k] = "[REDACTED]"
-				redactions = append(redactions, "header:"+k)
-			} else {
-				safe[k] = v
-			}
-		}
-		result["headers"] = safe
-	}
-	result["redactions"] = redactions
-	return result
-}
 func (n *Network) Request(ctx context.Context, args map[string]any, maximum int64, check func(context.Context) error) (map[string]any, string, error) {
 	for key, value := range args {
 		switch key {

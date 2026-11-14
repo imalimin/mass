@@ -27,40 +27,8 @@ type Control struct {
 	check              func(context.Context) error
 }
 
-func New(snapshot run.Snapshot, started time.Time, history []journal.Event, check func(context.Context) error) *Control {
-	c := &Control{deadline: started.Add(time.Duration(snapshot.Definition.TimeoutSeconds) * time.Second), maxCalls: snapshot.Definition.MaxSteps, maxTools: snapshot.Definition.MaxSteps * 16, maxTokens: int64(snapshot.Definition.MaxSteps) * int64(snapshot.Definition.MaxInputTokens+snapshot.Definition.OutputTokens), items: map[string]reservation{}, check: check}
-	for _, e := range history {
-		if e.RunID != snapshot.ID {
-			continue
-		}
-		switch e.Type {
-		case "model.attempt.started":
-			var d journal.AttemptData
-			journal.Decode(e.Data, &d)
-			if _, ok := c.items[d.ID]; !ok {
-				n := int64(snapshot.Definition.MaxInputTokens + snapshot.Definition.OutputTokens)
-				c.items[d.ID] = reservation{Kind: "model", Upper: n}
-				c.calls++
-				c.charged += n
-			}
-		case "model.response.completed":
-			var d journal.ResponseData
-			journal.Decode(e.Data, &d)
-			_ = c.Settle(d.AttemptID, d.Usage)
-		case "model.attempt.failed":
-			var d journal.AttemptFailedData
-			journal.Decode(e.Data, &d)
-			_ = c.Settle(d.AttemptID, d.Usage)
-		case "tool.execution.started":
-			var d journal.ToolData
-			journal.Decode(e.Data, &d)
-			if _, ok := c.items[d.CallID]; !ok {
-				c.items[d.CallID] = reservation{Kind: "tool"}
-				c.tools++
-			}
-		}
-	}
-	return c
+func New(snapshot run.Snapshot, started time.Time, check func(context.Context) error) *Control {
+	return &Control{deadline: started.Add(time.Duration(snapshot.Definition.TimeoutSeconds) * time.Second), maxCalls: snapshot.Definition.MaxSteps, maxTools: snapshot.Definition.MaxSteps * 16, maxTokens: int64(snapshot.Definition.MaxSteps) * int64(snapshot.Definition.MaxInputTokens+snapshot.Definition.OutputTokens), items: map[string]reservation{}, check: check}
 }
 func (c *Control) Check(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {

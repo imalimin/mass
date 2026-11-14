@@ -59,7 +59,19 @@ func (s *Store) Object(ctx context.Context, actor, space, id string, referenced 
 	err = s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
 		query := "SELECT " + objectColumns + " FROM content_objects WHERE space_id=? AND id=? AND state='ready'"
 		if referenced {
-			query += " AND (EXISTS(SELECT 1 FROM event_objects e WHERE e.space_id=content_objects.space_id AND e.object_id=content_objects.id) OR EXISTS(SELECT 1 FROM definition_draft_objects d WHERE d.space_id=content_objects.space_id AND d.object_id=content_objects.id) OR EXISTS(SELECT 1 FROM definition_version_objects v WHERE v.space_id=content_objects.space_id AND v.object_id=content_objects.id))"
+			query += ` AND (
+ EXISTS(SELECT 1 FROM sessions s WHERE s.space_id=content_objects.space_id AND s.definition_ref=content_objects.id)
+ OR EXISTS(SELECT 1 FROM messages m WHERE m.space_id=content_objects.space_id AND m.content_id=content_objects.id)
+ OR EXISTS(SELECT 1 FROM attachments a JOIN messages m ON m.space_id=a.space_id AND m.session_id=a.session_id
+    WHERE a.space_id=content_objects.space_id AND a.object_id=content_objects.id
+    AND JSON_CONTAINS(m.attachments,JSON_OBJECT('id',a.id)))
+ OR EXISTS(SELECT 1 FROM model_attempts m WHERE m.space_id=content_objects.space_id AND (m.content_id=content_objects.id OR m.summary_ref=content_objects.id))
+ OR EXISTS(SELECT 1 FROM context_projections p WHERE p.space_id=content_objects.space_id AND p.content_id=content_objects.id)
+ OR EXISTS(SELECT 1 FROM workspace_snapshots s WHERE s.space_id=content_objects.space_id AND (s.object_id=content_objects.id OR s.manifest_ref=content_objects.id))
+ OR EXISTS(SELECT 1 FROM artifacts a WHERE a.space_id=content_objects.space_id AND a.object_id=content_objects.id)
+ OR EXISTS(SELECT 1 FROM definition_versions v WHERE v.space_id=content_objects.space_id AND v.content_id=content_objects.id)
+ OR EXISTS(SELECT 1 FROM skill_drafts d WHERE d.space_id=content_objects.space_id AND d.content_id=content_objects.id)
+ OR EXISTS(SELECT 1 FROM skill_versions v WHERE v.space_id=content_objects.space_id AND v.content_id=content_objects.id))`
 		}
 		var e error
 		o, e = scanObject(tx.QueryRowContext(ctx, query, space, id).Scan)

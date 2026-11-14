@@ -12,6 +12,7 @@ import (
 	"github.com/imalimin/mass/internal/app/catalog"
 	"github.com/imalimin/mass/internal/app/identity"
 	"github.com/imalimin/mass/internal/domain/storage"
+	"github.com/imalimin/mass/internal/resource"
 )
 
 const definitionColumns = "d.id,d.kind,d.name,d.archived,COALESCE(d.default_version_id,'')"
@@ -28,6 +29,10 @@ func catalogDraft(ctx context.Context, tx *sql.Tx, space, kind, id string) (d ca
 	if err != nil {
 		return
 	}
+	if kind == "skill" {
+		err = tx.QueryRowContext(ctx, "SELECT revision,content_id FROM skill_drafts WHERE space_id=? AND definition_id=? FOR UPDATE", space, id).Scan(&d.Revision, &d.ContentID)
+		return
+	}
 	var raw []byte
 	err = tx.QueryRowContext(ctx, "SELECT revision,document FROM definition_drafts WHERE space_id=? AND definition_id=? FOR UPDATE", space, id).Scan(&d.Revision, &raw)
 	if err == nil {
@@ -35,45 +40,27 @@ func catalogDraft(ctx context.Context, tx *sql.Tx, space, kind, id string) (d ca
 	}
 	return
 }
-func assetObjects(ctx context.Context, tx *sql.Tx, space string, assets []catalog.Asset) error {
-	for _, a := range assets {
-		o, err := scanObject(tx.QueryRowContext(ctx, "SELECT "+objectColumns+" FROM content_objects WHERE space_id=? AND id=? AND state='ready' AND kind='definition.asset'", space, a.ObjectID).Scan)
-		if err != nil {
-			return err
-		}
-		if o.SHA256 != a.SHA256 || o.Size != a.Size || o.MediaType != a.MediaType {
-			return catalog.ErrConfig
-		}
-	}
-	return nil
-}
-func draftObjects(ctx context.Context, tx *sql.Tx, space string, d catalog.Draft) error {
-	if _, err := tx.ExecContext(ctx, "DELETE FROM definition_draft_objects WHERE space_id=? AND definition_id=?", space, d.ID); err != nil {
-		return err
-	}
-	for _, a := range d.Document.Assets {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO definition_draft_objects(space_id,definition_id,path,object_id) VALUES(?,?,?,?)", space, d.ID, a.Path, a.ObjectID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 func (s *Store) CatalogCreate(ctx context.Context, actor, space string, d catalog.Draft) error {
 	return s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
 		if _, err := catalog.ValidateDocument(d.Kind, d.Name, d.Document, false); err != nil {
 			return err
 		}
-		if err := assetObjects(ctx, tx, space, d.Document.Assets); err != nil {
-			return err
-		}
 		if _, err := tx.ExecContext(ctx, "INSERT INTO definitions(space_id,id,kind,name) VALUES(?,?,?,?)", space, d.ID, d.Kind, d.Name); err != nil {
 			return err
 		}
-		raw, _ := json.Marshal(d.Document)
-		if _, err := tx.ExecContext(ctx, "INSERT INTO definition_drafts(space_id,definition_id,document) VALUES(?,?,?)", space, d.ID, raw); err != nil {
+		if d.Kind == "skill" {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO skill_drafts(space_id,definition_id,content_id)
+				VALUES(?,?,(SELECT id FROM content_objects WHERE space_id=? AND id=? AND state='ready' AND kind=?))`,
+				space, d.ID, space, d.ContentID, resource.SkillPackageKind); err != nil {
+				return err
+			}
+			return audit(ctx, tx, actor, space, "definition.created", d.ID)
+		}
+		raw, err := json.Marshal(d.Document)
+		if err != nil {
 			return err
 		}
-		if err := draftObjects(ctx, tx, space, d); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO definition_drafts(space_id,definition_id,document) VALUES(?,?,?)", space, d.ID, raw); err != nil {
 			return err
 		}
 		return audit(ctx, tx, actor, space, "definition.created", d.ID)
@@ -117,25 +104,29 @@ func (s *Store) CatalogSave(ctx context.Context, actor, space string, d catalog.
 		if _, err = catalog.ValidateDocument(d.Kind, old.Name, d.Document, false); err != nil {
 			return err
 		}
-		if err = assetObjects(ctx, tx, space, d.Document.Assets); err != nil {
-			return err
+		var result sql.Result
+		if d.Kind == "skill" {
+			result, err = tx.ExecContext(ctx, `UPDATE skill_drafts SET revision=revision+1,
+				content_id=(SELECT id FROM content_objects WHERE space_id=? AND id=? AND state='ready' AND kind=?)
+				WHERE space_id=? AND definition_id=? AND revision=?`, space, d.ContentID, resource.SkillPackageKind, space, d.ID, d.Revision)
+		} else {
+			raw, e := json.Marshal(d.Document)
+			if e != nil {
+				return e
+			}
+			result, err = tx.ExecContext(ctx, "UPDATE definition_drafts SET document=?,revision=revision+1 WHERE space_id=? AND definition_id=? AND revision=?", raw, space, d.ID, d.Revision)
 		}
-		raw, _ := json.Marshal(d.Document)
-		result, err := tx.ExecContext(ctx, "UPDATE definition_drafts SET document=?,revision=revision+1 WHERE space_id=? AND definition_id=? AND revision=?", raw, space, d.ID, d.Revision)
 		if err != nil {
 			return err
 		}
 		if n, _ := result.RowsAffected(); n != 1 {
 			return catalog.ErrDraft
 		}
-		if err = draftObjects(ctx, tx, space, d); err != nil {
-			return err
-		}
 		return audit(ctx, tx, actor, space, "draft.saved", d.ID)
 	})
 }
-func prepareCatalog(ctx context.Context, tx *sql.Tx, space, kind, id string, revision int64) (b catalog.Bundle, err error) {
-	d, err := catalogDraft(ctx, tx, space, kind, id)
+func prepareCatalog(ctx context.Context, tx *sql.Tx, space, id string, revision int64) (b catalog.Bundle, err error) {
+	d, err := catalogDraft(ctx, tx, space, "agent", id)
 	if err != nil {
 		return b, err
 	}
@@ -145,17 +136,11 @@ func prepareCatalog(ctx context.Context, tx *sql.Tx, space, kind, id string, rev
 	if d.Archived {
 		return b, catalog.ErrConfig
 	}
-	c, err := catalog.ValidateDocument(kind, d.Name, d.Document, true)
+	c, err := catalog.ValidateDocument(d.Kind, d.Name, d.Document, true)
 	if err != nil {
 		return b, err
 	}
-	if err = assetObjects(ctx, tx, space, d.Document.Assets); err != nil {
-		return b, err
-	}
-	b = catalog.Bundle{FormatVersion: 1, DefinitionID: id, Kind: kind, Name: d.Name, Revision: revision, Document: d.Document, Config: c, Bindings: []catalog.Binding{}}
-	if c == nil {
-		return b, nil
-	}
+	b = catalog.Bundle{FormatVersion: 1, DefinitionID: id, Kind: d.Kind, Name: d.Name, Revision: revision, Document: d.Document, Config: c, Bindings: []catalog.Binding{}}
 	m, err := scanModel(tx.QueryRowContext(ctx, "SELECT "+modelColumns+" FROM model_configs m WHERE m.space_id=? AND m.id=? AND m.enabled=TRUE", space, c.Model).Scan)
 	if err != nil {
 		return b, err
@@ -166,7 +151,10 @@ func prepareCatalog(ctx context.Context, tx *sql.Tx, space, kind, id string, rev
 	b.Model = &m
 	for _, ref := range c.Skills {
 		var binding catalog.Binding
-		err = tx.QueryRowContext(ctx, "SELECT v.definition_id,v.id,v.label,v.sha256 FROM definition_versions v JOIN definitions d ON d.space_id=v.space_id AND d.id=v.definition_id WHERE v.space_id=? AND v.definition_id=? AND v.label=? AND v.debug=FALSE AND v.archived=FALSE AND d.archived=FALSE AND d.kind='skill'", space, ref.ID, ref.Version).Scan(&binding.SkillID, &binding.VersionID, &binding.Version, &binding.SHA256)
+		err = tx.QueryRowContext(ctx, `SELECT v.definition_id,v.id,v.label,o.sha256 FROM skill_versions v
+			JOIN definitions d ON d.space_id=v.space_id AND d.id=v.definition_id
+			JOIN content_objects o ON o.space_id=v.space_id AND o.id=v.content_id
+			WHERE v.space_id=? AND v.definition_id=? AND v.label=? AND v.archived=FALSE AND d.archived=FALSE`, space, ref.ID, ref.Version).Scan(&binding.SkillID, &binding.VersionID, &binding.Version, &binding.SHA256)
 		if err != nil {
 			return b, err
 		}
@@ -174,33 +162,52 @@ func prepareCatalog(ctx context.Context, tx *sql.Tx, space, kind, id string, rev
 	}
 	return b, nil
 }
-func (s *Store) CatalogPrepare(ctx context.Context, actor, space, kind, id string, revision int64) (b catalog.Bundle, err error) {
+func (s *Store) CatalogPrepare(ctx context.Context, actor, space, id string, revision int64) (b catalog.Bundle, err error) {
 	err = s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
 		var e error
-		b, e = prepareCatalog(ctx, tx, space, kind, id, revision)
+		b, e = prepareCatalog(ctx, tx, space, id, revision)
 		return e
 	})
 	return
 }
 func (s *Store) CatalogPublish(ctx context.Context, actor, space string, v catalog.Version) error {
 	return s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
-		b, err := prepareCatalog(ctx, tx, space, v.Bundle.Kind, v.DefinitionID, v.Bundle.Revision)
+		b := v.Bundle
+		if b.Kind == "skill" {
+			d, err := catalogDraft(ctx, tx, space, "skill", v.DefinitionID)
+			if err != nil {
+				return err
+			}
+			if d.Revision != b.Revision || d.ContentID != v.ContentID || d.Archived {
+				return catalog.ErrDraft
+			}
+			o, err := scanObject(tx.QueryRowContext(ctx, "SELECT "+objectColumns+" FROM content_objects WHERE space_id=? AND id=? AND state='ready' AND kind=?", space, v.ContentID, resource.SkillPackageKind).Scan)
+			if err != nil {
+				return err
+			}
+			if o.SHA256 != v.SHA256 {
+				return storage.ErrIntegrity
+			}
+			_, err = tx.ExecContext(ctx, "INSERT INTO skill_versions(space_id,id,definition_id,label,content_id,created_at) VALUES(?,?,?,?,?,?)", space, v.ID, v.DefinitionID, v.Label, v.ContentID, v.CreatedAt)
+			if err = publishError(err); err != nil {
+				return err
+			}
+			return audit(ctx, tx, actor, space, "definition.published", v.ID)
+		}
+		current, err := prepareCatalog(ctx, tx, space, v.DefinitionID, b.Revision)
 		if err != nil {
 			return err
 		}
-		if !catalog.Equal(b, v.Bundle) {
+		if !catalog.Equal(current, b) {
 			return catalog.ErrDraft
 		}
 		o, err := scanObject(tx.QueryRowContext(ctx, "SELECT "+objectColumns+" FROM content_objects WHERE space_id=? AND id=? AND state='ready' AND kind='definition.bundle'", space, v.ContentID).Scan)
 		if err != nil {
 			return err
 		}
-		if o.SHA256 != v.SHA256 {
-			return storage.ErrIntegrity
-		}
 		raw, _ := json.Marshal(b)
 		sum := sha256.Sum256(raw)
-		if hex.EncodeToString(sum[:]) != o.SHA256 {
+		if o.SHA256 != v.SHA256 || hex.EncodeToString(sum[:]) != o.SHA256 {
 			return storage.ErrIntegrity
 		}
 		var label any = v.Label
@@ -208,11 +215,7 @@ func (s *Store) CatalogPublish(ctx context.Context, actor, space string, v catal
 			label = nil
 		}
 		_, err = tx.ExecContext(ctx, "INSERT INTO definition_versions(space_id,id,definition_id,label,debug,content_id,sha256,bundle,created_at) VALUES(?,?,?,?,?,?,?,?,?)", space, v.ID, v.DefinitionID, label, v.Debug, v.ContentID, v.SHA256, raw, v.CreatedAt)
-		var sqlerr *mysql.MySQLError
-		if errors.As(err, &sqlerr) && sqlerr.Number == 1062 {
-			return catalog.ErrVersion
-		}
-		if err != nil {
+		if err = publishError(err); err != nil {
 			return err
 		}
 		for i, binding := range b.Bindings {
@@ -220,15 +223,7 @@ func (s *Store) CatalogPublish(ctx context.Context, actor, space string, v catal
 				return err
 			}
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO definition_version_objects(space_id,version_id,path,object_id) VALUES(?,?,?,?)", space, v.ID, "bundle.json", v.ContentID); err != nil {
-			return err
-		}
-		for _, a := range b.Document.Assets {
-			if _, err = tx.ExecContext(ctx, "INSERT INTO definition_version_objects(space_id,version_id,path,object_id) VALUES(?,?,?,?)", space, v.ID, a.Path, a.ObjectID); err != nil {
-				return err
-			}
-		}
-		if !v.Debug && b.Kind == "agent" {
+		if !v.Debug {
 			if _, err = tx.ExecContext(ctx, "UPDATE definitions SET default_version_id=? WHERE space_id=? AND id=? AND default_version_id IS NULL", v.ID, space, v.DefinitionID); err != nil {
 				return err
 			}
@@ -241,12 +236,28 @@ func (s *Store) CatalogPublish(ctx context.Context, actor, space string, v catal
 	})
 }
 
-const versionColumns = "v.id,v.definition_id,COALESCE(v.label,''),v.debug,v.archived,v.content_id,v.sha256,v.created_at,v.bundle"
+func publishError(err error) error {
+	var sqlerr *mysql.MySQLError
+	if errors.As(err, &sqlerr) && sqlerr.Number == 1062 {
+		return catalog.ErrVersion
+	}
+	return err
+}
+
+const agentVersionSelect = "SELECT v.id,v.definition_id,COALESCE(v.label,''),v.debug,v.archived,v.content_id,v.sha256,v.created_at,v.bundle FROM definition_versions v"
+const skillVersionSelect = "SELECT v.id,v.definition_id,v.label,FALSE,v.archived,v.content_id,o.sha256,v.created_at,NULL FROM skill_versions v JOIN content_objects o ON o.space_id=v.space_id AND o.id=v.content_id"
+
+func versionTable(kind string) string {
+	if kind == "skill" {
+		return "skill_versions"
+	}
+	return "definition_versions"
+}
 
 func scanVersion(scan func(...any) error) (v catalog.Version, err error) {
 	var raw []byte
 	err = scan(&v.ID, &v.DefinitionID, &v.Label, &v.Debug, &v.Archived, &v.ContentID, &v.SHA256, &v.CreatedAt, &raw)
-	if err == nil {
+	if err == nil && raw != nil {
 		err = json.Unmarshal(raw, &v.Bundle)
 	}
 	return
@@ -257,7 +268,16 @@ func (s *Store) CatalogVersions(ctx context.Context, actor, space, kind, id stri
 		if _, e := catalogDefinition(ctx, tx, space, kind, id); e != nil {
 			return e
 		}
-		rows, e := tx.QueryContext(ctx, "SELECT "+versionColumns+" FROM definition_versions v WHERE v.space_id=? AND v.definition_id=? AND v.debug=? AND v.id>? ORDER BY v.id LIMIT ?", space, id, debug, q.After, q.Limit)
+		var rows *sql.Rows
+		var e error
+		if kind == "skill" {
+			if debug {
+				return nil
+			}
+			rows, e = tx.QueryContext(ctx, skillVersionSelect+" WHERE v.space_id=? AND v.definition_id=? AND v.id>? ORDER BY v.id LIMIT ?", space, id, q.After, q.Limit)
+		} else {
+			rows, e = tx.QueryContext(ctx, agentVersionSelect+" WHERE v.space_id=? AND v.definition_id=? AND v.debug=? AND v.id>? ORDER BY v.id LIMIT ?", space, id, debug, q.After, q.Limit)
+		}
 		if e != nil {
 			return e
 		}
@@ -279,7 +299,11 @@ func (s *Store) CatalogVersion(ctx context.Context, actor, space, kind, id, vers
 			return e
 		}
 		var e error
-		v, e = scanVersion(tx.QueryRowContext(ctx, "SELECT "+versionColumns+" FROM definition_versions v WHERE v.space_id=? AND v.definition_id=? AND v.id=?", space, id, version).Scan)
+		query := agentVersionSelect
+		if kind == "skill" {
+			query = skillVersionSelect
+		}
+		v, e = scanVersion(tx.QueryRowContext(ctx, query+" WHERE v.space_id=? AND v.definition_id=? AND v.id=?", space, id, version).Scan)
 		return e
 	})
 	return
@@ -291,7 +315,7 @@ func (s *Store) CatalogReferences(ctx context.Context, actor, space, kind, id, v
 			return e
 		}
 		var found string
-		if e := tx.QueryRowContext(ctx, "SELECT id FROM definition_versions WHERE space_id=? AND definition_id=? AND id=?", space, id, version).Scan(&found); e != nil {
+		if e := tx.QueryRowContext(ctx, "SELECT id FROM "+versionTable(kind)+" WHERE space_id=? AND definition_id=? AND id=?", space, id, version).Scan(&found); e != nil {
 			return e
 		}
 		rows, e := tx.QueryContext(ctx, "SELECT v.id,d.id,d.name,COALESCE(v.label,''),v.debug FROM definition_dependencies dep JOIN definition_versions v ON v.space_id=dep.space_id AND v.id=dep.version_id JOIN definitions d ON d.space_id=v.space_id AND d.id=v.definition_id WHERE dep.space_id=? AND dep.skill_version_id=? AND v.id>? ORDER BY v.id LIMIT ?", space, version, q.After, q.Limit)
@@ -320,7 +344,12 @@ func (s *Store) CatalogState(ctx context.Context, actor, space, kind, id, versio
 			_, err = tx.ExecContext(ctx, "UPDATE definitions SET archived=? WHERE space_id=? AND id=?", archived, space, id)
 		} else {
 			var debug, oldArchive bool
-			if err = tx.QueryRowContext(ctx, "SELECT debug,archived FROM definition_versions WHERE space_id=? AND definition_id=? AND id=?", space, id, version).Scan(&debug, &oldArchive); err != nil {
+			table := versionTable(kind)
+			query := "SELECT debug,archived FROM definition_versions"
+			if kind == "skill" {
+				query = "SELECT FALSE,archived FROM skill_versions"
+			}
+			if err = tx.QueryRowContext(ctx, query+" WHERE space_id=? AND definition_id=? AND id=?", space, id, version).Scan(&debug, &oldArchive); err != nil {
 				return err
 			}
 			switch action {
@@ -333,7 +362,7 @@ func (s *Store) CatalogState(ctx context.Context, actor, space, kind, id, versio
 				if archived && d.DefaultVersionID == version {
 					return catalog.ErrReferenced
 				}
-				_, err = tx.ExecContext(ctx, "UPDATE definition_versions SET archived=? WHERE space_id=? AND id=?", archived, space, version)
+				_, err = tx.ExecContext(ctx, "UPDATE "+table+" SET archived=? WHERE space_id=? AND id=?", archived, space, version)
 			case "delete":
 				// Published content is retained; referenced versions have a specific conflict.
 				var n int

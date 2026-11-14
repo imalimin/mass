@@ -2,7 +2,7 @@
 
 Multi-use Agent Systems：支持空间协作、Agent/Skill 定义、版本管理与连续任务执行的单服务应用。
 
-当前 D00—D10 的 MVP 建设及验收已完成，D07 真实模型与 D10 真实 TOS 恢复证据已补齐：可配置模型、发布 Agent/Skill、创建连续对话，使用全部十四个内置工具处理文件、已接受附件和固定版本 Skill 资源。支持 JavaScript 文件/HTTP/CSV 操作、计划展示、产物下载、Trace、取消和快照恢复；支持阶段摘要复用和原始事件 → 投影 Manifest → 实际请求的来源检查。
+当前 D00—D10 的 MVP 建设及验收已完成，D07 真实模型与 D10 真实 TOS 恢复证据已补齐：可配置模型、发布 Agent/Skill、创建连续对话，使用全部十四个内置工具处理文件、已接受附件和固定版本 Skill 资源。支持 JavaScript 文件/HTTP/CSV 操作、计划展示、产物下载、Trace、取消和快照恢复；支持阶段摘要复用和原始事件和投影 Manifest 的来源检查。
 
 > 本文件提供项目简介、Quickstart 和建设文档入口。系统方案及工程验收继续由文末四份建设文档维护，不新增专题主文档。
 
@@ -109,7 +109,7 @@ bin/mass check-config --config mass.yaml
 bin/mass migrate --config mass.yaml
 ```
 
-依次看到 `configuration valid` 和 `migrations applied` 即表示配置格式有效、迁移已完成。`check-config` 不验证外部服务连通性。当前 schema 版本为 **9**；迁移文件已嵌入二进制，无需手工执行 SQL 文件。
+依次看到 `configuration valid` 和 `migrations applied` 即表示配置格式有效、迁移已完成。`check-config` 不验证外部服务连通性。当前 schema 版本为 **10**；迁移文件已嵌入二进制，无需手工执行 SQL 文件。
 
 ### 5. 创建登录账号
 
@@ -180,7 +180,6 @@ unset MASS_INITIAL_PASSWORD
 - 升级：保留数据库、TOS 对象、配置和原主密钥；停止旧服务，提供迁移 DSN 后用新二进制执行 `mass migrate`，再启动新服务。无需重复创建已有账号。
 - 同一数据库只运行一个 MASS 执行实例；第二个实例无法取得运行锁。反向代理需允许长连接 SSE。
 - 进程异常结束后，遗留运行会标记 `interrupted`，不会自动重跑模型或工具。未保存文件可能丢失；页面可恢复最近已提交快照，或在目录仍完整且无活跃运行时「仅重试保存文件」。快照失败会阻止下一轮。
-- 离线重建：停止服务后执行 `bin/mass rebuild-views --config mass.yaml`。命令校验日志及 TOS 内容并重建运行、计划、产物及 UI 派生视图，不调用模型或工具；先保留数据库与 TOS 备份。
 - `serve` 不自动迁移；数据库版本不匹配会拒绝启动。首次启动也必须先执行迁移。
 - 对外部署：将 `http.listen` 设为部署所需的监听地址，`http.public_url` 设为浏览器实际使用的 HTTPS origin，设置 `auth.cookie_secure: true`，由 HTTPS 反向代理转发到 Go 服务。写请求会校验 Origin，地址和端口需与配置一致。
 
@@ -207,7 +206,7 @@ unset MASS_INITIAL_PASSWORD
 
 新建 Session 使用 Agent 的 `context.compression: summary` 时，上下文达到输入预算的 85% 会尝试压缩完整旧轮次，保留当前请求和全部工具配对；`reject` 直接拒绝超限输入。摘要通过同一模型网关调用，禁用工具，消耗当前 Run 的调用次数与 Token 预算。保存并验证成功后才切换 epoch，后续轮次复用已保存摘要。D05 及更早已创建 Session 的固定定义没有压缩字段，继续采用拒绝策略；需要创建新 Session 才会使用新配置。
 
-在“Trace 与上下文”中展开 `context.projected`，点击“检查上下文来源”，可查看 epoch、前缀变化原因、选取/省略事件、完整投影与实际模型请求。摘要及递归来源会保留，摘要响应不会显示为助手任务回复。大工具结果使用固定的 4 KiB 数据节选，完整结果仍可在 Trace 下载。
+在“Trace 与上下文”中展开 `context.projected`，点击“检查上下文来源”，可查看 epoch、前缀变化原因、选取和省略的事件，以及完整投影。摘要及递归来源会保留，摘要响应不会显示为助手任务回复。大工具结果使用固定的 4 KiB 数据节选，完整结果仍可在 Trace 下载。
 
 计数仍为保守估计。关键输入、当前轮工具链或摘要请求无法容纳时明确失败；摘要失败显示 `context_summary_failed`，容量失败显示 `context_overflow`。阶段前缀稳定不代表云端缓存命中，真实缓存收益验证属于 D07。
 
@@ -217,7 +216,7 @@ unset MASS_INITIAL_PASSWORD
 
 `llm.max_attempts` 可设为 1—3，省略时为 1。该策略固定到每个新 Run；开启后仅对尚未输出文本的 HTTP 429/502/503/504 进行有限重试，每次均重新检查授权、解析当前凭证、预留和结算预算。SDK 重试始终关闭。取消、协议错误、持久化失败以及部分输出不自动重试；已有工具不会因为模型重试重新执行。
 
-Trace 的每个模型完成/失败事件保存 `observation`（调用耗时、首个文本片段延迟、HTTP 状态、组件版本），失败流仍保留原始 usage。无文本、无 HTTP 响应或缺失供应商统计时使用 null 或状态 0 表示未知，不推断缓存命中。原始供应商字段保留在实际响应及完整模型响应对象中。
+会话 Trace 按模型尝试及其工具调用记录耗时、首个文本片段延迟、HTTP 状态、输出文本、供应商 reasoning 和原始工具调用。供应商未返回 usage 时为 `null`，已返回 usage 时缺失的单项为 `0`。模型请求和流式响应分片只在调用期间处理。
 
 D07 的真实文本、工具与摘要验收使用 `make smoke-real`，需明确授权及隔离测试配置；测试最多 8 次模型调用。缓存观测报告保存在忽略的 `.cache/d07-real-observation.json`。2026-10-24 已获授权并通过：实际 6 次 HTTP 模型请求（上限 8），真实文本、双工具、追加及一次摘要，563 个测试对象已精确清理；观测模型 deepseek-flash 的缓存读取和延迟，数据见工程文档 E15.8。这是本次样本结果，不代表所有请求必命中。
 
@@ -227,9 +226,20 @@ D07 的真实文本、工具与摘要验收使用 `make smoke-real`，需明确�
 
 “Trace 与上下文”提供事件分类、固定水位分页、原始载荷按需读取/下载和上下文来源导航；模型统计按任务/摘要及冷启动/追加/压缩阶段分组，区分未知缓存统计和明确的零命中。首个文本片段延迟不等同于供应商内部推理耗时。
 
-连接中断后，前端先检查授权，再从最后成功应用的 UI 游标继续；重复事件不重复应用，自定义成功状态之后仍接收标准终态事件。连续恢复失败五次后停止自动重连，可点击“重新同步事件”取得新的成对快照与游标。空间切换和权限失效清理订阅与私有内容。Markdown 禁止原始 HTML、远端图片和非 HTTP(S) 链接；载荷在线预览最多 1 MiB，运行输出按 50 条窗口展开。
+命令行可以用已登录的会话 Cookie 查询 `GET /api/v1/diagnostics`，传入 `snapshot_id` 或 `run_id`。接口在当前账号可访问的空间内定位记录。响应包含 Run 状态与时间戳、工作区快照元数据和一页 Trace。快照查询会定位生成该快照的 Run。按 Run 查询时，未保存工作区快照的响应中 `snapshot` 为 `null`。找不到可访问的记录时返回 `404`。
 
-`make verify-d08` 只使用隔离数据库与本地供应商夹具，包含既有阶段回归及调试闭环浏览器测试；不代替仍待授权的 D07 真实云验证。该阶段的数据库 schema 为 7；当前模型配置版本须升级至 schema 9，见下文升级说明。
+```sh
+curl -fsS --cookie "$MASS_COOKIE_JAR" \
+  "http://127.0.0.1:8080/api/v1/diagnostics?snapshot_id=${SNAPSHOT_ID}&limit=100"
+```
+
+`trace.items` 包含 `model_step` 和 `run_finished`。`trace.upload_status` 为 `recording`、`pending` 或 `uploaded`。当 `trace.has_more` 为真时，下一页使用 `trace.next_after` 作为 `after_sequence`，并保留首屏的 `trace.through_sequence`。聚合指标可通过 `/runs/{run_id}/metrics` 单独读取。
+
+心跳失败和已识别的超时在 `run_finished.failure_detail` 中记录来源、失败时刻、耗时和超时预算。来源包括 `heartbeat`、`final_check`（结束前复核）和 `run_deadline`（Run 总时限）。数据库探测会记录可定位的阶段，例如 `lock_space` 或 `update_heartbeat`，以及可用的 MySQL 错误号。
+
+连接中断后，前端通过已鉴权的 UI 快照获取当前流和游标。服务重启后根据已提交业务记录恢复 UI 快照。连续恢复失败五次后停止自动重连，可点击“重新同步事件”取得新的成对快照与游标。空间切换和权限失效清理订阅与私有内容。Markdown 禁止原始 HTML、远端图片和非 HTTP(S) 链接；载荷在线预览最多 1 MiB，运行输出按 50 条窗口展开。
+
+`make verify-d08` 只使用隔离数据库与本地供应商夹具，包含既有阶段回归及调试闭环浏览器测试；不代替仍待授权的 D07 真实云验证。该阶段的数据库 schema 为 7；当前版本须升级至 schema 14，见下文升级说明。
 
 ### 故障与隔离验收（D09 本地）
 
@@ -239,7 +249,7 @@ D07 的真实文本、工具与摘要验收使用 `make smoke-real`，需明确�
 
 证据索引为 `scripts/acceptance-evidence.json`，检查报告输出到忽略的 `.cache/d09-acceptance.json`。引用检查只核对用例与源文件，不代替功能测试。A21/A31 的 D07 真实模型与缓存观测已于 2026-10-24 补齐；A22 的干净部署/备份还原已在 D10 补齐真实 TOS 验收；A25 使用此前真实 TOS 验收证据，本阶段没有再次调用云资源；A33 显式缓存未启用。因此本地通过不等于全部 MVP 验收完成，当前交付和完整门槛见下文 D10。
 
-该阶段的数据库 schema 为 7；当前模型配置版本须升级至 schema 9，见下文升级说明。数据库/日志故障导致执行入口停止时，先修复依赖并检查已保存记录，再重启；已有 running 会标记中断，未确认副作用须人工核实。不要直接重放旧 Run。快照保存失败时使用已有“仅重试保存文件”或“恢复最近已提交快照”，后者会放弃未保存文件。
+该阶段的数据库 schema 为 7；当前版本须升级至 schema 14，见下文升级说明。数据库/日志故障导致执行入口停止时，先修复依赖并检查已保存记录，再重启；已有 running 会标记中断，未确认副作用须人工核实。不要直接重放旧 Run。快照保存失败时使用已有“仅重试保存文件”或“恢复最近已提交快照”，后者会放弃未保存文件。
 
 ## D10 交付包与恢复演练
 
@@ -265,7 +275,6 @@ bin/mass member remove --config mass.yaml --actor OWNER_ID --space SPACE_ID --us
 
 ```sh
 bin/mass restore-storage --config restored.yaml --source-config original.yaml --expect-database mass_restore
-bin/mass rebuild-views --config restored.yaml
 bin/mass serve --config restored.yaml
 ```
 
@@ -286,8 +295,27 @@ D10 真实恢复入口为 `make smoke-recovery`，读取现有 MASS_TOS_ENDPOINT
 
 ### 模型连接配置升级
 
-当前版本为 schema 9。升级前停止旧服务并备份数据库，使用 DDL 账号执行 `bin/mass migrate --config mass.yaml`，再启动新二进制。迁移 `00009_model_connection.sql` 将每个模型对应的 Base URL 与加密 API Key 复制到 `model_configs`，删除其 `credential_id` 外键、旧 `endpoint` 字段及独立的 `credentials` 表。多个模型共用的旧密钥分别复制，此后各模型独立管理；原凭证被禁用的模型继续保持停用状态。未关联模型的凭证随旧表删除。
+升级前停止旧服务并备份数据库，使用 DDL 账号执行 `bin/mass migrate --config mass.yaml`，再启动新二进制。迁移 `00009_model_connection.sql` 将每个模型对应的 Base URL 与加密 API Key 复制到 `model_configs`，删除其 `credential_id` 外键、旧 `endpoint` 字段及独立的 `credentials` 表。多个模型共用的旧密钥分别复制，此后各模型独立管理；原凭证被禁用的模型继续保持停用状态。未关联模型的凭证随旧表删除。
 
 从 schema 7 升级时先自动经过 schema 8 的地址回填，再迁移到每个模型；schema 8 凭证已明确设置的 Base URL 优先保留，无法确定共享地址时保留每个模型原有 endpoint。迁移保留原密钥的加密绑定信息，继续使用原 `MASS_MASTER_KEY` 即可解密。原 YAML 中的 `llm.base_url_env` 请删除。
 
 新增模型必须填写 Base URL 与 API Key；编辑时密钥留空可保留原密钥，接口不会返回密钥。每次模型调用（包括摘要及重试）都按该运行的模型 ID 重新读取地址、密钥和模型修订号；历史快照中的 `credential_id` 仅用于兼容读取，不再参与运行时查询。底层目前仍使用 Ark SDK，端点需要兼容其协议。
+
+### Skill 存储重建
+
+schema 11 新建 `skill_drafts` 和 `skill_versions`，重建 `definition_dependencies`，并删除共享表里的旧 Skill 定义、草稿、发布版本及资源关联。新草稿与发布版本各保存一个 TOS ZIP 引用。旧 TOS 对象仍留在存储中。
+
+升级保留 Agent 和会话记录。绑定了旧 Skill 的 Agent 版本无法再用于创建会话，需要调整绑定并重新发布。旧会话仍可查看历史，仅由旧 Skill 目录关联的资源将无法继续读取。
+
+### 移除 Agent 资源
+
+schema 12 删除 Agent 草稿和版本中的 `assets` 字段，移除旧资源引用表。已有 Agent 版本仍通过原 TOS 对象和摘要读取，历史对象保留原始字节。Skill 继续使用独立的 ZIP 引用。
+
+
+### 会话 Trace 存储
+
+schema 13 清空已有会话、Run、消息、工作区快照索引和相关运行记录，保留用户、空间、模型、Agent 与 Skill。停服后使用迁移账号运行 `bin/mass migrate --config mass.yaml`，再启动新二进制。旧 TOS 对象留在存储中。
+
+每个会话只有一个 `trace.jsonl`。成功、失败或取消的 Run 结束后，先把模型及工具分组和终态追加到本地文件，再覆盖上传至 `<tos.prefix>/<space_id>/sessions/<session_id>/trace.jsonl`。上传失败保留本地文件供后台重试。MariaDB 直接保存消息、上下文投影、计划、产物、快照和 Run 终态。模型分片、AG-UI SSE 帧、工具执行状态、工具结果及分页状态在内存中处理。同一 Run 的后续模型调用直接复用工具结果。工具结果随终态 Trace 归档用于诊断，后续 Run 使用已保存的对话消息和工作区快照。进程退出时，尚未归档的工具状态随内存丢弃，遗留 Run 标记为中断。
+
+Schema 14 回填业务表所需的附件关联、运行失败详情和历史查询字段，然后删除 `session_facts`、`event_objects` 和旧工具执行表。已保存的会话、消息、Run、计划、产物和快照可继续读取。历史接口从业务表生成记录，序号可能有空档，每个 Run 的计划展示最新版本。原 `rebuild-views` 命令已移除，备份恢复继续使用 MariaDB 导出和 TOS 对象。升级命令为 `bin/mass migrate --config mass.yaml`。

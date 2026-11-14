@@ -16,7 +16,6 @@ import (
 	"github.com/cloudwego/eino/schema"
 	jschema "github.com/eino-contrib/jsonschema"
 	"github.com/imalimin/mass/internal/domain/run"
-	"github.com/imalimin/mass/internal/runtime/modelgateway"
 )
 
 type ModelTransport struct {
@@ -31,29 +30,7 @@ func (t *ModelTransport) Source() string {
 	return "ark"
 }
 
-type wireRecorder struct {
-	modelgateway.Recorder
-	raw    bytes.Buffer
-	status int
-	failed error
-}
-
-func (w *wireRecorder) Status(status int) { w.status = status }
-func (w *wireRecorder) Request(ctx context.Context, b []byte) error {
-	err := w.Recorder.Request(ctx, b)
-	w.failed = err
-	return err
-}
-func (w *wireRecorder) Response(ctx context.Context, status int, b []byte) error {
-	if err := w.Recorder.Response(ctx, status, b); err != nil {
-		w.failed = err
-		return err
-	}
-	w.status = status
-	w.raw.Write(b)
-	return nil
-}
-func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepared, key string, record modelgateway.Recorder, delta func(string) error) (reply run.Reply, retErr error) {
+func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepared, key string, delta func(string) error) (reply run.Reply, retErr error) {
 	messages := make([]*schema.Message, 0, len(p.Messages))
 	for _, m := range p.Messages {
 		var out schema.Message
@@ -85,7 +62,7 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 		tools = append(tools, &schema.ToolInfo{Name: tool.Name, Desc: tool.Description, ParamsOneOf: schema.NewParamsOneOfByJSONSchema(&schemaValue)})
 	}
 	var chat model.ToolCallingChatModel
-	wire := &wireRecorder{Recorder: record}
+	wire := &responseWire{}
 	started := time.Now()
 	observation := &run.ModelObservation{Component: "eino-ark-v0.1.71"}
 	if t.Fake != nil {
@@ -93,32 +70,24 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 	}
 	defer func() {
 		observation.DurationMS = time.Since(started).Milliseconds()
-		observation.HTTPStatus = wire.status
 		reply.Observation = observation
 		if t.Fake == nil {
-			reply.Usage = wireUsage(wire.raw.Bytes())
+			observation.HTTPStatus, reply.Usage, reply.Trace.UsagePresent, reply.Trace.ReasoningTokens = wire.observation()
 		}
-		if retErr != nil && wire.failed == nil && (wire.status == 429 || wire.status == 502 || wire.status == 503 || wire.status == 504) {
-			retErr = &run.ModelFailure{Code: "model_http_failed", Status: wire.status, Retryable: true}
+		status := observation.HTTPStatus
+		if retErr != nil && (status == 429 || status == 502 || status == 503 || status == 504) {
+			retErr = &run.ModelFailure{Code: "model_http_failed", Status: status, Retryable: true}
 		}
 	}()
 
 	if t.Fake != nil {
 		chat = t.Fake
-		raw, _ := json.Marshal(struct {
-			Source   string
-			Messages []*schema.Message
-			Tools    []*schema.ToolInfo
-		}{"fake", messages, tools})
-		if err := record.Request(ctx, raw); err != nil {
-			return reply, err
-		}
 	} else {
 		base := t.Base
 		if base == nil {
 			base = http.DefaultTransport
 		}
-		capture := &CaptureTransport{Base: base, Recorder: wire, MaxRequestBytes: 4 << 20, MaxResponseBytes: 8 << 20}
+		capture := &observedTransport{base: base, wire: wire}
 		zero := 0
 		temperature := float32(s.Definition.Model.Temperature)
 		output := s.Definition.OutputTokens
@@ -142,6 +111,22 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 	}
 	defer stream.Close()
 	chunks := make([]*schema.Message, 0, 32)
+	var text, reasoning strings.Builder
+	defer func() {
+		if reasoning.Len() != 0 {
+			value := reasoning.String()
+			reply.Trace.Reasoning = &value
+		}
+		if retErr != nil {
+			reply.Message.Content = text.String()
+			if partial, err := schema.ConcatMessages(chunks); err == nil && partial != nil {
+				reply.Trace.ToolCalls = nativeToolCalls(partial.ToolCalls)
+				if partial.ResponseMeta != nil {
+					reply.FinishReason = partial.ResponseMeta.FinishReason
+				}
+			}
+		}
+	}()
 	size := 0
 	for {
 		chunk, err := stream.Recv()
@@ -159,12 +144,12 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 		if size > 4<<20 || len(chunks) >= 10000 {
 			return reply, run.ErrOverflow
 		}
-		if t.Fake != nil {
-			if err = record.Response(ctx, 200, raw); err != nil {
-				return reply, err
-			}
-		}
 		chunks = append(chunks, chunk)
+		text.WriteString(chunk.Content)
+		reasoning.WriteString(chunk.ReasoningContent)
+		if t.Fake != nil {
+			observation.HTTPStatus = 200
+		}
 		if chunk.Content != "" {
 			if observation.FirstTokenMS == nil {
 				ms := time.Since(started).Milliseconds()
@@ -175,7 +160,7 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 			}
 		}
 	}
-	if t.Fake == nil && !wireComplete(wire.raw.Bytes()) {
+	if t.Fake == nil && !wire.complete() {
 		return reply, run.ErrProtocol
 	}
 	combined, err := schema.ConcatMessages(chunks)
@@ -191,23 +176,34 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 	native, _ := json.Marshal(combined)
 	reply.Message = run.Message{Role: "assistant", Content: combined.Content, Native: native}
 	reply.FinishReason = combined.ResponseMeta.FinishReason
+	reply.Trace.ToolCalls = nativeToolCalls(combined.ToolCalls)
 	for _, call := range combined.ToolCalls {
 		reply.Message.ToolCalls = append(reply.Message.ToolCalls, run.Call{ID: call.ID, Name: call.Function.Name, Arguments: call.Function.Arguments})
 	}
-	if usage := combined.ResponseMeta.Usage; usage != nil {
+	if usage := combined.ResponseMeta.Usage; t.Fake != nil && usage != nil {
+		reply.Trace.UsagePresent = true
 		input, output := int64(usage.PromptTokens), int64(usage.CompletionTokens)
 		reply.Usage.Input = &input
 		reply.Usage.Output = &output
+		reasoning := int64(usage.CompletionTokensDetails.ReasoningTokens)
+		reply.Trace.ReasoningTokens = &reasoning
 		// Cache metrics are optional in wire JSON; absence remains unknown.
 		if usage.PromptTokenDetails.CachedTokens > 0 {
 			v := int64(usage.PromptTokenDetails.CachedTokens)
 			reply.Usage.CacheRead = &v
 		}
 	}
-	if t.Fake == nil {
-		reply.Usage = wireUsage(wire.raw.Bytes())
-	}
 	return reply, nil
+}
+
+func nativeToolCalls(calls []schema.ToolCall) []run.NativeToolCall {
+	result := make([]run.NativeToolCall, 0, len(calls))
+	for _, call := range calls {
+		result = append(result, run.NativeToolCall{ID: call.ID, Type: call.Type, Function: run.NativeFunctionCall{
+			Name: call.Function.Name, Arguments: call.Function.Arguments,
+		}})
+	}
+	return result
 }
 
 func wireComplete(raw []byte) bool {
@@ -221,7 +217,12 @@ func wireComplete(raw []byte) bool {
 	}
 	return false
 }
-func wireUsage(raw []byte) (result run.Usage) {
+func wireUsage(raw []byte) run.Usage {
+	usage, _, _ := wireTraceUsage(raw)
+	return usage
+}
+
+func wireTraceUsage(raw []byte) (result run.Usage, present bool, reasoning *int64) {
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	scanner.Buffer(make([]byte, 8192), 8<<20)
 	for scanner.Scan() {
@@ -234,9 +235,10 @@ func wireUsage(raw []byte) (result run.Usage) {
 			continue
 		}
 		var usage map[string]json.RawMessage
-		if json.Unmarshal(item["usage"], &usage) != nil {
+		if json.Unmarshal(item["usage"], &usage) != nil || usage == nil {
 			continue
 		}
+		present = true
 		value := func(m map[string]json.RawMessage, key string) *int64 {
 			raw, ok := m[key]
 			if !ok || string(raw) == "null" {
@@ -248,17 +250,20 @@ func wireUsage(raw []byte) (result run.Usage) {
 			}
 			return &n
 		}
-		result.Input = value(usage, "prompt_tokens")
-		result.Output = value(usage, "completion_tokens")
-		var details map[string]json.RawMessage
-		if json.Unmarshal(usage["prompt_tokens_details"], &details) == nil {
-			result.CacheRead = value(details, "cached_tokens")
-		}
-		if raw, ok := usage["cache_creation_input_tokens"]; ok {
-			var n int64
-			if json.Unmarshal(raw, &n) == nil && n >= 0 {
-				result.CacheWrite = &n
+		merge := func(target **int64, n *int64) {
+			if n != nil {
+				*target = n
 			}
+		}
+		merge(&result.Input, value(usage, "prompt_tokens"))
+		merge(&result.Output, value(usage, "completion_tokens"))
+		merge(&result.CacheWrite, value(usage, "cache_creation_input_tokens"))
+		var prompt, completion map[string]json.RawMessage
+		if json.Unmarshal(usage["prompt_tokens_details"], &prompt) == nil {
+			merge(&result.CacheRead, value(prompt, "cached_tokens"))
+		}
+		if json.Unmarshal(usage["completion_tokens_details"], &completion) == nil {
+			merge(&reasoning, value(completion, "reasoning_tokens"))
 		}
 	}
 	return

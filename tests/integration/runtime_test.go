@@ -34,6 +34,7 @@ import (
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
 	"github.com/imalimin/mass/internal/resource"
+	"github.com/imalimin/mass/internal/resource/trace"
 	"github.com/imalimin/mass/internal/runtime/context/projector"
 	"github.com/imalimin/mass/internal/runtime/modelgateway"
 	transport "github.com/imalimin/mass/internal/transport/http"
@@ -221,7 +222,7 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 	config.Limits.MaxSteps = 8
 	config.Limits.TimeoutSeconds = 60
 	raw, _ := json.Marshal(config)
-	draft, err = catalogue.Save(ctx, actor.ID, space.ID, "agent", draft.ID, draft.Revision, catalog.Document{Markdown: "Help with files.", ConfigYAML: string(raw), Assets: []catalog.Asset{}})
+	draft, err = catalogue.Save(ctx, actor.ID, space.ID, "agent", draft.ID, draft.Revision, catalog.Document{Markdown: "Help with files.", ConfigYAML: string(raw)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +341,7 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		if calls != 1 {
 			t.Fatal("real smoke made unexpected model attempts", calls)
 		}
-		t.Log("real model: one Eino text attempt completed, raw wire and usage retained, workspace snapshot committed")
+		t.Log("real model: one Eino text attempt completed, usage retained, workspace snapshot committed")
 		return
 	}
 	artifacts, err := db.Store.RuntimeArtifacts(ctx, actor.ID, space.ID, first.ID)
@@ -416,6 +417,71 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		}
 		validate("GET", p, w)
 	}
+	type diagnostics struct {
+		Run      run.View
+		Snapshot *storage.Snapshot
+		Trace    trace.Page
+	}
+	getDiagnostics := func(query, sessionToken string, status int) diagnostics {
+		t.Helper()
+		path := "/diagnostics" + query
+		r := httptest.NewRequest("GET", "http://mass.test/api/v1"+path, nil)
+		if sessionToken != "" {
+			r.AddCookie(&http.Cookie{Name: "mass_session", Value: sessionToken})
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != status {
+			t.Fatalf("diagnostics %s: got %d, want %d: %s", path, w.Code, status, w.Body.String())
+		}
+		validate("GET", path, w)
+		if status == http.StatusOK {
+			return jsonValue[diagnostics](t, w)
+		}
+		return diagnostics{}
+	}
+	bySnapshot := "?snapshot_id=" + first.WorkspaceSnapshotID
+	byRun := "?run_id=" + first.ID
+	var firstPage diagnostics
+	for i := 0; i < 100; i++ {
+		firstPage = getDiagnostics(bySnapshot+"&limit=1", token, 200)
+		if firstPage.Trace.UploadStatus == "uploaded" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if firstPage.Trace.UploadStatus != "uploaded" {
+		t.Fatal("session trace was not uploaded", firstPage.Trace)
+	}
+	if firstPage.Run.ID != first.ID || firstPage.Run.Status != first.Status || firstPage.Snapshot == nil ||
+		firstPage.Snapshot.ID != first.WorkspaceSnapshotID || len(firstPage.Trace.Items) != 1 || !firstPage.Trace.HasMore {
+		t.Fatal("unexpected snapshot diagnostics", firstPage.Run.ID, firstPage.Snapshot, firstPage.Trace)
+	}
+	cursor := fmt.Sprintf("&after_sequence=%d&through_sequence=%d", firstPage.Trace.Next, firstPage.Trace.Through)
+	nextPage := getDiagnostics(byRun+cursor+"&limit=100", token, 200)
+	if nextPage.Snapshot == nil || nextPage.Snapshot.ID != first.WorkspaceSnapshotID ||
+		nextPage.Trace.Through != firstPage.Trace.Through || len(nextPage.Trace.Items) == 0 {
+		t.Fatal("unexpected diagnostics continuation")
+	}
+	var firstStep trace.ModelStep
+	if err := json.Unmarshal(firstPage.Trace.Items[0], &firstStep); err != nil || firstStep.Type != "model_step" || firstStep.RunID != first.ID || firstStep.Step != 1 ||
+		len(firstStep.Model.ToolCalls) == 0 || len(firstStep.Tools) != len(firstStep.Model.ToolCalls) || firstStep.Tools[0].NativeCallID != firstStep.Model.ToolCalls[0].ID {
+		t.Fatalf("model and tools not grouped: %+v, %v", firstStep, err)
+	}
+	var end trace.RunFinished
+	if err := json.Unmarshal(nextPage.Trace.Items[len(nextPage.Trace.Items)-1], &end); err != nil || end.Type != "run_finished" || end.RunID != first.ID ||
+		end.Status != "succeeded" || end.SnapshotID == nil || *end.SnapshotID != first.WorkspaceSnapshotID {
+		t.Fatalf("missing terminal trace: %+v, %v", end, err)
+	}
+	var dropped int
+	if err := db.Admin.DB.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('runtime_events','session_facts','event_objects','tool_executions','agui_events','agui_streams')").Scan(&dropped); err != nil || dropped != 0 {
+		t.Fatal("legacy stream tables still exist", dropped, err)
+	}
+
+	getDiagnostics("", token, 400)
+	getDiagnostics(byRun+"&snapshot_id="+first.WorkspaceSnapshotID, token, 400)
+	getDiagnostics("?snapshot_id="+uuid.NewString(), token, 404)
+	getDiagnostics(bySnapshot, "", 401)
 	body, _ := json.Marshal(submit)
 	r := httptest.NewRequest("POST", "http://mass.test/api/v1"+base+"/sessions/"+session.ID+"/runs", bytes.NewReader(body))
 	r.Header.Set("Cookie", "mass_session="+token)
@@ -427,7 +493,7 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		t.Fatal("repeat HTTP request", w.Code, w.Body.String())
 	}
 	validate("POST", base+"/sessions/"+session.ID+"/runs", w)
-	// Fixed journal boundaries reproduce the persisted model input exactly.
+	// Fixed journal boundaries reproduce the retained inputs deterministically.
 	history, _, e := resource.History(ctx, j, actor.ID, space.ID, session.ID)
 	if e != nil {
 		t.Fatal(e)
@@ -451,8 +517,13 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		if e != nil {
 			t.Fatal(e)
 		}
-		if a.Fingerprint != original.Fingerprint || !catalog.Equal(a, b) {
+		if !catalog.Equal(a, b) || a.Spec.Through != d.Through {
 			t.Fatal("projection changed at fixed boundary")
+		}
+		for _, m := range original.Messages {
+			if m.Role == "tool" && m.Content != "" {
+				t.Fatal("persisted projection retained an in-memory tool result")
+			}
 		}
 	}
 	// Running cancellation waits for actual stream exit and still saves a snapshot.
@@ -539,7 +610,7 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 			t.Fatal("late cancellation lost", racing.Status, racing.Error)
 		}
 		var finishes int
-		db.Admin.DB.QueryRow("SELECT COUNT(*) FROM runtime_events WHERE run_id=? AND event_type='run.finished'", racing.ID).Scan(&finishes)
+		db.Admin.DB.QueryRow("SELECT COUNT(*) FROM runs WHERE id=? AND finished_at IS NOT NULL", racing.ID).Scan(&finishes)
 		if finishes != 1 {
 			t.Fatal("duplicate finish", finishes)
 		}
@@ -552,6 +623,10 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		failed = wait(failed.ID)
 		if failed.Status != "failed" || failed.Error != "workspace_snapshot_failed" || failed.SnapshotError == "" {
 			t.Fatal("snapshot failure reported success", failed.Status, failed.Error)
+		}
+		withoutSnapshot := getDiagnostics("?run_id="+failed.ID, token, 200)
+		if withoutSnapshot.Snapshot != nil || withoutSnapshot.Run.Error != failed.Error {
+			t.Fatal("diagnostics lost the failed run without a snapshot")
 		}
 		if _, e = runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "second blocked"}); !errors.Is(e, storage.ErrWorkspace) {
 			t.Fatal("new run accepted while workspace failed", e)
@@ -577,6 +652,11 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		if e = auth.AddMember(ctx, actor.ID, space.ID, "bob"); e != nil {
 			t.Fatal(e)
 		}
+		_, bobToken, _, e := auth.Login(ctx, "bob", "correct-password-bob")
+		if e != nil {
+			t.Fatal(e)
+		}
+		getDiagnostics(bySnapshot, bobToken, 200)
 		revoked, e := runtime.Service.Submit(ctx, bob.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "wait for revocation"})
 		if e != nil {
 			t.Fatal(e)
@@ -599,13 +679,15 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		if _, e = db.Store.RuntimeRun(ctx, bob.ID, space.ID, revoked.ID); !errors.Is(e, identity.ErrForbidden) {
 			t.Fatal("revoked subject can read run", e)
 		}
+		getDiagnostics(bySnapshot, bobToken, 404)
+		getDiagnostics(byRun, bobToken, 404)
 		forged := journal.New(actor.ID, "workspace.snapshot.failed", first.ID, journal.FailureData{Reason: "forged"})
 		forged.Actor.Kind = "system"
 		if _, e = resource.AppendRun(ctx, j, first.Snapshot, forged); !errors.Is(e, identity.ErrForbidden) {
 			t.Fatal("forged system actor accepted", e)
 		}
 		// A failed semantic journal write aborts this attempt; it is never retried invisibly.
-		if _, e = db.Admin.DB.Exec("CREATE TRIGGER reject_delta BEFORE INSERT ON runtime_events FOR EACH ROW BEGIN IF NEW.event_type='model.response.delta' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='injected'; END IF; END"); e != nil {
+		if _, e = db.Admin.DB.Exec("CREATE TRIGGER reject_response BEFORE INSERT ON messages FOR EACH ROW BEGIN IF NEW.role='assistant' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='injected'; END IF; END"); e != nil {
 			t.Fatal(e)
 		}
 		broken, e := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "second log failure"})
@@ -616,7 +698,7 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		if broken.Status != "failed" || broken.FinalResponseEventID != "" {
 			t.Fatal("journal failure produced final response", broken.Status, broken.Error)
 		}
-		if _, e = db.Admin.DB.Exec("DROP TRIGGER reject_delta"); e != nil {
+		if _, e = db.Admin.DB.Exec("DROP TRIGGER reject_response"); e != nil {
 			t.Fatal(e)
 		}
 		// Capacity rejection happens before a model request and does not truncate inputs.
@@ -635,7 +717,7 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		}
 
 		// If the finish transaction fails, neither the snapshot nor occupancy is committed.
-		if _, e = db.Admin.DB.Exec("CREATE TRIGGER reject_finish BEFORE INSERT ON runtime_events FOR EACH ROW BEGIN IF NEW.event_type='run.finished' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='injected'; END IF; END"); e != nil {
+		if _, e = db.Admin.DB.Exec("CREATE TRIGGER reject_finish BEFORE UPDATE ON runs FOR EACH ROW BEGIN IF NEW.finished_at IS NOT NULL AND OLD.finished_at IS NULL THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='injected'; END IF; END"); e != nil {
 			t.Fatal(e)
 		}
 		stuck, e := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "second finish failure"})
@@ -670,48 +752,13 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		}
 		wait(stuck.ID)
 	}
-	if err = db.Store.RebuildViews(ctx, func(context.Context, storage.Object) error { return nil }); !errors.Is(err, run.ErrUnavailable) {
-		t.Fatal("online rebuild allowed", err)
-	}
 	stop, cancelStop := context.WithTimeout(ctx, 10*time.Second)
 	err = lifecycle.Close(stop)
 	cancelStop()
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, _ := db.Store.RuntimeRun(ctx, actor.ID, space.ID, first.ID)
-	beforeFrames, _, _ := db.Store.ReadFrames(ctx, actor.ID, space.ID, first.ID, 0, 100)
-	// Delete derived tables first, leaving immutable identity/FK anchors in place.
-	for _, table := range []string{"agui_events", "agui_streams", "artifacts", "tool_executions", "model_calls", "model_attempts", "messages", "session_active_runs"} {
-		if _, err = db.Admin.DB.Exec("DELETE FROM " + table); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err = db.Store.RebuildViews(ctx, func(ctx context.Context, o storage.Object) error {
-		reader, e := blobs.Open(ctx, o.Key, o.VersionID)
-		if e != nil {
-			return e
-		}
-		defer reader.Close()
-		sum := sha256.New()
-		n, e := io.Copy(sum, reader)
-		if e != nil {
-			return e
-		}
-		if n != o.Size || hex.EncodeToString(sum.Sum(nil)) != o.SHA256 {
-			return storage.ErrIntegrity
-		}
-		return nil
-	}); err != nil {
-		t.Fatal("offline rebuild", err)
-	}
-	after, _ := db.Store.RuntimeRun(ctx, actor.ID, space.ID, first.ID)
-	before.HeartbeatAt = nil
-	after.HeartbeatAt = nil // Coordination heartbeats are not replayed business facts.
-	afterFrames, _, _ := db.Store.ReadFrames(ctx, actor.ID, space.ID, first.ID, 0, 100)
-	if !catalog.Equal(before, after) || !catalog.Equal(beforeFrames, afterFrames) {
-		t.Fatal("rebuilt views differ from committed state")
-	}
+
 	t.Log("runtime vertical: persisted model/tool/file/artifact/snapshot, next-run restore, independent clone, idempotency, cancellation and continuous SSE passed")
 }
 

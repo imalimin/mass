@@ -37,6 +37,8 @@ import (
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
 	"github.com/imalimin/mass/internal/resource"
+	"github.com/imalimin/mass/internal/resource/trace"
+	"github.com/imalimin/mass/internal/transport/agui"
 	"github.com/imalimin/mass/tests/testdb"
 	"go.yaml.in/yaml/v4"
 )
@@ -228,7 +230,7 @@ func TestTOSRecovery(t *testing.T) {
 	definition.Limits.MaxSteps = 4
 	definition.Limits.TimeoutSeconds = 180
 	raw, _ := json.Marshal(definition)
-	agent, err = catalogue.Save(ctx, actor.ID, space.ID, "agent", agent.ID, agent.Revision, catalog.Document{Markdown: "Preserve recovery files.", ConfigYAML: string(raw), Assets: []catalog.Asset{}})
+	agent, err = catalogue.Save(ctx, actor.ID, space.ID, "agent", agent.ID, agent.Revision, catalog.Document{Markdown: "Preserve recovery files.", ConfigYAML: string(raw)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,10 +262,18 @@ func TestTOSRecovery(t *testing.T) {
 	if first.Status != "succeeded" {
 		t.Fatal("source fixture failed", first.Error, first.SnapshotError)
 	}
-	if _, err = options.UI.CatchUp(ctx, actor.ID, space.ID, first.ID); err != nil {
-		t.Fatal(err)
+	for !first.TraceUploaded {
+		select {
+		case <-ctx.Done():
+			t.Fatal("source trace was not uploaded", ctx.Err())
+		case <-time.After(50 * time.Millisecond):
+		}
+		first, err = source.Store.RuntimeRun(ctx, actor.ID, space.ID, first.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
-	before, err := source.Store.LoadStream(ctx, actor.ID, space.ID, first.ID)
+	before, err := options.UI.CatchUp(ctx, actor.ID, space.ID, first.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,6 +341,10 @@ func TestTOSRecovery(t *testing.T) {
 	recoveryConfig(t, targetPath, targetConfig)
 	objects, err := source.Admin.DB.Query("SELECT space_id,id,object_key,tos_uri FROM content_objects WHERE state='ready' ORDER BY id")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.register(trace.Key(targetPrefix, space.ID, session.ID), nil); err != nil {
+		objects.Close()
 		t.Fatal(err)
 	}
 	var targetKeys []string
@@ -407,17 +421,23 @@ func TestTOSRecovery(t *testing.T) {
 	if out, e := restore(); e != nil {
 		t.Fatalf("idempotent restore depended on removed source: %s", out)
 	}
-	if out, e := cli(targetPath, "rebuild-views"); e != nil {
-		t.Fatalf("restored rebuild failed: %s", out)
-	}
-	after, err := target.Store.LoadStream(ctx, actor.ID, space.ID, first.ID)
+
+	after, err := (&agui.Projector{Repo: target.Store, Live: target.Store.LiveUI}).CatchUp(ctx, actor.ID, space.ID, first.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, _ := json.Marshal(before)
-	b, _ := json.Marshal(after)
+	a, _ := json.Marshal(before.State)
+	b, _ := json.Marshal(after.State)
 	if !bytes.Equal(a, b) {
 		t.Fatal("restored UI history changed")
+	}
+	restoredRun, err := target.Store.RuntimeRun(ctx, actor.ID, space.ID, first.ID)
+	if err != nil || !restoredRun.TraceUploaded {
+		t.Fatal("restored trace metadata missing", err)
+	}
+	archive := &trace.Archive{Root: t.TempDir(), Prefix: targetPrefix, Blobs: ledger}
+	if page, err := archive.Read(ctx, restoredRun, 0, nil, 100); err != nil || len(page.Items) < 2 {
+		t.Fatal("restored trace missing", err)
 	}
 	report["history_rebuild_without_execution"] = providerCalls.Load() == 0
 	if providerCalls.Load() != 0 {

@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/journal"
+	"github.com/imalimin/mass/internal/resource/trace"
 )
 
 type MessageState struct {
@@ -34,8 +38,16 @@ type State struct {
 	Usage           run.Usage      `json:"usage"`
 	Error           string         `json:"error"`
 }
+type activeMessage struct {
+	AttemptID string
+	MessageID string
+}
+
 type Checkpoint struct {
+	active          *activeMessage
+	responseText    map[string]string
 	SummaryAttempts map[string]bool `json:"summary_attempts,omitempty"`
+	StreamID        string          `json:"stream_id"`
 	SessionID       string          `json:"session_id"`
 	Source          int64           `json:"source_sequence,string"`
 	Cursor          int64           `json:"cursor,string"`
@@ -57,7 +69,12 @@ type Repository interface {
 	ReadEvents(context.Context, string, string, string, int64, *int64, int) (journal.Page, error)
 	ReadFrames(context.Context, string, string, string, int64, int) ([]Frame, bool, error)
 }
-type Projector struct{ Repo Repository }
+type Projector struct {
+	Repo         Repository
+	Live         *Live
+	ResponseText func(context.Context, string, string, string) (string, error)
+	ToolState    func(string, string) trace.Tool
+}
 
 func (p *Projector) CatchUp(ctx context.Context, actor, space, runID string) (Checkpoint, error) {
 	for {
@@ -83,12 +100,96 @@ func (p *Projector) CatchUp(ctx context.Context, actor, space, runID string) (Ch
 		if err != nil {
 			return old, err
 		}
-		if len(page.Events) == 0 {
+		if len(page.Events) == 0 && old.active == nil && len(old.State.Tools) == 0 {
 			return old, nil
 		}
+		old.responseText = make(map[string]string)
+		for _, e := range page.Events {
+			if e.Type == "model.attempt.failed" && p.Live != nil {
+				var d journal.AttemptFailedData
+				journal.Decode(e.Data, &d)
+				text := p.Live.Text(space+"/"+runID, d.AttemptID)
+				if len(text) > len(d.Preview) {
+					old.responseText[e.EventID] = text
+				}
+			}
+			if e.Type == "model.response.completed" && p.ResponseText != nil {
+				var d journal.ResponseData
+				journal.Decode(e.Data, &d)
+				// The preview can end up to three bytes short at a rune boundary.
+				if len(d.Preview) >= 8189 && !old.SummaryAttempts[d.AttemptID] {
+					text, err := p.ResponseText(ctx, actor, space, d.ContentID)
+					if err != nil {
+						return old, err
+					}
+					old.responseText[e.EventID] = text
+				}
+			}
+		}
+		// Apply in-memory tool states after their declaring model reply and before
+		// any terminal Run frame. These events do not advance the SQL cursor.
+		var tail []journal.Event
+		if n := len(page.Events); n > 0 && page.Events[n-1].Type == "run.finished" {
+			tail = page.Events[n-1:]
+			page.Events = page.Events[:n-1]
+		}
 		next, frames, err := Map(old, runID, page.Events)
+		if err == nil && p.ToolState != nil && !next.Closed {
+			var updates []journal.Event
+			for _, current := range next.State.Tools {
+				tool := p.ToolState(runID, current.ID)
+				if tool.Status == "" || tool.Status == "not_started" || tool.Status == current.Status {
+					continue
+				}
+				data := journal.ToolData{CallID: tool.CallID, Status: tool.Status}
+				if len(tool.Result) > 0 {
+					var result run.ToolResult
+					json.Unmarshal(tool.Result, &result)
+					data.SideEffect = result.SideEffect
+					data.Preview = string(tool.Result)
+					if len(tool.Result) > 4096 {
+						preview, _ := json.Marshal(map[string]any{"status": result.Status, "truncated": true, "side_effect": result.SideEffect})
+						data.Preview = string(preview)
+					}
+				}
+				event := journal.New(actor, liveToolEvent, runID, data)
+				event.EventID = tool.CallID
+				updates = append(updates, journal.Event{Proposed: event, Sequence: next.Source})
+			}
+			if len(updates) > 0 {
+				updated, output, mapErr := Map(next, runID, updates)
+				next, frames, err = updated, append(frames, output...), mapErr
+			}
+		}
+		if err == nil && len(tail) > 0 {
+			updated, output, mapErr := Map(next, runID, tail)
+			next, frames, err = updated, append(frames, output...), mapErr
+		}
+		if err == nil && p.Live != nil && next.active != nil {
+			text := p.Live.Text(space+"/"+runID, next.active.AttemptID)
+			var offset int
+			for _, message := range next.State.Messages {
+				if message.ID == next.active.MessageID {
+					offset = len(message.Text)
+					break
+				}
+			}
+			if len(text) > offset {
+				delta := journal.Event{
+					Proposed: journal.Proposed{EventID: next.active.AttemptID, RunID: runID, OccurredAt: time.Now()},
+					Sequence: next.Source,
+				}
+				delta.Type = liveTextEvent
+				delta.Data, _ = json.Marshal(journal.DeltaData{AttemptID: next.active.AttemptID, MessageID: next.active.MessageID, Text: text[offset:]})
+				updated, output, mapErr := Map(next, runID, []journal.Event{delta})
+				next, frames, err = updated, append(frames, output...), mapErr
+			}
+		}
 		if err != nil {
 			return old, err
+		}
+		if next.Source == old.Source && next.Cursor == old.Cursor {
+			return next, nil
 		}
 		if err = p.Repo.CommitStream(ctx, actor, space, runID, old, next, frames); err != nil {
 			if err == run.ErrState {
@@ -101,11 +202,16 @@ func (p *Projector) CatchUp(ctx context.Context, actor, space, runID string) (Ch
 		}
 	}
 }
+
+const liveTextEvent = "live.model.text"
+const liveToolEvent = "live.tool.status"
+
 func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Frame, error) {
 	// Deep copy before mutating slices; a failed CAS cannot mutate the old checkpoint.
 	raw, _ := json.Marshal(old)
 	var cp Checkpoint
 	json.Unmarshal(raw, &cp)
+	cp.active = old.active
 	frames := []Frame{}
 	if cp.State.Messages == nil {
 		cp.State.Messages = []MessageState{}
@@ -120,8 +226,10 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 		if cp.Closed {
 			break
 		}
-		if err := journal.Validate(source.Proposed); err != nil {
-			return cp, nil, err
+		if source.Type != liveTextEvent && source.Type != liveToolEvent {
+			if err := journal.Validate(source.Proposed); err != nil {
+				return cp, nil, err
+			}
 		}
 		cp.Source = source.Sequence
 		if source.RunID != runID {
@@ -161,6 +269,37 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 			cp.State.Messages = append(cp.State.Messages, MessageState{ID: id})
 			return &cp.State.Messages[len(cp.State.Messages)-1]
 		}
+		appendText := func(id, text string) {
+			if text == "" {
+				return
+			}
+			m := message(id)
+			if m.Text == "" {
+				emit(events.NewTextMessageStartEvent(id, events.WithRole("assistant")))
+			}
+			m.Text += text
+			for len(text) > 0 {
+				n := min(len(text), 8192)
+				for n < len(text) && !utf8.RuneStart(text[n]) {
+					n--
+				}
+				emit(events.NewTextMessageContentEvent(id, text[:n]))
+				text = text[n:]
+			}
+		}
+		fillText := func(id, text string) {
+			for _, m := range cp.State.Messages {
+				if m.ID == id {
+					if strings.HasPrefix(text, m.Text) {
+						text = text[len(m.Text):]
+					} else {
+						return
+					}
+					break
+				}
+			}
+			appendText(id, text)
+		}
 		if cp.SummaryAttempts == nil {
 			cp.SummaryAttempts = map[string]bool{}
 		}
@@ -170,6 +309,8 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 			journal.Decode(source.Data, &d)
 			if d.Purpose == "summary" {
 				cp.SummaryAttempts[d.ID] = true
+			} else {
+				cp.active = &activeMessage{AttemptID: d.ID, MessageID: d.MessageID}
 			}
 			custom("mass.trace.v1", map[string]any{"eventType": source.Type, "purpose": d.Purpose, "attemptId": d.ID})
 		case "run.created":
@@ -184,25 +325,26 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 		case "run.cancel.requested":
 			cp.State.CancelRequested = true
 			custom("mass.run.status.v1", map[string]any{"status": cp.State.Status, "cancelRequested": true})
-		case "model.response.delta":
+		case liveTextEvent:
 			var d journal.DeltaData
 			journal.Decode(source.Data, &d)
-			if cp.SummaryAttempts[d.AttemptID] {
-				continue
-			}
-			m := message(d.MessageID)
-			if m.Text == "" {
-				emit(events.NewTextMessageStartEvent(d.MessageID, events.WithRole("assistant")))
-			}
-			m.Text += d.Text
-			emit(events.NewTextMessageContentEvent(d.MessageID, d.Text))
+			appendText(d.MessageID, d.Text)
 		case "model.response.completed":
 			var d journal.ResponseData
 			journal.Decode(source.Data, &d)
 			if cp.SummaryAttempts[d.AttemptID] {
-				custom("mass.usage.v1", map[string]any{"usage": d.Usage, "attemptId": d.AttemptID, "purpose": "summary"})
+				delete(cp.SummaryAttempts, d.AttemptID)
+				if err := custom("mass.usage.v1", map[string]any{"usage": d.Usage, "attemptId": d.AttemptID, "purpose": "summary"}); err != nil {
+					return cp, nil, err
+				}
 				continue
 			}
+			cp.active = nil
+			text, ok := old.responseText[source.EventID]
+			if !ok {
+				text = d.Preview
+			}
+			fillText(d.MessageID, text)
 			for i := range cp.State.Messages {
 				m := &cp.State.Messages[i]
 				if m.ID == d.MessageID && !m.Closed {
@@ -228,9 +370,18 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 			var d journal.AttemptFailedData
 			journal.Decode(source.Data, &d)
 			if cp.SummaryAttempts[d.AttemptID] {
-				custom("mass.usage.v1", map[string]any{"usage": d.Usage, "attemptId": d.AttemptID, "purpose": "summary"})
+				delete(cp.SummaryAttempts, d.AttemptID)
+				if err := custom("mass.usage.v1", map[string]any{"usage": d.Usage, "attemptId": d.AttemptID, "purpose": "summary"}); err != nil {
+					return cp, nil, err
+				}
 				continue
 			}
+			cp.active = nil
+			text, ok := old.responseText[source.EventID]
+			if !ok {
+				text = d.Preview
+			}
+			fillText(d.MessageID, text)
 			for i := range cp.State.Messages {
 				m := &cp.State.Messages[i]
 				if m.ID == d.MessageID && !m.Closed {
@@ -250,7 +401,7 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 				}
 			}
 			custom("mass.tool.status.v1", map[string]any{"toolCallId": d.CallID, "status": "running"})
-		case "tool.execution.completed":
+		case "tool.execution.completed", liveToolEvent:
 			var d journal.ToolData
 			journal.Decode(source.Data, &d)
 			for i := range cp.State.Tools {
@@ -258,7 +409,7 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 				if t.ID == d.CallID {
 					t.Status = d.Status
 					t.Result = d.Preview
-					if t.Standard {
+					if t.Standard && d.Preview != "" {
 						role := "tool"
 						event := events.NewToolCallResultEvent(source.EventID, d.CallID, d.Preview)
 						event.Role = &role
@@ -284,6 +435,13 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 		case "run.finished":
 			var d journal.FinishData
 			journal.Decode(source.Data, &d)
+			for i := range cp.State.Tools {
+				tool := &cp.State.Tools[i]
+				if tool.Status == "running" || tool.Status == "parameters_complete" {
+					tool.Status = "result_unavailable"
+					custom("mass.tool.status.v1", map[string]any{"toolCallId": tool.ID, "status": tool.Status})
+				}
+			}
 			for i := range cp.State.Messages {
 				m := &cp.State.Messages[i]
 				if !m.Closed {
@@ -306,6 +464,7 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 				emit(events.NewRunErrorEvent("Run "+d.Status, events.WithErrorCode(code)))
 			}
 			cp.Closed = true
+			cp.active = nil
 		default:
 			custom("mass.trace.v1", map[string]any{"eventType": source.Type, "sequence": strconv.FormatInt(source.Sequence, 10)})
 		}

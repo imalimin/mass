@@ -89,6 +89,16 @@ func (l *recoveryLedger) PutNew(ctx context.Context, key string, r io.Reader, n 
 	}
 	return info, err
 }
+func (l *recoveryLedger) Overwrite(ctx context.Context, key string, r io.Reader, n int64, media string) (storage.BlobInfo, error) {
+	if err := l.register(key, nil); err != nil {
+		return storage.BlobInfo{}, err
+	}
+	info, err := l.Store.Overwrite(ctx, key, r, n, media)
+	if err == nil {
+		err = l.live(key, info.VersionID)
+	}
+	return info, err
+}
 func (l *recoveryLedger) inventory(ctx context.Context, db *testdb.Database) error {
 	if db == nil {
 		return nil
@@ -216,7 +226,9 @@ func recoveryTOSFixture(t *testing.T) string {
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			if _, exists := objects[key]; exists || r.Header.Get("x-tos-forbid-overwrite") != "true" {
+			_, exists := objects[key]
+			immutable := r.Header.Get("x-tos-forbid-overwrite") == "true"
+			if (immutable && exists) || (!immutable && !strings.HasSuffix(key, "/trace.jsonl")) {
 				w.WriteHeader(409)
 				_, _ = io.WriteString(w, `{"Code":"FileAlreadyExists"}`)
 				return

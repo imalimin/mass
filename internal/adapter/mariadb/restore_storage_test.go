@@ -17,7 +17,8 @@ func TestRestoreCoversEveryContentForeignKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tablePattern := regexp.MustCompile(`(?i)(?:CREATE|ALTER) TABLE (\w+)`)
+	tablePattern := regexp.MustCompile(`(?i)(?:CREATE|ALTER) TABLE (?:IF NOT EXISTS )?(\w+)`)
+	dropPattern := regexp.MustCompile(`(?i)DROP TABLE (?:IF EXISTS )?(\w+)`)
 	fkPattern := regexp.MustCompile(`(?i)FOREIGN KEY\(([^)]+)\) REFERENCES content_objects\(([^)]+)\)`)
 	want := map[string]bool{}
 	for _, name := range files {
@@ -26,6 +27,14 @@ func TestRestoreCoversEveryContentForeignKey(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, statement := range strings.Split(string(raw), ";") {
+			if dropped := dropPattern.FindStringSubmatch(statement); dropped != nil {
+				for ref := range want {
+					if strings.HasPrefix(ref, dropped[1]+".") {
+						delete(want, ref)
+					}
+				}
+				continue
+			}
 			table := tablePattern.FindStringSubmatch(statement)
 			for _, fk := range fkPattern.FindAllStringSubmatch(statement, -1) {
 				if len(table) != 2 {

@@ -12,3 +12,7 @@ it('preserves UTF-8 characters split across response chunks', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(body)))
   await expect(payloadText('/payload')).resolves.toBe('你好')
 })
+it('rejects bytes that cannot round-trip through a UTF-8 file editor', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(Uint8Array.of(0xff))))
+  await expect(payloadText('/payload', undefined, { utf8Only: true })).rejects.toThrow('不是 UTF-8 文本')
+})

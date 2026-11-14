@@ -44,7 +44,7 @@ export async function startModelFixture() {
       const steps = status => [{ id: 'report', title: 'Create summary', status }]
       const actions = [
         () => ['list_skill_resources', { skill_binding_id: binding, limit: 1 }],
-        () => ['read_skill_resource', { skill_binding_id: binding, path: 'assets/rules.txt' }],
+        () => ['read_skill_resource', { skill_binding_id: binding, path: 'rules.txt' }],
         () => ['read_attachment', { attachment_id: attachments[0].id, format: 'json' }],
         () => ['write_file', { path: 'records.json', content: JSON.stringify(data(2).value), media_type: 'application/json', expected_sha256: 'missing' }],
         () => ['read_file', { path: 'records.json', expected_sha256: hash(3) }],

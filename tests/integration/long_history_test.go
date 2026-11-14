@@ -42,7 +42,7 @@ func longHistoryAgent(t *testing.T, r *faultRig, space string) (string, string) 
 	cfg.Limits.MaxSteps = 8
 	cfg.Limits.TimeoutSeconds = 60
 	raw, _ := json.Marshal(cfg)
-	d, err = svc.Save(ctx, r.actor, space, "agent", d.ID, d.Revision, catalog.Document{Markdown: "Preserve history and files.", ConfigYAML: string(raw), Assets: []catalog.Asset{}})
+	d, err = svc.Save(ctx, r.actor, space, "agent", d.ID, d.Revision, catalog.Document{Markdown: "Preserve history and files.", ConfigYAML: string(raw)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,20 +116,21 @@ func TestLongHistoryContinuesAndRecovers(t *testing.T) {
 			}
 		}
 	}
-	// Full raw replay must reproduce the compact manifest, including range digests.
+	// Full and paged replay agree on the retained messages and validate range digests.
 	all := []journal.Event{}
 	if _, err = resource.WalkHistory(ctx, &journal.Journal{Repo: r.db.Store}, r.actor, r.space, s.ID, func(e journal.Event) error { all = append(all, e); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	rebuilt, err := (&projector.Projector{Content: r.content}).Build(ctx, v.Snapshot, all, saved.Tools, saved.Spec)
-	if err != nil || rebuilt.Fingerprint != saved.Fingerprint {
-		t.Fatal("full replay differs", err)
+	paged, pageErr := (&projector.Projector{Content: r.content}).Build(ctx, v.Snapshot, facts, saved.Tools, saved.Spec)
+	if err != nil || pageErr != nil || rebuilt.Fingerprint != paged.Fingerprint {
+		t.Fatal("full replay differs", err, pageErr)
 	}
 	legacy := saved.Spec
 	legacy.Renderer = projector.LegacyRenderer
 	legacy.AuditRanges = nil
 	oldReplay, err := (&projector.Projector{Content: r.content}).Build(ctx, v.Snapshot, all, saved.Tools, legacy)
-	if err != nil || oldReplay.ContentDigest != saved.ContentDigest {
+	if err != nil || oldReplay.ContentDigest != rebuilt.ContentDigest {
 		t.Fatal("v2 replay compatibility", err)
 	}
 	_, token, _, err := r.auth.Login(ctx, "alice", "correct-password-alice")

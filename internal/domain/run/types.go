@@ -116,6 +116,7 @@ type View struct {
 	StartedAt            *time.Time `json:"started_at"`
 	FinishedAt           *time.Time `json:"finished_at"`
 	HeartbeatAt          *time.Time `json:"heartbeat_at"`
+	TraceUploaded        bool       `json:"-"`
 	OwnerID              string     `json:"-"`
 	Usage                Usage      `json:"usage"`
 }
@@ -135,6 +136,7 @@ type Message struct {
 	Native     json.RawMessage `json:"native,omitempty"`
 }
 type Reply struct {
+	Trace           ModelTrace        `json:"-"`
 	Observation     *ModelObservation `json:"observation,omitempty"`
 	MessageID       string            `json:"message_id"`
 	Message         Message           `json:"message"`
@@ -180,9 +182,10 @@ type Prepared struct {
 	InputTokens   int            `json:"input_tokens"`
 }
 type Outcome struct {
-	FinalResponseEventID string `json:"final_response_event_id"`
-	Error                string `json:"error"`
-	Status               string `json:"status"`
+	FinalResponseEventID string         `json:"final_response_event_id"`
+	Error                string         `json:"error"`
+	Status               string         `json:"status"`
+	FailureDetail        *FailureDetail `json:"failure_detail,omitempty"`
 }
 type MessageView struct {
 	Attachments   []Attachment `json:"attachments,omitempty"`

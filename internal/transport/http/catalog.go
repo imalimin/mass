@@ -71,7 +71,7 @@ func registerCatalog(register func(string, bool, endpoint), options IdentityOpti
 			return nil
 		})
 		register("GET "+base+"/{id}/draft", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
-			v, e := svc.Repo.CatalogDraft(r.Context(), u.ID, r.PathValue("space_id"), kind, r.PathValue("id"))
+			v, e := svc.Draft(r.Context(), u.ID, r.PathValue("space_id"), kind, r.PathValue("id"))
 			if e != nil {
 				return e
 			}
@@ -93,27 +93,29 @@ func registerCatalog(register func(string, bool, endpoint), options IdentityOpti
 			writeJSON(w, 200, v)
 			return nil
 		})
-		register("POST "+base+"/{id}/resources", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
-			var b struct {
-				ExpectedRevision int64  `json:"expected_revision"`
-				Path             string `json:"path"`
-				MediaType        string `json:"media_type"`
-				Data             string `json:"data_base64"`
-			}
-			if e := decodeCatalog(w, r, &b, 12<<20); e != nil {
-				return e
-			}
-			raw, e := base64.StdEncoding.Strict().DecodeString(b.Data)
-			if e != nil || len(raw) > catalog.MaxResource {
-				return catalog.ErrConfig
-			}
-			v, e := svc.Upload(r.Context(), u.ID, r.PathValue("space_id"), kind, r.PathValue("id"), b.Path, b.MediaType, b.ExpectedRevision, bytes.NewReader(raw))
-			if e != nil {
-				return e
-			}
-			writeJSON(w, 200, v)
-			return nil
-		})
+		if kind == "skill" {
+			register("POST "+base+"/{id}/resources", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+				var b struct {
+					ExpectedRevision int64  `json:"expected_revision"`
+					Path             string `json:"path"`
+					MediaType        string `json:"media_type"`
+					Data             string `json:"data_base64"`
+				}
+				if e := decodeCatalog(w, r, &b, 12<<20); e != nil {
+					return e
+				}
+				raw, e := base64.StdEncoding.Strict().DecodeString(b.Data)
+				if e != nil || len(raw) > catalog.MaxResource {
+					return catalog.ErrConfig
+				}
+				v, e := svc.Upload(r.Context(), u.ID, r.PathValue("space_id"), kind, r.PathValue("id"), b.Path, b.MediaType, b.ExpectedRevision, bytes.NewReader(raw))
+				if e != nil {
+					return e
+				}
+				writeJSON(w, 200, v)
+				return nil
+			})
+		}
 		for _, debug := range []bool{false, true} {
 			if debug && kind != "agent" {
 				continue
@@ -127,7 +129,7 @@ func registerCatalog(register func(string, bool, endpoint), options IdentityOpti
 				if e != nil {
 					return e
 				}
-				items, e := svc.Repo.CatalogVersions(r.Context(), u.ID, r.PathValue("space_id"), kind, r.PathValue("id"), debug, q)
+				items, e := svc.Versions(r.Context(), u.ID, r.PathValue("space_id"), kind, r.PathValue("id"), debug, q)
 				if e != nil {
 					return e
 				}

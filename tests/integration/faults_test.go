@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,7 +29,6 @@ import (
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
 	"github.com/imalimin/mass/internal/resource"
-	"github.com/imalimin/mass/internal/runtime/modelgateway"
 	transport "github.com/imalimin/mass/internal/transport/http"
 	"github.com/imalimin/mass/tests/fakes"
 	"github.com/imalimin/mass/tests/testdb"
@@ -36,12 +36,12 @@ import (
 
 type faultBlobs struct {
 	*fakes.Blobs
-	failWire   atomic.Bool
-	lostUpload atomic.Bool
+	rejectOctetStream atomic.Bool
+	lostUpload        atomic.Bool
 }
 
 func (b *faultBlobs) PutNew(ctx context.Context, key string, src io.Reader, n int64, media string) (storage.BlobInfo, error) {
-	if b.failWire.Load() && media == "application/octet-stream" {
+	if b.rejectOctetStream.Load() && media == "application/octet-stream" {
 		return storage.BlobInfo{}, errors.New("injected wire storage outage")
 	}
 	info, err := b.Blobs.PutNew(ctx, key, src, n, media)
@@ -54,17 +54,13 @@ func (b *faultBlobs) PutNew(ctx context.Context, key string, src io.Reader, n in
 type faultModel struct {
 	retries sync.Map
 	calls   atomic.Int64
-	sent    atomic.Int64
 	entered chan string
+	exited  chan struct{}
 }
 
 func (*faultModel) Source() string { return "fake" }
-func (m *faultModel) Stream(ctx context.Context, snapshot run.Snapshot, p run.Prepared, _ string, rec modelgateway.Recorder, delta func(string) error) (run.Reply, error) {
+func (m *faultModel) Stream(ctx context.Context, snapshot run.Snapshot, p run.Prepared, _ string, delta func(string) error) (run.Reply, error) {
 	m.calls.Add(1)
-	if err := rec.Request(ctx, []byte(`{"source":"fake","request":"D09"}`)); err != nil {
-		return run.Reply{}, err
-	}
-	m.sent.Add(1)
 	task := ""
 	last := 0
 	for i, msg := range p.Messages {
@@ -76,15 +72,9 @@ func (m *faultModel) Stream(ctx context.Context, snapshot run.Snapshot, p run.Pr
 
 	if p.Spec.Purpose == "task" && strings.Contains(task, "retry") {
 		if _, seen := m.retries.LoadOrStore(snapshot.ID, true); !seen {
-			if err := rec.Response(ctx, 503, []byte(`{"source":"fake","error":"transient"}`)); err != nil {
-				return run.Reply{}, err
-			}
 			input := int64(100)
 			return run.Reply{Usage: run.Usage{Input: &input}}, &run.ModelFailure{Code: "model_http_failed", Status: 503, Retryable: true}
 		}
-	}
-	if err := rec.Response(ctx, 200, []byte(`{"source":"fake","response":"D09"}`)); err != nil {
-		return run.Reply{}, err
 	}
 	if strings.Contains(task, "wait") {
 		if strings.Contains(task, "partial") {
@@ -97,6 +87,10 @@ func (m *faultModel) Stream(ctx context.Context, snapshot run.Snapshot, p run.Pr
 		default:
 		}
 		<-ctx.Done()
+		select {
+		case m.exited <- struct{}{}:
+		default:
+		}
 		return run.Reply{}, ctx.Err()
 	}
 
@@ -146,6 +140,10 @@ type faultRig struct {
 }
 
 func newFaultRig(t *testing.T) *faultRig {
+	return newFaultRigWithTimeout(t, 3)
+}
+
+func newFaultRigWithTimeout(t *testing.T, timeoutSeconds int) *faultRig {
 	t.Helper()
 	if os.Getenv("MASS_TEST_ADMIN_DSN") == "" {
 		t.Skip("requires isolated MariaDB")
@@ -155,7 +153,7 @@ func newFaultRig(t *testing.T) *faultRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &faultRig{t: t, db: db, blobs: &faultBlobs{Blobs: fakes.NewBlobs()}, model: &faultModel{entered: make(chan string, 16)}}
+	r := &faultRig{t: t, db: db, blobs: &faultBlobs{Blobs: fakes.NewBlobs()}, model: &faultModel{entered: make(chan string, 16), exited: make(chan struct{}, 1)}}
 	t.Cleanup(func() {
 		if r.close != nil {
 			c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -193,9 +191,9 @@ func newFaultRig(t *testing.T) *faultRig {
 	cfg.Context.ReservedOutputTokens = 512
 	cfg.Context.Compression = "summary"
 	cfg.Limits.MaxSteps = 4
-	cfg.Limits.TimeoutSeconds = 3
+	cfg.Limits.TimeoutSeconds = timeoutSeconds
 	raw, _ := json.Marshal(cfg)
-	agent, err = catalogue.Save(ctx, r.actor, r.space, "agent", r.agent, agent.Revision, catalog.Document{Markdown: "Test deterministic faults.", ConfigYAML: string(raw), Assets: []catalog.Asset{}})
+	agent, err = catalogue.Save(ctx, r.actor, r.space, "agent", r.agent, agent.Revision, catalog.Document{Markdown: "Test deterministic faults.", ConfigYAML: string(raw)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,11 +272,30 @@ func (r *faultRig) entered() {
 func (r *faultRig) terminalOnce(v run.View) {
 	r.t.Helper()
 	var terminal, occupied int
-	r.db.Admin.DB.QueryRow("SELECT COUNT(*) FROM runtime_events WHERE run_id=? AND event_type='run.finished'", v.ID).Scan(&terminal)
+	r.db.Admin.DB.QueryRow("SELECT COUNT(*) FROM runs WHERE id=? AND finished_at IS NOT NULL", v.ID).Scan(&terminal)
 	r.db.Admin.DB.QueryRow("SELECT COUNT(*) FROM session_active_runs WHERE run_id=?", v.ID).Scan(&occupied)
 	if terminal != 1 || occupied != 0 {
 		r.t.Fatal("terminal/occupancy", terminal, occupied)
 	}
+}
+
+func (r *faultRig) finishData(v run.View) journal.FinishData {
+	r.t.Helper()
+	page, err := r.db.Store.RuntimeTrace(context.Background(), r.actor, r.space, v.ID, 0, nil, 100)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	for _, event := range page.Events {
+		if event.Type == "run.finished" {
+			var data journal.FinishData
+			if err := journal.Decode(event.Data, &data); err != nil {
+				r.t.Fatal(err)
+			}
+			return data
+		}
+	}
+	r.t.Fatal("missing run.finished event")
+	return journal.FinishData{}
 }
 
 func TestFaultTimeoutAndTraceStorage(t *testing.T) {
@@ -289,19 +306,23 @@ func TestFaultTimeoutAndTraceStorage(t *testing.T) {
 			t.Fatal(v.Status, v.Error)
 		}
 		r.terminalOnce(v)
+		detail := r.finishData(v).FailureDetail
+		if detail == nil || detail.Source != "run_deadline" || detail.Reason != "deadline_exceeded" || detail.TimeoutMS != 3000 {
+			t.Fatalf("wrong timeout detail: %+v", detail)
+		}
 		cp, err := r.runtime.UI.CatchUp(context.Background(), r.actor, r.space, v.ID)
 		if err != nil || len(cp.State.Messages) != 1 || !cp.State.Messages[0].Incomplete || cp.State.Messages[0].Text != "D09 partial output" {
 			t.Fatal("partial output lost or successful", err)
 		}
 	})
-	t.Run("wire storage unavailable", func(t *testing.T) {
+	t.Run("raw wire storage is unused", func(t *testing.T) {
 		s := r.session()
-		r.blobs.failWire.Store(true)
-		before := r.model.sent.Load()
-		v := r.wait(r.submit(s, "trace cannot save").ID)
-		r.blobs.failWire.Store(false)
-		if v.Status != "failed" || v.FinalResponseEventID != "" || r.model.sent.Load() != before {
-			t.Fatal("unrecorded request sent", v.Error)
+		r.blobs.rejectOctetStream.Store(true)
+		before := r.model.calls.Load()
+		v := r.wait(r.submit(s, "reply without wire storage").ID)
+		r.blobs.rejectOctetStream.Store(false)
+		if v.Status != "succeeded" || v.FinalResponseEventID == "" || r.model.calls.Load() != before+1 {
+			t.Fatal("model depended on raw wire storage", v.Error)
 		}
 		r.terminalOnce(v)
 	})
@@ -315,6 +336,43 @@ func TestFaultTimeoutAndTraceStorage(t *testing.T) {
 		r.terminalOnce(v)
 	})
 }
+
+func TestFaultHeartbeatTrace(t *testing.T) {
+	r := newFaultRigWithTimeout(t, 30)
+	v := r.submit(r.session(), "wait for heartbeat timeout")
+	r.entered()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	tx, err := r.db.Admin.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var locked string
+	if err = tx.QueryRowContext(ctx, "SELECT id FROM spaces WHERE id=? FOR UPDATE", r.space).Scan(&locked); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.model.exited:
+	case <-ctx.Done():
+		t.Fatal("heartbeat did not stop the model while the lock was held")
+	}
+	if err = tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	v = r.wait(v.ID)
+	if v.Status != "failed" || v.Error != "run_timeout" || v.WorkspaceSnapshotID == "" {
+		t.Fatalf("unexpected final state: status=%s error=%s snapshot=%s", v.Status, v.Error, v.WorkspaceSnapshotID)
+	}
+	r.terminalOnce(v)
+	detail := r.finishData(v).FailureDetail
+	if detail == nil || detail.Source != "heartbeat" || detail.Stage != "lock_space" || detail.Reason != "deadline_exceeded" ||
+		detail.FailedAt.IsZero() || detail.DurationMS < 3000 || detail.TimeoutMS != 3000 {
+		t.Fatalf("wrong heartbeat detail: %+v", detail)
+	}
+}
+
 func TestFaultQueuedCancellationAndDatabaseLoss(t *testing.T) {
 	r := newFaultRig(t)
 	first := r.submit(r.session(), "wait for database fault")
@@ -353,11 +411,15 @@ func TestFaultQueuedCancellationAndDatabaseLoss(t *testing.T) {
 	}
 	r.db.Store = store
 	r.bind()
-	before := r.model.sent.Load()
+	before := r.model.calls.Load()
 	r.start()
 	recovered := r.wait(first.ID)
 	if recovered.Status != "failed" || recovered.Error != "interrupted" || recovered.WorkspaceSnapshotID != "" {
 		t.Fatal("interrupted recovery", recovered.Status, recovered.Error)
+	}
+	page := awaitToolTrace(t, context.Background(), r.runtime.Trace, r.db.Store, recovered)
+	if len(page.Items) != 1 || !bytes.Contains(page.Items[0], []byte(`"type":"run_finished"`)) {
+		t.Fatal("lost in-memory steps were reconstructed", page)
 	}
 	r.terminalOnce(recovered)
 	done := r.wait(queued.ID)
@@ -370,12 +432,12 @@ func TestFaultQueuedCancellationAndDatabaseLoss(t *testing.T) {
 		t.Fatal("queued cancellation lost", cancelled.Status)
 	}
 	r.terminalOnce(cancelled)
-	if r.model.sent.Load() != before+1 {
+	if r.model.calls.Load() != before+1 {
 		t.Fatal("interrupted/cancelled model was replayed")
 	}
 }
 
-func TestFaultHistoryRetentionAndCorruptRebuild(t *testing.T) {
+func TestFaultHistoryRetentionAndCorruptContent(t *testing.T) {
 	r := newFaultRig(t)
 	ctx := context.Background()
 	s := r.session()
@@ -473,34 +535,16 @@ func TestFaultHistoryRetentionAndCorruptRebuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.db.Store.DB.SetMaxOpenConns(16)
-	// Missing immutable content must block offline rebuilding before any existing
-	// view is deleted. Inspect the independent admin to compare committed facts.
 	object, err := r.db.Store.Object(ctx, r.actor, r.space, artifacts[0].ObjectID, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.blobs.Corrupt(object.Key)
-	before, err := r.db.Store.RuntimeRun(ctx, r.actor, r.space, v.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = r.db.Store.RebuildViews(ctx, func(ctx context.Context, o storage.Object) error {
-		_, f, e := r.content.Read(ctx, r.actor, o.SpaceID, o.ID)
-		if e == nil {
+	if _, f, err := r.content.Read(ctx, r.actor, r.space, object.ID); !errors.Is(err, storage.ErrIntegrity) {
+		if f != nil {
 			f.Close()
 		}
-		return e
-	})
-	if !errors.Is(err, storage.ErrIntegrity) {
-		t.Fatal("corrupt history rebuilt", err)
-	}
-	after, err := r.db.Store.RuntimeRun(ctx, r.actor, r.space, v.ID)
-	if err != nil || !catalog.Equal(before, after) {
-		t.Fatal("failed rebuild changed views", err)
-	}
-	afterFrames, _, err := r.db.Store.ReadFrames(ctx, r.actor, r.space, v.ID, 0, 100)
-	if err != nil || !catalog.Equal(frames, afterFrames) {
-		t.Fatal("failed rebuild changed AGUI", err)
+		t.Fatal("corrupt artifact was readable", err)
 	}
 	// A second missing-object failure must also be explicit, not an empty result.
 	delete(r.blobs.Data, object.Key) // all runtime workers have already exited
@@ -525,8 +569,8 @@ func TestFaultSummaryRetryAccounting(t *testing.T) {
 	r.terminalOnce(v)
 	var summary, task, failed, requests int
 	r.db.Admin.DB.QueryRow("SELECT COALESCE(SUM(purpose='summary'),0),COALESCE(SUM(purpose='task'),0),COALESCE(SUM(status='failed'),0) FROM model_attempts WHERE run_id=?", v.ID).Scan(&summary, &task, &failed)
-	r.db.Admin.DB.QueryRow("SELECT COUNT(*) FROM runtime_events WHERE run_id=? AND event_type='model.request.recorded'", v.ID).Scan(&requests)
-	if summary != 1 || task != 2 || failed != 1 || requests != 3 {
+	r.db.Admin.DB.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='session_facts'").Scan(&requests)
+	if summary != 1 || task != 2 || failed != 1 || requests != 0 {
 		t.Fatal("attempt accounting", summary, task, failed, requests)
 	}
 	if v.Usage.Input == nil || *v.Usage.Input != 300 || v.Usage.Output != nil {
@@ -577,9 +621,8 @@ func TestFaultRevocationDuringCode(t *testing.T) {
 	}
 	written := false
 	for i := 0; i < 200; i++ {
-		var n int
-		r.db.Admin.DB.QueryRow("SELECT COUNT(*) FROM runtime_events WHERE run_id=? AND event_type='tool.io.recorded' AND JSON_UNQUOTE(JSON_EXTRACT(data,'$.name'))='fs.writeFile' AND JSON_UNQUOTE(JSON_EXTRACT(data,'$.phase'))='completed'", v.ID).Scan(&n)
-		if n == 1 {
+		raw, _ := os.ReadFile(filepath.Join(r.manager.LocalPath(), r.space+"_"+s.ID, "revoked.txt"))
+		if string(raw) == "kept" {
 			written = true
 			break
 		}

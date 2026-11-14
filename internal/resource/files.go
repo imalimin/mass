@@ -26,6 +26,7 @@ type FileService struct {
 	Workspaces Workspaces
 	Content    *ContentStore
 	Cursors    CursorSigner
+	queries    map[string]queryResult
 	MaxBytes   int64
 	Limits     storage.Limits
 	Check      func(context.Context, run.Snapshot) error
@@ -193,11 +194,7 @@ func (f *FileService) Read(ctx context.Context, s run.Snapshot, in ReadFileInput
 			return err
 		}
 		view["path"] = in.Path
-		o, err := f.Content.Put(ctx, s.ActorID, s.SpaceID, uuid.NewString(), "file.read", "application/octet-stream", bytes.NewReader(raw))
-		if err != nil {
-			return err
-		}
-		result = dataResult(view, "none", storage.Ref{Role: "source", ObjectID: o.ID, SHA256: o.SHA256})
+		result = dataResult(view, "none")
 		result.Complete = view["complete"].(bool)
 		result.Truncated = !result.Complete
 		return nil

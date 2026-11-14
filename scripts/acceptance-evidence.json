@@ -280,7 +280,7 @@
       },
       {
         "path": "tests/integration/faults_test.go",
-        "anchor": "TestFaultHistoryRetentionAndCorruptRebuild"
+        "anchor": "TestFaultHistoryRetentionAndCorruptContent"
       }
     ]
   },
@@ -359,7 +359,7 @@
       },
       {
         "path": "tests/integration/faults_test.go",
-        "anchor": "TestFaultHistoryRetentionAndCorruptRebuild"
+        "anchor": "TestFaultHistoryRetentionAndCorruptContent"
       },
       {
         "path": "scripts/fault-browser-smoke.mjs",
@@ -495,7 +495,7 @@
       },
       {
         "path": "tests/integration/faults_test.go",
-        "anchor": "TestFaultHistoryRetentionAndCorruptRebuild"
+        "anchor": "TestFaultHistoryRetentionAndCorruptContent"
       }
     ]
   },
@@ -712,7 +712,7 @@
       },
       {
         "path": "tests/integration/faults_test.go",
-        "anchor": "TestFaultHistoryRetentionAndCorruptRebuild"
+        "anchor": "TestFaultHistoryRetentionAndCorruptContent"
       }
     ]
   },
@@ -780,7 +780,7 @@
     "sources": [
       {
         "path": "tests/integration/faults_test.go",
-        "anchor": "TestFaultHistoryRetentionAndCorruptRebuild"
+        "anchor": "TestFaultHistoryRetentionAndCorruptContent"
       }
     ]
   }

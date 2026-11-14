@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 )
 
@@ -105,10 +106,11 @@ type SessionData struct {
 	Title            string       `json:"title,omitempty"`
 }
 type FinishData struct {
-	Status               string `json:"status"`
-	Error                string `json:"error,omitempty"`
-	FinalResponseEventID string `json:"final_response_event_id,omitempty"`
-	SnapshotError        string `json:"snapshot_error,omitempty"`
+	Status               string             `json:"status"`
+	Error                string             `json:"error,omitempty"`
+	FinalResponseEventID string             `json:"final_response_event_id,omitempty"`
+	SnapshotError        string             `json:"snapshot_error,omitempty"`
+	FailureDetail        *run.FailureDetail `json:"failure_detail,omitempty"`
 }
 type RestoreData struct {
 	SnapshotID string `json:"snapshot_id,omitempty"`

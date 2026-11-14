@@ -54,7 +54,7 @@ func (f *FileService) Query(ctx context.Context, s run.Snapshot, kind string, in
 			}
 		}
 	}
-	return f.page(ctx, s, kind, in, func() (q queryResult, err error) {
+	return f.page(s, kind, in, func() (q queryResult, err error) {
 		q = queryResult{Items: []json.RawMessage{}, Complete: true}
 		err = f.Workspaces.With(ctx, s.SpaceID, s.SessionID, func(dir WorkspaceDir) error {
 			if err := f.Check(ctx, s); err != nil {

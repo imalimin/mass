@@ -15,6 +15,7 @@ import (
 	"github.com/imalimin/mass/internal/adapter/secrets"
 	"github.com/imalimin/mass/internal/adapter/tos"
 	"github.com/imalimin/mass/internal/domain/storage"
+	"github.com/imalimin/mass/internal/resource/trace"
 )
 
 // RestoreStorage copies retained TOS bytes into a distinct namespace and then
@@ -124,6 +125,36 @@ func RestoreStorage(ctx context.Context, source, target Config, expectedDatabase
 		}
 		next.ETag, next.VersionID = info.ETag, info.VersionID
 		return next, nil
+	}, func(ctx context.Context, space, session string) error {
+		sourceKey := trace.Key(fromPrefix, space, session)
+		targetKey := trace.Key(toPrefix, space, session)
+		existing, err := to.Open(ctx, targetKey, "")
+		if err == nil {
+			return existing.Close()
+		}
+		if !errors.Is(err, storage.ErrBlobNotFound) {
+			return err
+		}
+		raw, err := from.Open(ctx, sourceKey, "")
+		if err != nil {
+			return err
+		}
+		defer raw.Close()
+		file, err := os.CreateTemp("", "mass-restore-trace-*")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(file.Name())
+		defer file.Close()
+		size, err := io.Copy(file, storage.ContextReader{Context: ctx, Reader: raw})
+		if err != nil {
+			return err
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		_, err = to.PutNew(ctx, targetKey, file, size, "application/x-ndjson")
+		return err
 	})
 }
 

@@ -7,9 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"mime"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/imalimin/mass/internal/app/identity"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/resource"
 )
@@ -19,13 +21,44 @@ type Service struct {
 	Content *resource.ContentStore
 }
 
-func (s *Service) Create(ctx context.Context, actor, space, kind, name string) (Draft, error) {
-	d := Draft{Definition: Definition{ID: uuid.NewString(), Kind: kind, Name: name}, Revision: 1, Document: Document{Assets: []Asset{}}}
-	if _, err := ValidateDocument(kind, name, d.Document, false); err != nil {
+func (s *Service) Draft(ctx context.Context, actor, space, kind, id string) (Draft, error) {
+	d, err := s.Repo.CatalogDraft(ctx, actor, space, kind, id)
+	if err != nil || kind != "skill" {
 		return d, err
+	}
+	b, err := s.readSkillBundle(ctx, actor, space, d.ContentID, "")
+	if err != nil {
+		return d, err
+	}
+	if b.DefinitionID != d.ID || b.Revision != d.Revision {
+		return d, storage.ErrIntegrity
+	}
+	d.Document = b.Document
+	return d, nil
+}
+
+func (s *Service) createDraft(ctx context.Context, actor, space string, d Draft) (Draft, error) {
+	if _, err := ValidateDocument(d.Kind, d.Name, d.Document, false); err != nil {
+		return d, err
+	}
+	if d.Kind == "skill" {
+		var err error
+		d, err = s.packSkill(ctx, actor, space, d, d.Revision, nil, nil)
+		if err != nil {
+			return d, err
+		}
 	}
 	return d, s.Repo.CatalogCreate(ctx, actor, space, d)
 }
+
+func (s *Service) Create(ctx context.Context, actor, space, kind, name string) (Draft, error) {
+	d := Draft{Definition: Definition{ID: uuid.NewString(), Kind: kind, Name: name}, Revision: 1}
+	if kind == "skill" {
+		d.Document.Assets = []Asset{}
+	}
+	return s.createDraft(ctx, actor, space, d)
+}
+
 func (s *Service) Save(ctx context.Context, actor, space, kind, id string, revision int64, doc Document) (Draft, error) {
 	d, err := s.Repo.CatalogDraft(ctx, actor, space, kind, id)
 	if err != nil {
@@ -34,28 +67,46 @@ func (s *Service) Save(ctx context.Context, actor, space, kind, id string, revis
 	if d.Revision != revision {
 		return d, ErrDraft
 	}
-	if doc.Assets == nil {
-		doc.Assets = []Asset{}
+	d.Document = doc
+	return s.saveDraft(ctx, actor, space, d, nil, nil)
+}
+
+func (s *Service) saveDraft(ctx context.Context, actor, space string, d Draft, replacement *Asset, data []byte) (Draft, error) {
+	if d.Archived {
+		return d, ErrConfig
 	}
-	if _, err = ValidateDocument(kind, d.Name, doc, false); err != nil {
+	if d.Kind == "skill" && d.Document.Assets == nil {
+		d.Document.Assets = []Asset{}
+	}
+	if _, err := ValidateDocument(d.Kind, d.Name, d.Document, false); err != nil {
 		return d, err
 	}
-	d.Document = doc
-	if err = s.Repo.CatalogSave(ctx, actor, space, d); err != nil {
+	if d.Kind == "skill" {
+		var err error
+		d, err = s.packSkill(ctx, actor, space, d, d.Revision+1, replacement, data)
+		if err != nil {
+			return d, err
+		}
+	}
+	if err := s.Repo.CatalogSave(ctx, actor, space, d); err != nil {
 		return d, err
 	}
 	d.Revision++
 	return d, nil
 }
+
 func (s *Service) Upload(ctx context.Context, actor, space, kind, id, path, media string, revision int64, r io.Reader) (Draft, error) {
-	d, err := s.Repo.CatalogDraft(ctx, actor, space, kind, id)
+	if kind != "skill" {
+		return Draft{}, ErrConfig
+	}
+	d, err := s.Draft(ctx, actor, space, kind, id)
 	if err != nil {
 		return d, err
 	}
 	if d.Revision != revision {
 		return d, ErrDraft
 	}
-	if !ValidPath(path) {
+	if !resource.ValidSkillPath(path) {
 		return d, ErrConfig
 	}
 	raw, err := io.ReadAll(io.LimitReader(storage.ContextReader{Context: ctx, Reader: r}, MaxResource+1))
@@ -65,11 +116,12 @@ func (s *Service) Upload(ctx context.Context, actor, space, kind, id, path, medi
 	if len(raw) > MaxResource {
 		return d, ErrConfig
 	}
-	o, err := s.Content.Put(ctx, actor, space, uuid.NewString(), "definition.asset", media, bytes.NewReader(raw))
-	if err != nil {
-		return d, err
+	if _, _, err = mime.ParseMediaType(media); err != nil || len(media) > 128 {
+		return d, ErrConfig
 	}
-	a := Asset{Path: path, ObjectID: o.ID, SHA256: o.SHA256, Size: o.Size, MediaType: o.MediaType}
+	sum := sha256.Sum256(raw)
+	// Reserve the id of the immutable package containing the new file.
+	a := Asset{Path: path, ObjectID: uuid.NewString(), SHA256: hex.EncodeToString(sum[:]), Size: int64(len(raw)), MediaType: media}
 	replaced := false
 	for i, old := range d.Document.Assets {
 		if old.Path == path {
@@ -80,13 +132,34 @@ func (s *Service) Upload(ctx context.Context, actor, space, kind, id, path, medi
 	if !replaced {
 		d.Document.Assets = append(d.Document.Assets, a)
 	}
-	return s.Save(ctx, actor, space, kind, id, revision, d.Document)
+	return s.saveDraft(ctx, actor, space, d, &a, raw)
 }
 func (s *Service) Publish(ctx context.Context, actor, space, kind, id, label string, revision int64, debug bool) (Version, error) {
 	if (!debug && !ValidLabel(label)) || (debug && kind != "agent") {
 		return Version{}, ErrConfig
 	}
-	b, err := s.Repo.CatalogPrepare(ctx, actor, space, kind, id, revision)
+	if kind == "skill" {
+		d, err := s.Draft(ctx, actor, space, kind, id)
+		if err != nil {
+			return Version{}, err
+		}
+		if d.Revision != revision {
+			return Version{}, ErrDraft
+		}
+		if d.Archived {
+			return Version{}, ErrConfig
+		}
+		if _, err = ValidateDocument(kind, d.Name, d.Document, true); err != nil {
+			return Version{}, err
+		}
+		o, err := s.Content.Repo.Object(ctx, actor, space, d.ContentID, true)
+		if err != nil {
+			return Version{}, err
+		}
+		v := Version{ID: uuid.NewString(), DefinitionID: id, Label: label, ContentID: o.ID, SHA256: o.SHA256, CreatedAt: time.Now().UTC().Truncate(time.Microsecond), Bundle: skillBundle(d)}
+		return v, s.Repo.CatalogPublish(ctx, actor, space, v)
+	}
+	b, err := s.Repo.CatalogPrepare(ctx, actor, space, id, revision)
 	if err != nil {
 		return Version{}, err
 	}
@@ -109,21 +182,8 @@ func (s *Service) Version(ctx context.Context, actor, space, kind, id, version s
 	if err != nil {
 		return v, err
 	}
-	_, f, err := s.Content.Read(ctx, actor, space, v.ContentID)
-	if err != nil {
+	if err = s.loadVersion(ctx, actor, space, kind, &v); err != nil {
 		return v, err
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, 1<<20))
-	if err != nil {
-		return v, err
-	}
-	sum := sha256.Sum256(raw)
-	if hex.EncodeToString(sum[:]) != v.SHA256 {
-		return v, storage.ErrIntegrity
-	}
-	if err = json.Unmarshal(raw, &v.Bundle); err != nil {
-		return v, storage.ErrIntegrity
 	}
 	// Recheck current membership after remote reads and refresh mutable archive state.
 	current, err := s.Repo.CatalogVersion(ctx, actor, space, kind, id, version)
@@ -133,8 +193,54 @@ func (s *Service) Version(ctx context.Context, actor, space, kind, id, version s
 	current.Bundle = v.Bundle
 	return current, nil
 }
+
+func (s *Service) Versions(ctx context.Context, actor, space, kind, id string, debug bool, q identity.Query) ([]Version, error) {
+	items, err := s.Repo.CatalogVersions(ctx, actor, space, kind, id, debug, q)
+	if err != nil || kind != "skill" {
+		return items, err
+	}
+	for i := range items {
+		if err := s.loadVersion(ctx, actor, space, kind, &items[i]); err != nil {
+			return nil, err
+		}
+	}
+	return items, nil
+}
+
+func (s *Service) loadVersion(ctx context.Context, actor, space, kind string, v *Version) error {
+	if kind == "skill" {
+		b, err := s.readSkillBundle(ctx, actor, space, v.ContentID, v.SHA256)
+		if err != nil {
+			return err
+		}
+		if b.DefinitionID != v.DefinitionID {
+			return storage.ErrIntegrity
+		}
+		v.Bundle = b
+		return nil
+	}
+	_, f, err := s.Content.Read(ctx, actor, space, v.ContentID)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(raw)
+	if hex.EncodeToString(sum[:]) != v.SHA256 {
+		return storage.ErrIntegrity
+	}
+	if json.Unmarshal(raw, &v.Bundle) != nil {
+		return storage.ErrIntegrity
+	}
+	// Historical Agent bundles keep their original bytes and digest in TOS.
+	v.Bundle.Document.Assets = nil
+	return nil
+}
 func (s *Service) Copy(ctx context.Context, actor, space, kind, id, name string) (Draft, error) {
-	d, err := s.Repo.CatalogDraft(ctx, actor, space, kind, id)
+	d, err := s.Draft(ctx, actor, space, kind, id)
 	if err != nil {
 		return d, err
 	}
@@ -154,5 +260,5 @@ func (s *Service) Copy(ctx context.Context, actor, space, kind, id, name string)
 	}
 	d.Definition = Definition{ID: uuid.NewString(), Kind: kind, Name: name}
 	d.Revision = 1
-	return d, s.Repo.CatalogCreate(ctx, actor, space, d)
+	return s.createDraft(ctx, actor, space, d)
 }

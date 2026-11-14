@@ -52,8 +52,8 @@ func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, outcome run.Outco
 	if err = repo.SavePlan(ctx, plan); err != nil {
 		return err
 	}
-	// Record uncertainty after execution has actually stopped, never replay actions.
-	history, err := RunHistory(ctx, j, s.ActorID, s.SpaceID, s.SessionID, s.ID, "model.attempt.started", "model.response.completed", "model.attempt.failed", "tool.execution.started", "tool.execution.completed", "operation.reconciled")
+	// Close pending model attempts for the durable run usage view.
+	history, err := RunHistory(ctx, j, s.ActorID, s.SpaceID, s.SessionID, s.ID, "model.attempt.started", "model.response.completed", "model.attempt.failed")
 	if err != nil {
 		return err
 	}
@@ -71,12 +71,7 @@ func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, outcome run.Outco
 			var d journal.AttemptFailedData
 			journal.Decode(e.Data, &d)
 			closed[d.AttemptID] = true
-		case "tool.execution.completed":
-			var d journal.ToolData
-			journal.Decode(e.Data, &d)
-			closed[d.CallID] = true
-		case "operation.reconciled":
-			closed[e.OperationID] = true
+
 		}
 	}
 	for _, e := range history {
@@ -93,14 +88,7 @@ func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, outcome run.Outco
 				v.OperationID = d.ID
 				pending = &v
 			}
-		case "tool.execution.started":
-			var d journal.ToolData
-			journal.Decode(e.Data, &d)
-			if !closed[d.CallID] {
-				v := journal.New(s.ActorID, "operation.reconciled", s.ID, journal.ReconcileData{Outcome: "unknown"})
-				v.OperationID = d.CallID
-				pending = &v
-			}
+
 		}
 		if pending != nil {
 			pending.EventID = stableID(s.ID, "reconcile:"+pending.OperationID)
@@ -111,7 +99,10 @@ func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, outcome run.Outco
 			}
 		}
 	}
-	finish := journal.New(s.ActorID, "run.finished", s.ID, journal.FinishData{Status: plan.Outcome.Status, Error: plan.Outcome.Error, FinalResponseEventID: plan.Outcome.FinalResponseEventID})
+	finish := journal.New(s.ActorID, "run.finished", s.ID, journal.FinishData{
+		Status: plan.Outcome.Status, Error: plan.Outcome.Error, FinalResponseEventID: plan.Outcome.FinalResponseEventID,
+		FailureDetail: plan.Outcome.FailureDetail,
+	})
 	finish.EventID = stableID(s.ID, "finished")
 	finish.OccurredAt = plan.At
 	finish.Actor.Kind = "system"
@@ -148,6 +139,7 @@ func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, outcome run.Outco
 		return nil
 	}
 	status, code := plan.Outcome.Status, plan.Outcome.Error
+	detail := plan.Outcome.FailureDetail
 	if status == "succeeded" {
 		status = "failed"
 		code = "workspace_snapshot_failed"
@@ -155,8 +147,9 @@ func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, outcome run.Outco
 	if current.CancelRequested {
 		status = "cancelled"
 		code = "run_cancelled"
+		detail = nil
 	}
-	finish.Data, _ = json.Marshal(journal.FinishData{Status: status, Error: code, SnapshotError: "workspace_snapshot_failed"})
+	finish.Data, _ = json.Marshal(journal.FinishData{Status: status, Error: code, SnapshotError: "workspace_snapshot_failed", FailureDetail: detail})
 	failure := journal.New(s.ActorID, "workspace.snapshot.failed", s.ID, journal.FailureData{Reason: "workspace_snapshot_failed"})
 	failure.EventID = stableID(s.ID, "snapshot.failed")
 	failure.OccurredAt = plan.At

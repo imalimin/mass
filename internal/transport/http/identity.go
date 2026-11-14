@@ -1,6 +1,7 @@
 package httptransport
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"path"
 	"strconv"
 	"sync"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/imalimin/mass/internal/app/identity"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
+	"github.com/imalimin/mass/internal/resource"
 )
 
 type endpoint func(http.ResponseWriter, *http.Request, identity.User) error
@@ -356,11 +359,24 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 				return err
 			}
 			defer release()
-			object, file, err := storageOptions.Content.Read(ctx, u.ID, r.PathValue("space_id"), r.PathValue("id"))
-			if err != nil {
-				return err
+			space, id := r.PathValue("space_id"), r.PathValue("id")
+			var reader io.Reader
+			var size int64
+			filename := id
+			if entry := r.URL.Query().Get("path"); entry != "" {
+				raw, _, err := resource.ReadSkillPackageFile(ctx, storageOptions.Content, u.ID, space, id, entry)
+				if err != nil {
+					return err
+				}
+				reader, size, filename = bytes.NewReader(raw), int64(len(raw)), path.Base(entry)
+			} else {
+				object, file, err := storageOptions.Content.Read(ctx, u.ID, space, id)
+				if err != nil {
+					return err
+				}
+				defer file.Close()
+				reader, size = file, object.Size
 			}
-			defer file.Close()
 			check := func(ctx context.Context) error {
 				if _, err := svc.Me(ctx, token(r)); err != nil {
 					return err
@@ -371,10 +387,10 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 				return err
 			}
 			w.Header().Set("Content-Type", "application/octet-stream")
-			w.Header().Set("Content-Disposition", `attachment; filename="`+object.ID+`"`)
-			w.Header().Set("Content-Length", strconv.FormatInt(object.Size, 10))
+			w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
+			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 			w.WriteHeader(200)
-			_ = copyAuthorized(ctx, w, file, check)
+			_ = copyAuthorized(ctx, w, reader, check)
 			return nil
 		})
 	}

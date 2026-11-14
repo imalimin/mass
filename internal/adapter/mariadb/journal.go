@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
-	"time"
 
 	"github.com/imalimin/mass/internal/app/identity"
 	"github.com/imalimin/mass/internal/domain/run"
@@ -58,7 +57,7 @@ func createRun(ctx context.Context, tx *sql.Tx, actor, space, session string, e 
 	json.Unmarshal(e.Data, &data)
 	var raw any
 	if data.Snapshot == nil {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO runs(space_id,session_id,id,actor_id,status,source_event_id,applied_sequence) VALUES(?,?,?,?,'queued',?,?)", space, session, e.RunID, actor, e.EventID, seq); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO runs(space_id,session_id,id,actor_id,status,source_event_id,created_event_id,created_sequence,applied_sequence) VALUES(?,?,?,?,'queued',?,?,?,?)", space, session, e.RunID, actor, e.EventID, e.EventID, seq, seq); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, "INSERT INTO session_active_runs(space_id,session_id,run_id) VALUES(?,?,?)", space, session, e.RunID)
@@ -89,7 +88,7 @@ func createRun(ctx context.Context, tx *sql.Tx, actor, space, session string, e 
 			return storage.ErrInvalid
 		}
 		var count int
-		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages m JOIN runtime_events e ON e.space_id=m.space_id AND e.event_id=m.source_event_id WHERE m.space_id=? AND m.session_id=? AND m.source_event_id=? AND m.role='user' AND m.run_id IS NULL AND e.actor_id=?", space, session, v.UserEventID, actor).Scan(&count); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages m WHERE m.space_id=? AND m.session_id=? AND m.source_event_id=? AND m.role='user' AND m.run_id IS NULL AND m.actor_id=?", space, session, v.UserEventID, actor).Scan(&count); err != nil {
 			return err
 		}
 		if count != 1 {
@@ -105,15 +104,12 @@ func createRun(ctx context.Context, tx *sql.Tx, actor, space, session string, e 
 		r, _ := json.Marshal(v)
 		raw = r
 	}
-	_, err := tx.ExecContext(ctx, "INSERT INTO runs(space_id,session_id,id,actor_id,status,source_event_id,applied_sequence,snapshot,created_at) VALUES(?,?,?,?,'queued',?,?,?,?)", space, session, e.RunID, actor, e.EventID, seq, raw, e.OccurredAt)
+	_, err := tx.ExecContext(ctx, "INSERT INTO runs(space_id,session_id,id,actor_id,status,source_event_id,created_event_id,created_sequence,applied_sequence,snapshot,created_at) VALUES(?,?,?,?,'queued',?,?,?,?,?,?)", space, session, e.RunID, actor, e.EventID, e.EventID, seq, seq, raw, e.OccurredAt)
 	if err != nil {
 		return err
 	}
 	if data.Snapshot != nil {
 		if _, err = tx.ExecContext(ctx, "UPDATE messages SET run_id=? WHERE space_id=? AND source_event_id=?", e.RunID, space, data.Snapshot.UserEventID); err != nil {
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO agui_streams(space_id,session_id,run_id,protocol_profile,mapper_version,parser_version,state) VALUES(?,?,?,'mass-agui-v1',1,1,'{}')", space, session, e.RunID); err != nil {
 			return err
 		}
 	}
@@ -122,6 +118,8 @@ func createRun(ctx context.Context, tx *sql.Tx, actor, space, session string, e 
 }
 func reduce(ctx context.Context, tx *sql.Tx, space, session string, e journal.Proposed, seq int64) error {
 	switch e.Type {
+	case "run.created":
+		return createRun(ctx, tx, e.Actor.ID, space, session, e, seq)
 	case "session.created":
 		var d journal.SessionData
 		json.Unmarshal(e.Data, &d)
@@ -141,6 +139,9 @@ func reduce(ctx context.Context, tx *sql.Tx, space, session string, e journal.Pr
 				return err
 			}
 		}
+		if _, err := tx.ExecContext(ctx, "UPDATE sessions SET created_event_id=?,created_at=?,source_snapshot_id=? WHERE space_id=? AND id=?", e.EventID, e.OccurredAt, nullable(d.SourceSnapshotID), space, session); err != nil {
+			return err
+		}
 		if d.SourceSnapshotID != "" {
 			if _, err := snapshotInTx(ctx, tx, space, d.SourceSnapshotID); err != nil {
 				return err
@@ -148,7 +149,7 @@ func reduce(ctx context.Context, tx *sql.Tx, space, session string, e journal.Pr
 			_, err := tx.ExecContext(ctx, "UPDATE sessions SET latest_workspace_snapshot_id=? WHERE space_id=? AND id=?", d.SourceSnapshotID, space, session)
 			return err
 		}
-
+		return nil
 	case "run.started":
 		var d journal.StartData
 		json.Unmarshal(e.Data, &d)
@@ -160,7 +161,7 @@ func reduce(ctx context.Context, tx *sql.Tx, space, session string, e journal.Pr
 		if err := run.CheckTransition(status, cancelled, e.Type, "", false); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE runs SET status='running',owner_id=?,started_at=?,heartbeat_at=?,source_event_id=?,applied_sequence=? WHERE space_id=? AND id=?", nullable(d.OwnerID), e.OccurredAt, e.OccurredAt, e.EventID, seq, space, e.RunID)
+		_, err := tx.ExecContext(ctx, "UPDATE runs SET status='running',owner_id=?,started_at=?,heartbeat_at=?,started_event_id=?,started_sequence=?,source_event_id=?,applied_sequence=? WHERE space_id=? AND id=?", nullable(d.OwnerID), e.OccurredAt, e.OccurredAt, e.EventID, seq, e.EventID, seq, space, e.RunID)
 		return err
 	case "run.finished":
 		var d journal.FinishData
@@ -182,9 +183,6 @@ func reduce(ctx context.Context, tx *sql.Tx, space, session string, e journal.Pr
 			return err
 		}
 		if runtime.Valid && d.Status == "succeeded" {
-			if err := eventType(ctx, tx, space, session, d.FinalResponseEventID, e.RunID, "model.response.completed"); err != nil {
-				return err
-			}
 			var purpose string
 			if err := tx.QueryRowContext(ctx, "SELECT purpose FROM model_attempts WHERE space_id=? AND run_id=? AND response_event_id=?", space, e.RunID, d.FinalResponseEventID).Scan(&purpose); err != nil {
 				return err
@@ -205,7 +203,11 @@ func reduce(ctx context.Context, tx *sql.Tx, space, session string, e journal.Pr
 				return err
 			}
 		}
-		if _, err := tx.ExecContext(ctx, "UPDATE runs SET status=?,source_event_id=?,applied_sequence=?,finished_at=?,error_code=?,snapshot_error=?,final_response_event_id=? WHERE space_id=? AND id=?", d.Status, e.EventID, seq, e.OccurredAt, d.Error, d.SnapshotError, nullable(d.FinalResponseEventID), space, e.RunID); err != nil {
+		var detail any
+		if d.FailureDetail != nil {
+			detail, _ = json.Marshal(d.FailureDetail)
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE runs SET status=?,source_event_id=?,applied_sequence=?,finished_at=?,error_code=?,snapshot_error=?,final_response_event_id=?,failure_detail=? WHERE space_id=? AND id=?", d.Status, e.EventID, seq, e.OccurredAt, d.Error, d.SnapshotError, nullable(d.FinalResponseEventID), detail, space, e.RunID); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, "DELETE FROM session_active_runs WHERE space_id=? AND session_id=? AND run_id=?", space, session, e.RunID)
@@ -213,7 +215,7 @@ func reduce(ctx context.Context, tx *sql.Tx, space, session string, e journal.Pr
 	case "workspace.snapshot.created":
 		var d storage.Snapshot
 		json.Unmarshal(e.Data, &d)
-		return saveSnapshot(ctx, tx, space, session, e, d)
+		return saveSnapshot(ctx, tx, space, session, e, d, seq)
 	case "workspace.snapshot.failed":
 		_, err := tx.ExecContext(ctx, "UPDATE sessions SET workspace_error='workspace_snapshot_failed' WHERE space_id=? AND id=?", space, session)
 		return err
@@ -243,59 +245,10 @@ func reduce(ctx context.Context, tx *sql.Tx, space, session string, e journal.Pr
 				return storage.ErrActive
 			}
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE sessions SET workspace_error='' WHERE space_id=? AND id=?", space, session)
+		_, err := tx.ExecContext(ctx, "UPDATE sessions SET workspace_error='',restore_event_id=?,restore_sequence=?,restored_at=?,restored_by=?,restore_run_id=?,restore_snapshot_id=?,restore_reason=? WHERE space_id=? AND id=?", e.EventID, seq, e.OccurredAt, e.Actor.ID, nullable(e.RunID), nullable(d.SnapshotID), d.Reason, space, session)
 		return err
 	}
 	return reduceRuntime(ctx, tx, space, session, e, seq)
-}
-func readEvents(ctx context.Context, tx *sql.Tx, space, session string, after, through int64, limit int, runIDs ...string) ([]journal.Event, error) {
-	query := "SELECT event_id,COALESCE(run_id,''),sequence,event_type,schema_version,COALESCE(operation_id,''),COALESCE(causation_event_id,''),COALESCE(correlation_id,''),actor_kind,actor_id,occurred_at,recorded_at,data FROM runtime_events WHERE space_id=? AND session_id=? AND sequence>? AND sequence<=? "
-	args := []any{space, session, after, through}
-	if len(runIDs) > 0 {
-		query += " AND run_id=?"
-		args = append(args, runIDs[0])
-	}
-	query += " ORDER BY sequence LIMIT ?"
-	args = append(args, limit)
-	rows, err := tx.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	events := []journal.Event{}
-	for rows.Next() {
-		e := journal.Event{SpaceID: space, SessionID: session}
-		if err = rows.Scan(&e.EventID, &e.RunID, &e.Sequence, &e.Type, &e.SchemaVersion, &e.OperationID, &e.CausationID, &e.CorrelationID, &e.Actor.Kind, &e.Actor.ID, &e.OccurredAt, &e.RecordedAt, &e.Data); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		events = append(events, e)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
-	for i := range events {
-		refs, e := tx.QueryContext(ctx, "SELECT e.role,e.ordinal,e.object_id,o.sha256 FROM event_objects e JOIN content_objects o ON o.space_id=e.space_id AND o.id=e.object_id WHERE e.space_id=? AND e.event_id=? ORDER BY e.role,e.ordinal", space, events[i].EventID)
-		if e != nil {
-			return nil, e
-		}
-		events[i].Refs = []storage.Ref{}
-		for refs.Next() {
-			var r storage.Ref
-			if e = refs.Scan(&r.Role, &r.Ordinal, &r.ObjectID, &r.SHA256); e != nil {
-				refs.Close()
-				return nil, e
-			}
-			events[i].Refs = append(events[i].Refs, r)
-		}
-		e = refs.Err()
-		refs.Close()
-		if e != nil {
-			return nil, e
-		}
-	}
-	return events, nil
 }
 func (s *Store) ReadEvents(ctx context.Context, actor, space, session string, after int64, through *int64, limit int) (page journal.Page, err error) {
 	err = s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
@@ -343,110 +296,58 @@ func appendInTx(ctx context.Context, tx *sql.Tx, actor string, b journal.Batch) 
 	if e != nil {
 		return nil, e
 	}
-	var digest string
+	var digest, session string
 	var first int64
 	var count int
-	e = tx.QueryRowContext(ctx, "SELECT digest,first_sequence,event_count FROM journal_appends WHERE space_id=? AND session_id=? AND append_key=?", b.SpaceID, b.SessionID, b.AppendKey).Scan(&digest, &first, &count)
+	e = tx.QueryRowContext(ctx, "SELECT digest,session_id,first_sequence,event_count FROM journal_appends WHERE space_id=? AND ((session_id=? AND append_key=?) OR first_event_id=?) ORDER BY (session_id=? AND append_key=?) DESC LIMIT 1", b.SpaceID, b.SessionID, b.AppendKey, b.Events[0].EventID, b.SessionID, b.AppendKey).Scan(&digest, &session, &first, &count)
 	if e == nil {
-		if digest != b.Digest {
+		if digest != b.Digest || session != b.SessionID || count != len(b.Events) {
 			return nil, storage.ErrConflict
 		}
-		result, e = readEvents(ctx, tx, b.SpaceID, b.SessionID, first-1, first+int64(count)-1, count)
-		return result, e
+		return appliedEvents(b, first), nil
 	}
 	if !errors.Is(e, sql.ErrNoRows) {
 		return nil, e
 	}
-	existing := 0
+	if b.ExpectedSequence != nil && *b.ExpectedSequence != last || last > math.MaxInt64-int64(len(b.Events)) {
+		return nil, storage.ErrConflict
+	}
+	first = last + 1
 	for i, event := range b.Events {
-		var stored, session string
-		var seq int64
-		e = tx.QueryRowContext(ctx, "SELECT event_digest,session_id,sequence FROM runtime_events WHERE space_id=? AND event_id=?", b.SpaceID, event.EventID).Scan(&stored, &session, &seq)
-		if errors.Is(e, sql.ErrNoRows) {
-			continue
-		}
-		if e != nil {
-			return nil, e
-		}
-		if stored != b.Digests[i] || session != b.SessionID {
+		seq := first + int64(i)
+		if event.Type == "session.created" && seq != 1 {
 			return nil, storage.ErrConflict
 		}
-		if i == 0 {
-			first = seq
-		}
-		if seq != first+int64(i) {
-			return nil, storage.ErrConflict
-		}
-		existing++
-	}
-	if existing > 0 {
-		if existing != len(b.Events) {
-			return nil, storage.ErrConflict
-		}
-		result, e = readEvents(ctx, tx, b.SpaceID, b.SessionID, first-1, first+int64(existing)-1, existing)
-		if e != nil {
-			return nil, e
-		}
-	} else {
-		if b.ExpectedSequence != nil && *b.ExpectedSequence != last {
-			return nil, storage.ErrConflict
-		}
-		if last > math.MaxInt64-int64(len(b.Events)) {
-			return nil, storage.ErrConflict
-		}
-		first = last + 1
-		for i, event := range b.Events {
-			seq := first + int64(i)
-			if event.Type == "session.created" && seq != 1 {
-				return nil, storage.ErrConflict
-			}
-			if event.CausationID != "" {
-				var n int64
-				if e = tx.QueryRowContext(ctx, "SELECT sequence FROM runtime_events WHERE space_id=? AND session_id=? AND event_id=?", b.SpaceID, b.SessionID, event.CausationID).Scan(&n); e != nil {
-					return nil, e
-				}
-				if n >= seq {
-					return nil, storage.ErrInvalid
-				}
-			}
-			if event.Type == "run.created" {
-				if e = createRun(ctx, tx, actor, b.SpaceID, b.SessionID, event, seq); e != nil {
-					return nil, e
-				}
-			} else if event.RunID != "" {
-				var id string
-				if e = tx.QueryRowContext(ctx, "SELECT id FROM runs WHERE space_id=? AND session_id=? AND id=? FOR UPDATE", b.SpaceID, b.SessionID, event.RunID).Scan(&id); e != nil {
-					return nil, e
-				}
-			}
-			for _, ref := range event.Refs {
-				var hash string
-				if e = tx.QueryRowContext(ctx, "SELECT sha256 FROM content_objects WHERE space_id=? AND id=? AND state='ready'", b.SpaceID, ref.ObjectID).Scan(&hash); e != nil {
-					return nil, e
-				}
-				if hash != ref.SHA256 {
-					return nil, storage.ErrIntegrity
-				}
-			}
-			recorded := time.Now().UTC().Truncate(time.Microsecond)
-			_, e = tx.ExecContext(ctx, "INSERT INTO runtime_events(space_id,session_id,event_id,sequence,run_id,event_type,schema_version,operation_id,causation_event_id,correlation_id,actor_kind,actor_id,occurred_at,recorded_at,data,event_digest) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", b.SpaceID, b.SessionID, event.EventID, seq, nullable(event.RunID), event.Type, event.SchemaVersion, nullable(event.OperationID), nullable(event.CausationID), nullable(event.CorrelationID), event.Actor.Kind, event.Actor.ID, event.OccurredAt, recorded, string(event.Data), b.Digests[i])
-			if e != nil {
+		if event.Type != "run.created" && event.RunID != "" {
+			var id string
+			if e = tx.QueryRowContext(ctx, "SELECT id FROM runs WHERE space_id=? AND session_id=? AND id=? FOR UPDATE", b.SpaceID, b.SessionID, event.RunID).Scan(&id); e != nil {
 				return nil, e
 			}
-			for _, ref := range event.Refs {
-				if _, e = tx.ExecContext(ctx, "INSERT INTO event_objects(space_id,event_id,object_id,role,ordinal) VALUES(?,?,?,?,?)", b.SpaceID, event.EventID, ref.ObjectID, ref.Role, ref.Ordinal); e != nil {
-					return nil, e
-				}
-			}
-			if e = reduce(ctx, tx, b.SpaceID, b.SessionID, event, seq); e != nil {
+		}
+		for _, ref := range event.Refs {
+			var hash string
+			if e = tx.QueryRowContext(ctx, "SELECT sha256 FROM content_objects WHERE space_id=? AND id=? AND state='ready'", b.SpaceID, ref.ObjectID).Scan(&hash); e != nil {
 				return nil, e
 			}
-			result = append(result, journal.Event{Proposed: event, SpaceID: b.SpaceID, SessionID: b.SessionID, Sequence: seq, RecordedAt: recorded})
+			if hash != ref.SHA256 {
+				return nil, storage.ErrIntegrity
+			}
 		}
-		if _, e = tx.ExecContext(ctx, "UPDATE sessions SET last_sequence=? WHERE space_id=? AND id=?", first+int64(len(b.Events))-1, b.SpaceID, b.SessionID); e != nil {
+		if e = reduce(ctx, tx, b.SpaceID, b.SessionID, event, seq); e != nil {
 			return nil, e
 		}
 	}
-	_, e = tx.ExecContext(ctx, "INSERT INTO journal_appends(space_id,session_id,append_key,digest,first_sequence,event_count) VALUES(?,?,?,?,?,?)", b.SpaceID, b.SessionID, b.AppendKey, b.Digest, first, len(b.Events))
-	return result, e
+	if _, e = tx.ExecContext(ctx, "UPDATE sessions SET last_sequence=? WHERE space_id=? AND id=?", first+int64(len(b.Events))-1, b.SpaceID, b.SessionID); e != nil {
+		return nil, e
+	}
+	_, e = tx.ExecContext(ctx, "INSERT INTO journal_appends(space_id,session_id,append_key,digest,first_sequence,event_count,first_event_id) VALUES(?,?,?,?,?,?,?)", b.SpaceID, b.SessionID, b.AppendKey, b.Digest, first, len(b.Events), b.Events[0].EventID)
+	return appliedEvents(b, first), e
+}
+
+func appliedEvents(b journal.Batch, first int64) []journal.Event {
+	result := make([]journal.Event, len(b.Events))
+	for i, event := range b.Events {
+		result[i] = journal.Event{Proposed: event, SpaceID: b.SpaceID, SessionID: b.SessionID, Sequence: first + int64(i), RecordedAt: event.OccurredAt}
+	}
+	return result
 }

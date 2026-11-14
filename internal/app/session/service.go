@@ -120,7 +120,7 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 		}
 		resources := []run.SkillResource{}
 		for _, a := range skill.Bundle.Document.Assets {
-			resources = append(resources, run.SkillResource{Path: a.Path, ObjectID: a.ObjectID, SHA256: a.SHA256, Size: a.Size, MediaType: a.MediaType})
+			resources = append(resources, run.SkillResource{Path: a.Path, ObjectID: a.ObjectID, SHA256: a.SHA256, Size: a.Size, MediaType: a.MediaType, Package: a.Package})
 		}
 		d.Skills = append(d.Skills, run.Skill{Resources: resources, ID: binding.SkillID, VersionID: binding.VersionID, Version: binding.Version, SHA256: binding.SHA256, Markdown: skill.Bundle.Document.Markdown})
 		refs = append(refs, storage.Ref{Role: "skill_version", Ordinal: i, ObjectID: skill.ContentID, SHA256: skill.SHA256})

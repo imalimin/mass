@@ -29,7 +29,7 @@ type selection struct {
 func (c *selection) add(e journal.Event) error {
 	keep := false
 	switch e.Type {
-	case "session.created", "user.message.accepted", "context.projected", "context.summary.created", "model.attempt.started", "model.response.completed", "tool.execution.completed", "tool.io.recorded", "operation.reconciled", "run.finished", "workspace.snapshot.created":
+	case "session.created", "user.message.accepted", "context.projected", "context.summary.created", "model.attempt.started", "model.response.completed", "tool.execution.completed", "run.finished", "workspace.snapshot.created":
 		keep = true
 	case "run.created":
 		keep = e.RunID == c.snapshot.ID
@@ -77,7 +77,7 @@ func compactHistory(ctx context.Context, s run.Snapshot, events []journal.Event,
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		if e.Sequence != previous+1 || e.SpaceID != s.SpaceID || e.SessionID != s.SessionID {
+		if e.Sequence <= previous || e.SpaceID != s.SpaceID || e.SessionID != s.SessionID {
 			return nil, nil, storage.ErrIntegrity
 		}
 		previous = e.Sequence
@@ -87,9 +87,6 @@ func compactHistory(ctx context.Context, s run.Snapshot, events []journal.Event,
 		if err := c.add(e); err != nil {
 			return nil, nil, err
 		}
-	}
-	if previous != through {
-		return nil, nil, storage.ErrIntegrity
 	}
 	return c.items, c.ranges, nil
 }
@@ -130,25 +127,6 @@ func selectRanges(events []journal.Event, ranges []run.ContextRange, through int
 		if counts[i] != 0 && (counts[i] != r.Through-r.From+1 || digests[i] != r.Digest) {
 			return nil, storage.ErrIntegrity
 		}
-	}
-	index = 0
-	last = 0
-	for _, e := range selected {
-		for index < len(ranges) && ranges[index].From == last+1 {
-			last = ranges[index].Through
-			index++
-		}
-		if e.Sequence != last+1 {
-			return nil, storage.ErrIntegrity
-		}
-		last = e.Sequence
-	}
-	for index < len(ranges) && ranges[index].From == last+1 {
-		last = ranges[index].Through
-		index++
-	}
-	if last != through || index != len(ranges) {
-		return nil, storage.ErrIntegrity
 	}
 	return selected, nil
 }

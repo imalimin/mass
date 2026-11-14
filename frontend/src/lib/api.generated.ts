@@ -292,22 +292,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/spaces/{space_id}/agents/{id}/resources": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["catalog6"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/spaces/{space_id}/agents/{id}/versions": {
         parameters: {
             query?: never;
@@ -708,6 +692,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Supply exactly one of run_id or snapshot_id. The lookup is limited to spaces the caller can access. */
+        get: operations["getRunDiagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/spaces/{space_id}/runs/{run_id}/trace": {
         parameters: {
             query?: never;
@@ -936,11 +937,16 @@ export interface components {
             sha256: string;
             size: number;
             media_type: string;
+            /** @description When true, object_id points to the Skill package and path identifies the file. */
+            package?: boolean;
         };
         DefinitionDocument: {
             markdown: string;
             config_yaml: string;
-            assets: components["schemas"]["DefinitionAsset"][];
+            /** @description Resources belonging to a Skill. Omitted for Agents. */
+            assets?: components["schemas"]["DefinitionAsset"][];
+            /** @description Explicit directories relative to the Skill root. Parent paths are implied. */
+            directories?: string[];
         };
         DefinitionDraft: {
             /** Format: uuid */
@@ -1035,6 +1041,7 @@ export interface components {
         };
         DefinitionUploadInput: {
             expected_revision: number;
+            /** @description Resource path relative to the Skill root. */
             path: string;
             media_type: string;
             data_base64: string;
@@ -1368,6 +1375,92 @@ export interface components {
             cache_read_tokens: number | null;
             cache_write_tokens: number | null;
         };
+        SessionTracePage: {
+            items: (components["schemas"]["TraceModelStep"] | components["schemas"]["TraceRunFinished"])[];
+            through_sequence: components["schemas"]["Sequence"];
+            next_after: components["schemas"]["Sequence"];
+            has_more: boolean;
+            /** @enum {string} */
+            upload_status: "recording" | "pending" | "uploaded";
+        };
+        TraceModelStep: {
+            /** @enum {string} */
+            type: "model_step";
+            /** Format: uuid */
+            run_id: string;
+            step: number;
+            /** Format: uuid */
+            attempt_id: string;
+            /** Format: uuid */
+            retry_of?: string;
+            /** @enum {string} */
+            purpose: "task" | "summary";
+            /** Format: date-time */
+            started_at: string;
+            model: {
+                id: string;
+                /** @enum {string} */
+                status: "succeeded" | "failed" | "cancelled";
+                /** @description Zero when no HTTP status was observed. */
+                http_status: number;
+                duration_ms: number;
+                first_text_ms: number | null;
+                finish_reason: string;
+                text: string;
+                reasoning: string | null;
+                tool_calls: {
+                    id: string;
+                    type: string;
+                    function: {
+                        name: string;
+                        arguments: string;
+                    };
+                }[];
+                /** @description Null when usage is absent. Individual missing counters are zero. */
+                usage: null | {
+                    input_tokens: number;
+                    input_cached_tokens: number;
+                    output_tokens: number;
+                    reasoning_tokens: number;
+                };
+                error: string;
+            };
+            tools: {
+                call_id: string;
+                native_tool_call_id: string;
+                name: string;
+                arguments: unknown;
+                status: string;
+                duration_ms: number | null;
+                result?: unknown;
+                result_ref?: string;
+            }[];
+        };
+        TraceRunFinished: {
+            /** @enum {string} */
+            type: "run_finished";
+            /** Format: uuid */
+            run_id: string;
+            /** @enum {string} */
+            status: "succeeded" | "failed" | "cancelled";
+            /** Format: date-time */
+            started_at: string | null;
+            /** Format: date-time */
+            finished_at: string;
+            duration_ms: number | null;
+            error: string;
+            failure_detail?: {
+                [key: string]: unknown;
+            };
+            /** Format: uuid */
+            snapshot_id: string | null;
+        };
+        RunDiagnostics: {
+            run: components["schemas"]["RuntimeRun"];
+            /** @description The selected snapshot, or the run's saved workspace snapshot. Null when the run has not saved a snapshot. */
+            snapshot: components["schemas"]["WorkspaceSnapshot"] | null;
+            trace: components["schemas"]["SessionTracePage"];
+        };
         RuntimeRun: {
             /** Format: uuid */
             id: string;
@@ -1497,6 +1590,8 @@ export interface components {
         UICheckpoint: {
             /** Format: uuid */
             session_id: string;
+            /** Format: uuid */
+            stream_id?: string;
             source_sequence: string;
             cursor: string;
             /** @constant */
@@ -1536,6 +1631,8 @@ export interface components {
             sha256: string;
             size: number;
             media_type: string;
+            /** @description When true, object_id points to the Skill package and path identifies the file. */
+            package?: boolean;
         };
         RuntimeToolPolicy: {
             version: string;
@@ -2214,7 +2311,10 @@ export interface operations {
     };
     downloadPayload: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Resource path relative to the Skill root. */
+                path?: string;
+            };
             header?: never;
             path: {
                 space_id: components["schemas"]["ResourceID"];
@@ -2574,87 +2674,6 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["DefinitionDraftInput"];
-            };
-        };
-        responses: {
-            /** @description Successful definition operation. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DefinitionDraft"];
-                };
-            };
-            /** @description Rejected or unavailable. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-            /** @description Rejected or unavailable. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-            /** @description Rejected or unavailable. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-            /** @description Rejected or unavailable. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-            /** @description Rejected or unavailable. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-            /** @description Rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-        };
-    };
-    catalog6: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                space_id: string;
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DefinitionUploadInput"];
             };
         };
         responses: {
@@ -5047,6 +5066,41 @@ export interface operations {
             };
         };
     };
+    getRunDiagnostics: {
+        parameters: {
+            query?: {
+                run_id?: string;
+                snapshot_id?: string;
+                after_sequence?: components["schemas"]["Sequence"];
+                through_sequence?: components["schemas"]["Sequence"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Run state, workspace snapshot metadata, and a page of grouped session trace records. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunDiagnostics"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     getRuntrace: {
         parameters: {
             query?: {
@@ -5381,6 +5435,8 @@ export interface operations {
         parameters: {
             query?: {
                 after?: string;
+                /** @description Stream ID from the UI snapshot. Fetch a new snapshot if this stream has expired. */
+                stream_id?: string;
             };
             header?: {
                 "Last-Event-ID"?: string;
@@ -5393,7 +5449,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Persisted AG-UI events with a continuous Run UI sequence. after and Last-Event-ID must agree. Heartbeats are comments; terminal closes stream. */
+            /** @description AG-UI events with a continuous cursor within the stream ID. after and Last-Event-ID must agree. Heartbeats are comments; terminal closes stream. */
             200: {
                 headers: {
                     [name: string]: unknown;

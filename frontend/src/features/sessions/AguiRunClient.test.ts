@@ -11,7 +11,7 @@ class Source {
 }
 function fixture() {
   const sources: Source[] = [], urls: string[] = [], values: StreamValue[] = []
-  const get = vi.fn(async () => ({ session_id: 's', cursor: '0', source_sequence: '7', protocol_profile: 'mass-agui-v1', mapper_version: 1, parser_version: 1, closed: false, state: empty() }))
+  const get = vi.fn<RunTransport['get']>(async () => ({ session_id: 's', cursor: '0', source_sequence: '7', protocol_profile: 'mass-agui-v1', mapper_version: 1, parser_version: 1, closed: false, state: empty() }))
   const io: RunTransport = { get, open: url => { urls.push(url); const s = new Source(); sources.push(s); return s } }
   const client = new AguiRunClient('space', 's', 'r', v => values.push(v), io)
   return { client, sources, values, get, urls }
@@ -30,6 +30,21 @@ describe('MASS submission and controlled AG-UI subscription', () => {
     expect(f.sources[1].closed).toBe(false)
     f.sources[1].frame('5', { type: 'RUN_FINISHED', threadId: 's', runId: 'r' })
     expect(f.sources[1].closed).toBe(true); expect(f.values.at(-1)?.cursor).toBe('5'); expect(f.values.at(-1)?.state?.messages[0].text).toBe('one')
+    f.client.stop()
+  })
+  it('reloads the checkpoint when the in-memory stream changes', async () => {
+    const f = fixture()
+    const first = '01000000-0000-4000-8000-000000000001'
+    const restarted = '01000000-0000-4000-8000-000000000002'
+    const checkpoint = { session_id: 's', source_sequence: '7', protocol_profile: 'mass-agui-v1', mapper_version: 1, parser_version: 1, closed: false, state: empty() }
+    f.get.mockResolvedValueOnce({ ...checkpoint, stream_id: first, cursor: '5' })
+    f.get.mockResolvedValueOnce({ ...checkpoint, stream_id: restarted, cursor: '2' })
+    await f.client.start()
+    expect(f.urls[0]).toContain(`after=5&stream_id=${first}`)
+    f.sources[0].fail()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(f.urls[1]).toContain(`after=2&stream_id=${restarted}`)
+    expect(f.values.at(-1)?.cursor).toBe('2')
     f.client.stop()
   })
   it('does not acknowledge a gap or invalid reducer frame; stale callbacks cannot change a new connection', async () => {

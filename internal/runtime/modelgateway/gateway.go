@@ -1,4 +1,4 @@
-// Package modelgateway durably records attempts and wire bytes before consumption.
+// Package modelgateway records model attempts and their structured results.
 package modelgateway
 
 import (
@@ -14,15 +14,12 @@ import (
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
 	"github.com/imalimin/mass/internal/resource"
+	"github.com/imalimin/mass/internal/resource/trace"
 )
 
-type Recorder interface {
-	Request(context.Context, []byte) error
-	Response(context.Context, int, []byte) error
-}
 type Transport interface {
 	Source() string
-	Stream(context.Context, run.Snapshot, run.Prepared, string, Recorder, func(string) error) (run.Reply, error)
+	Stream(context.Context, run.Snapshot, run.Prepared, string, func(string) error) (run.Reply, error)
 }
 type Credentials interface {
 	ResolveRunSecret(context.Context, string, string, run.ModelConfig) ([]byte, string, int64, error)
@@ -38,39 +35,9 @@ type Gateway struct {
 	Transport   Transport
 	Credentials Credentials
 	Control     RunControl
+	Trace       *trace.Recorder
+	Delta       func(spaceID, runID, attemptID, text string)
 }
-type recording struct {
-	g                               *Gateway
-	s                               run.Snapshot
-	attempt, message                string
-	requestOrdinal, responseOrdinal int
-}
-
-func (r *recording) save(ctx context.Context, kind string, ordinal, status int, raw []byte) error {
-	o, err := r.g.Content.Put(ctx, r.s.ActorID, r.s.SpaceID, uuid.NewString(), "model.wire", "application/octet-stream", bytes.NewReader(raw))
-	if err != nil {
-		return err
-	}
-	e := journal.New(r.s.ActorID, kind, r.s.ID, journal.WireData{AttemptID: r.attempt, Ordinal: ordinal, Status: status, ContentID: o.ID}, storage.Ref{Role: "wire", ObjectID: o.ID, SHA256: o.SHA256})
-	e.OperationID = r.attempt
-	_, err = resource.AppendRun(ctx, r.g.Journal, r.s, e)
-	return err
-}
-func (r *recording) Request(ctx context.Context, raw []byte) error {
-	if err := r.save(ctx, "model.request.recorded", r.requestOrdinal, 0, raw); err != nil {
-		return err
-	}
-	r.requestOrdinal++
-	return r.g.Control.Check(ctx)
-}
-func (r *recording) Response(ctx context.Context, status int, raw []byte) error {
-	if err := r.save(ctx, "model.response.recorded", r.responseOrdinal, status, raw); err != nil {
-		return err
-	}
-	r.responseOrdinal++
-	return nil
-}
-
 type attemptState struct {
 	id       string
 	retryOf  string
@@ -127,9 +94,18 @@ func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, 
 	if _, err = resource.AppendRun(ctx, g.Journal, s, started); err != nil {
 		return reply, err
 	}
-	rec := &recording{g: g, s: s, attempt: attempt, message: message}
+	if g.Trace != nil {
+		g.Trace.Start(s, attempt, state.retryOf, purpose, started.OccurredAt)
+	}
+	var text bytes.Buffer
 	completed := false
 	defer func() {
+		if reply.Message.Content == "" {
+			reply.Message.Content = text.String()
+		}
+		if completed && g.Trace != nil {
+			g.Trace.ModelDone(s.ID, reply, "succeeded", "", time.Since(started.OccurredAt))
+		}
 		if err != nil && !completed {
 			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
@@ -140,7 +116,14 @@ func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, 
 			if ctx.Err() != nil {
 				code = "model_interrupted"
 			}
-			e := journal.New(s.ActorID, "model.attempt.failed", s.ID, journal.AttemptFailedData{Observation: reply.Observation, AttemptID: attempt, MessageID: message, Error: code, Usage: reply.Usage})
+			status := "failed"
+			if ctx.Err() == context.Canceled {
+				status = "cancelled"
+			}
+			if g.Trace != nil {
+				g.Trace.ModelDone(s.ID, reply, status, code, time.Since(started.OccurredAt))
+			}
+			e := journal.New(s.ActorID, "model.attempt.failed", s.ID, journal.AttemptFailedData{Observation: reply.Observation, AttemptID: attempt, MessageID: message, Error: code, Usage: reply.Usage, Preview: previewText(reply.Message.Content)})
 			e.OperationID = attempt
 			_, saveErr := resource.AppendRun(closeCtx, g.Journal, s, e)
 			err = errors.Join(err, saveErr)
@@ -149,22 +132,18 @@ func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, 
 			err = errors.Join(err, settleErr)
 		}
 	}()
-	reply, err = g.Transport.Stream(ctx, s, p, string(key), rec, func(delta string) error {
-		state.partial = true
-		for len(delta) > 0 {
-			n := min(len(delta), 8192)
-			for n > 0 && !utf8.ValidString(delta[:n]) {
-				n--
-			}
-			if n == 0 {
-				return run.ErrProtocol
-			}
-			part := delta[:n]
-			delta = delta[n:]
-			e := journal.New(s.ActorID, "model.response.delta", s.ID, journal.DeltaData{AttemptID: attempt, MessageID: message, Text: part})
-			e.OperationID = attempt
-			if _, err := resource.AppendRun(ctx, g.Journal, s, e); err != nil {
-				return err
+	if err = g.Control.Check(ctx); err != nil {
+		return reply, err
+	}
+	reply, err = g.Transport.Stream(ctx, s, p, string(key), func(delta string) error {
+		if !utf8.ValidString(delta) {
+			return run.ErrProtocol
+		}
+		if delta != "" {
+			state.partial = true
+			text.WriteString(delta)
+			if purpose == "task" && g.Delta != nil {
+				g.Delta(s.SpaceID, s.ID, attempt, delta)
 			}
 		}
 		return nil
@@ -199,13 +178,7 @@ func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, 
 	if err != nil {
 		return reply, err
 	}
-	preview := reply.Message.Content
-	if len(preview) > 8192 {
-		preview = preview[:8192]
-		for !utf8.ValidString(preview) {
-			preview = preview[:len(preview)-1]
-		}
-	}
+
 	// Raw arguments stay in the immutable response. The Journal carries bounded
 	// display arguments and their digest, so a valid large code body fits its envelope.
 	calls := append([]run.Call(nil), reply.Message.ToolCalls...)
@@ -219,7 +192,7 @@ func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, 
 			inlineBytes -= len(encoded)
 		}
 	}
-	e := journal.New(s.ActorID, "model.response.completed", s.ID, journal.ResponseData{Observation: reply.Observation, AttemptID: attempt, MessageID: message, ContentID: o.ID, FinishReason: reply.FinishReason, Usage: reply.Usage, Calls: calls, Preview: preview}, storage.Ref{Role: "response", ObjectID: o.ID, SHA256: o.SHA256})
+	e := journal.New(s.ActorID, "model.response.completed", s.ID, journal.ResponseData{Observation: reply.Observation, AttemptID: attempt, MessageID: message, ContentID: o.ID, FinishReason: reply.FinishReason, Usage: reply.Usage, Calls: calls, Preview: previewText(reply.Message.Content)}, storage.Ref{Role: "response", ObjectID: o.ID, SHA256: o.SHA256})
 	e.EventID = reply.ResponseEventID
 	e.OperationID = attempt
 	e.CausationID = started.EventID
@@ -229,4 +202,15 @@ func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, 
 	completed = true
 	err = g.Control.Settle(attempt, reply.Usage)
 	return reply, err
+}
+
+func previewText(text string) string {
+	if len(text) <= 8192 {
+		return text
+	}
+	text = text[:8192]
+	for !utf8.ValidString(text) {
+		text = text[:len(text)-1]
+	}
+	return text
 }

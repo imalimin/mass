@@ -19,6 +19,7 @@ import (
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
 	"github.com/imalimin/mass/internal/resource"
+	"github.com/imalimin/mass/internal/resource/trace"
 	"github.com/imalimin/mass/internal/transport/agui"
 )
 
@@ -30,6 +31,7 @@ type RuntimeRepository interface {
 	sessionapp.Repository
 	RuntimeRuns(context.Context, string, string, string, identity.Query) ([]run.View, error)
 	RuntimeTrace(context.Context, string, string, string, int64, *int64, int) (journal.Page, error)
+	RuntimeDiagnosticSpace(context.Context, string, string, string) (string, error)
 	RuntimeSnapshots(context.Context, string, string, string) ([]storage.Snapshot, error)
 	RuntimeCleanupPlan(context.Context, string, string, string) (run.CleanupPlan, error)
 }
@@ -37,6 +39,7 @@ type RuntimeOptions struct {
 	Service    *sessionapp.Service
 	Repo       RuntimeRepository
 	UI         *agui.Projector
+	Trace      *trace.Archive
 	Workspaces *resource.RunWorkspaces
 	Snapshots  *resource.SnapshotStore
 	Finisher   *resource.Finisher
@@ -142,6 +145,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		writeJSON(w, 200, v)
 		return nil
 	})
+	register("GET /api/v1/diagnostics", true, runtime.diagnostics)
 	register("POST "+base+"/runs/{run_id}/cancel", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		v, err := svc.Repo.CancelRuntimeRun(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("run_id"))
 		if err != nil {
@@ -224,7 +228,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if err != nil {
 			return err
 		}
-		history, err := resource.RunHistory(r.Context(), runtime.Snapshots.Journal, u.ID, space, view.SessionID, view.ID, "context.projected", "model.attempt.started", "model.request.recorded")
+		history, err := resource.RunHistory(r.Context(), runtime.Snapshots.Journal, u.ID, space, view.SessionID, view.ID, "context.projected")
 		if err != nil {
 			return err
 		}
@@ -251,25 +255,9 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 			selected[id] = true
 		}
 		sources := []journal.Event{}
-		requests := []journal.Event{}
-		attempts := map[string]bool{}
 		_, err = resource.WalkHistory(r.Context(), runtime.Snapshots.Journal, u.ID, space, view.SessionID, func(e journal.Event) error {
 			if selected[e.EventID] {
 				sources = append(sources, e)
-			}
-			if e.Type == "model.attempt.started" {
-				var d journal.AttemptData
-				journal.Decode(e.Data, &d)
-				if d.ProjectionEventID == projection.EventID {
-					attempts[d.ID] = true
-				}
-			}
-			if e.Type == "model.request.recorded" {
-				var d journal.WireData
-				journal.Decode(e.Data, &d)
-				if attempts[d.AttemptID] {
-					requests = append(requests, e)
-				}
 			}
 			return nil
 		})
@@ -283,7 +271,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 				return err
 			}
 		}
-		writeJSON(w, 200, map[string]any{"projection": projection, "source_events": sources, "requests": requests, "summary": summary})
+		writeJSON(w, 200, map[string]any{"projection": projection, "source_events": sources, "requests": []journal.Event{}, "summary": summary})
 		return nil
 	})
 
@@ -445,7 +433,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 			after = "0"
 		}
 		cursor, err := agui.ParseCursor(after)
-		if err != nil || cursor > cp.Cursor {
+		if streamID := r.URL.Query().Get("stream_id"); err != nil || cursor > cp.Cursor || (streamID != "" && streamID != cp.StreamID) {
 			apiError(w, run.ErrCursor, logger)
 			return
 		}
@@ -471,7 +459,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 				return
 			}
 			for _, frame := range frames {
-				if err := check(); err != nil {
+				if ctx.Err() != nil {
 					return
 				}
 				var compact bytes.Buffer
@@ -482,10 +470,10 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 				if _, err = fmt.Fprintf(w, "id: %d\ndata: %s\n\n", frame.Sequence, compact.Bytes()); err != nil {
 					return
 				}
-				if controller.Flush() != nil {
-					return
-				}
 				cursor = frame.Sequence
+			}
+			if len(frames) > 0 && controller.Flush() != nil {
+				return
 			}
 			if closed {
 				return

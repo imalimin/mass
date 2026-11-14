@@ -29,7 +29,13 @@ func (s *Store) URI(key string) string {
 	return "tos://" + s.Bucket + "/" + strings.TrimPrefix(key, "/")
 }
 func (s *Store) PutNew(ctx context.Context, key string, r io.Reader, size int64, media string) (storage.BlobInfo, error) {
-	out, err := s.Client.PutObjectV2(ctx, &sdk.PutObjectV2Input{PutObjectBasicInput: sdk.PutObjectBasicInput{Bucket: s.Bucket, Key: key, ContentLength: size, ContentType: media, ForbidOverwrite: true}, Content: r})
+	return s.put(ctx, key, r, size, media, true)
+}
+func (s *Store) Overwrite(ctx context.Context, key string, r io.Reader, size int64, media string) (storage.BlobInfo, error) {
+	return s.put(ctx, key, r, size, media, false)
+}
+func (s *Store) put(ctx context.Context, key string, r io.Reader, size int64, media string, immutable bool) (storage.BlobInfo, error) {
+	out, err := s.Client.PutObjectV2(ctx, &sdk.PutObjectV2Input{PutObjectBasicInput: sdk.PutObjectBasicInput{Bucket: s.Bucket, Key: key, ContentLength: size, ContentType: media, ForbidOverwrite: immutable}, Content: r})
 	if err != nil {
 		return storage.BlobInfo{}, safeError("upload", err)
 	}
@@ -38,6 +44,9 @@ func (s *Store) PutNew(ctx context.Context, key string, r io.Reader, size int64,
 func (s *Store) Open(ctx context.Context, key, version string) (io.ReadCloser, error) {
 	out, err := s.Client.GetObjectV2(ctx, &sdk.GetObjectV2Input{Bucket: s.Bucket, Key: key, VersionID: version})
 	if err != nil {
+		if sdk.StatusCode(err) == 404 {
+			return nil, storage.ErrBlobNotFound
+		}
 		return nil, safeError("read", err)
 	}
 	return out.Content, nil

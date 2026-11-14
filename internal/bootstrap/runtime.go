@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
 	"github.com/imalimin/mass/internal/resource"
+	"github.com/imalimin/mass/internal/resource/trace"
 	"github.com/imalimin/mass/internal/runtime/context/planner"
 	"github.com/imalimin/mass/internal/runtime/context/projector"
 	"github.com/imalimin/mass/internal/runtime/control"
@@ -35,6 +37,7 @@ type runtimeLifecycle struct {
 	lease      *mariadb.RuntimeLease
 	supervisor *supervisor.Supervisor
 	cancel     context.CancelFunc
+	saveTraces func(context.Context) map[string][]run.View
 	wg         sync.WaitGroup
 }
 
@@ -48,6 +51,9 @@ func (r *runtimeLifecycle) Close(ctx context.Context) error {
 	go func() { r.wg.Wait(); close(done) }()
 	select {
 	case <-done:
+		// The supervisor can commit terminal runs after the worker stops.
+		// Save their in-memory steps before releasing the runtime lease.
+		r.saveTraces(ctx)
 		return r.lease.Close()
 	case <-ctx.Done():
 		return ctx.Err()
@@ -66,6 +72,14 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	}()
 	ctx, cancel := context.WithCancel(parent)
 	journalService := &journal.Journal{Repo: store}
+	traceRoot := c.Runtime.WorkspaceTempRoot
+	if local, ok := workspaces.(interface{ LocalPath() string }); ok {
+		traceRoot = local.LocalPath()
+	}
+	recorder := &trace.Recorder{}
+	archive := &trace.Archive{Root: filepath.Join(traceRoot, ".traces"), Prefix: content.Prefix, Blobs: content.Blobs, Recorder: recorder}
+	store.UIContent = content
+	store.UIToolState = recorder.ToolState
 	registryService := &registry.Registry{}
 	workspaceService := &resource.RunWorkspaces{Workspaces: workspaces, Repo: store, Content: content, Journal: journalService}
 	finisher := &resource.Finisher{Scope: func(s run.Snapshot) resource.CleanupStore { return lease.Cleanup(s) }, Content: content, Workspaces: workspaces, Timeout: c.Runtime.SnapshotTimeout}
@@ -108,17 +122,14 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	}
 	codeEngine := &javascript.Runner{MaxConcurrent: max(1, c.Tools.Code.MaxConcurrent)}
 	supervisorService.NewRunner = func(ctx context.Context, s run.Snapshot, started time.Time) (supervisor.Runner, error) {
-		history, err := resource.RunHistory(ctx, journalService, s.ActorID, s.SpaceID, s.SessionID, s.ID, "model.attempt.started", "model.response.completed", "model.attempt.failed", "tool.execution.started")
-		if err != nil {
-			return nil, err
-		}
-		budget := control.New(s, started, history, func(ctx context.Context) error { return lease.CheckRun(ctx, s) })
-		contextPlanner := &planner.Planner{Journal: journalService, Content: content, Projector: &projector.Projector{Content: content}, Tools: registryService}
-		gateway := &modelgateway.Gateway{Journal: journalService, Content: content, Transport: transport, Credentials: auth, Control: budget}
+		budget := control.New(s, started, func(ctx context.Context) error { return lease.CheckRun(ctx, s) })
+		contextPlanner := &planner.Planner{Journal: journalService, Content: content, Projector: &projector.Projector{Content: content, ToolResult: recorder.ToolResult}, Tools: registryService}
+		gateway := &modelgateway.Gateway{Journal: journalService, Content: content, Transport: transport, Credentials: auth, Control: budget, Trace: recorder, Delta: store.LiveUI.Delta}
 		contextPlanner.Model = gateway
 		fileService := &resource.FileService{Workspaces: workspaces, Content: content, Cursors: auth, MaxBytes: min(c.Storage.MaxFileBytes, 1<<20), Limits: storage.Limits{MaxFileBytes: c.Storage.MaxFileBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes, MaxEntries: c.Storage.MaxEntries}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
-		code := &resource.CodeService{Engine: codeEngine, Files: fileService, Network: &resource.Network{}, Journal: journalService, Content: content}
-		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: &resource.Sources{Files: fileService, Journal: journalService}, Code: code, Journal: journalService}, Control: budget, Journal: journalService, Content: content}
+		fileService.EnableRunPagination()
+		code := &resource.CodeService{Engine: codeEngine, Files: fileService, Network: &resource.Network{}}
+		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: &resource.Sources{Files: fileService, Journal: journalService}, Code: code, Journal: journalService}, Control: budget, Journal: journalService, Trace: recorder}
 		return &executor.Executor{Planner: contextPlanner, Model: gateway, Tools: tools, Control: budget}, nil
 	}
 	// The connection-scoped lock proves the old dispatcher is gone before recovery.
@@ -154,8 +165,32 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		return nil, nil, err
 	}
 	service := &sessionapp.Service{ModelAttempts: max(1, c.LLM.MaxAttempts), ToolPolicy: policy, Repo: store, Catalog: catalogue, Identity: auth, Content: content, Build: build, Ready: schedulerService.Ready, Notify: schedulerService.Notify, ResolveTools: registryService.Describe}
-	options = &httptransport.RuntimeOptions{Service: service, Repo: store, UI: &agui.Projector{Repo: store}, Workspaces: workspaceService, Snapshots: snapshots, Finisher: finisher, Cancel: supervisorService.Cancel}
-	lifecycle = &runtimeLifecycle{lease: lease, supervisor: supervisorService, cancel: cancel}
+	options = &httptransport.RuntimeOptions{Service: service, Repo: store, UI: &agui.Projector{Repo: store, Live: store.LiveUI, ResponseText: store.UIResponseText, ToolState: recorder.ToolState}, Trace: archive, Workspaces: workspaceService, Snapshots: snapshots, Finisher: finisher, Cancel: supervisorService.Cancel}
+	saveTraces := func(ctx context.Context) map[string][]run.View {
+		jobs, err := lease.PendingTraces(ctx)
+		if err != nil && ctx.Err() == nil {
+			logger.Warn("could not load pending session traces", "error", err)
+		}
+		// Save all pending runs locally before any network upload. A later
+		// failure in one session must not erase an earlier complete batch.
+		ready := make(map[string][]run.View)
+		for _, job := range jobs {
+			store.LiveUI.Finished(job.Run.SpaceID, job.Run.ID)
+			jobCtx, stop := context.WithTimeout(ctx, 45*time.Second)
+			err := archive.Save(jobCtx, job.Run, job.Failure, job.HasPrevious)
+			stop()
+			if err != nil {
+				if ctx.Err() == nil {
+					logger.Warn("could not save session trace", "run_id", job.Run.ID, "error", err)
+				}
+				continue
+			}
+			key := job.Run.SpaceID + "/" + job.Run.SessionID
+			ready[key] = append(ready[key], job.Run)
+		}
+		return ready
+	}
+	lifecycle = &runtimeLifecycle{lease: lease, supervisor: supervisorService, cancel: cancel, saveTraces: saveTraces}
 	lifecycle.wg.Add(2)
 	go func() {
 		defer lifecycle.wg.Done()
@@ -163,31 +198,28 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 			fault(err)
 		}
 	}()
-	ui := &agui.Projector{Repo: lease.UIRepository()}
 	go func() {
 		defer lifecycle.wg.Done()
-		ticker := time.NewTicker(100 * time.Millisecond)
+		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for {
+			ready := saveTraces(ctx)
+			for _, runs := range ready {
+				jobCtx, stop := context.WithTimeout(ctx, 45*time.Second)
+				err := archive.Upload(jobCtx, runs[0].Snapshot)
+				if err == nil {
+					err = lease.MarkTraceUploaded(jobCtx, runs)
+				}
+				stop()
+				if err != nil && ctx.Err() == nil {
+					logger.Warn("session trace upload pending", "session_id", runs[0].SessionID, "error", err)
+				}
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-			}
-			jobs, err := lease.UIWork(ctx)
-			if err != nil {
-				if ctx.Err() == nil {
-					fault(err)
-				}
-				return
-			}
-			for _, job := range jobs {
-				if _, err = ui.CatchUp(ctx, job.Actor, job.Space, job.Run); err != nil {
-					if ctx.Err() == nil {
-						fault(err)
-					}
-					return
-				}
+			case now := <-ticker.C:
+				store.LiveUI.Expire(now)
 			}
 		}
 	}()

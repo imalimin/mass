@@ -23,6 +23,9 @@ type Coordinator interface {
 type Workspaces interface {
 	Ensure(context.Context, run.Snapshot) error
 }
+
+const checkTimeout = 3 * time.Second
+
 type Finisher interface {
 	Finish(context.Context, run.Snapshot, run.Outcome, bool) error
 }
@@ -106,13 +109,42 @@ func Code(err error) string {
 	}
 	return "execution_failed"
 }
+
+func failureDetail(source string, err, probeErr error, started, failedAt time.Time, timeout time.Duration) *run.FailureDetail {
+	detail := &run.FailureDetail{
+		Source: source, Reason: Code(err), FailedAt: failedAt.UTC(),
+		DurationMS: failedAt.Sub(started).Milliseconds(), TimeoutMS: timeout.Milliseconds(),
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(probeErr, context.DeadlineExceeded) {
+		detail.Reason = "deadline_exceeded"
+	}
+	var check *run.CheckError
+	if errors.As(err, &check) {
+		detail.Stage, detail.MySQLCode = check.Stage, check.MySQLCode
+	}
+	return detail
+}
+
 func (s *Supervisor) run(parent context.Context, v run.View) {
 	snapshot := v.Snapshot
 	outcome := run.Outcome{Status: "failed", Error: "interrupted"}
 	workspaceReady := false
+	var heartbeatFailure *run.FailureDetail
+	runTimeout := time.Duration(snapshot.Definition.TimeoutSeconds) * time.Second
+	runStarted := time.Now()
+	ctx, stop := context.WithTimeout(parent, runTimeout)
 	defer func() {
 		if recover() != nil {
 			outcome = run.Outcome{Status: "failed", Error: "executor_panic"}
+		}
+		if outcome.FailureDetail == nil && outcome.Status == "failed" {
+			switch {
+			case outcome.Error == "interrupted" && heartbeatFailure != nil:
+				outcome.FailureDetail = heartbeatFailure
+			case outcome.Error == "run_timeout" && errors.Is(ctx.Err(), context.DeadlineExceeded):
+				deadline, _ := ctx.Deadline()
+				outcome.FailureDetail = failureDetail("run_deadline", ctx.Err(), nil, runStarted, deadline, runTimeout)
+			}
 		}
 		cleanup, cancel := context.WithTimeout(context.Background(), s.CleanupTimeout)
 		defer cancel()
@@ -120,7 +152,6 @@ func (s *Supervisor) run(parent context.Context, v run.View) {
 			s.Fault(err)
 		}
 	}()
-	ctx, stop := context.WithTimeout(parent, time.Duration(snapshot.Definition.TimeoutSeconds)*time.Second)
 	defer stop()
 	authorized, unwatch, err := s.Guard.WatchAccess(ctx, snapshot.ActorID, snapshot.SpaceID)
 	if err != nil {
@@ -140,12 +171,18 @@ func (s *Supervisor) run(parent context.Context, v run.View) {
 			case <-authorized.Done():
 				return
 			case <-ticker.C:
-				probe, cancel := context.WithTimeout(authorized, 3*time.Second)
+				started := time.Now()
+				probe, cancel := context.WithTimeout(authorized, checkTimeout)
 				err := s.Coordinator.Heartbeat(probe, snapshot)
+				failedAt := time.Now()
+				probeErr := probe.Err()
 				cancel()
 				if err != nil {
 					hbMu.Lock()
 					heartbeatErr = err
+					if authorized.Err() == nil {
+						heartbeatFailure = failureDetail("heartbeat", err, probeErr, started, failedAt, checkTimeout)
+					}
 					hbMu.Unlock()
 					stop()
 					return
@@ -174,22 +211,30 @@ func (s *Supervisor) run(parent context.Context, v run.View) {
 	if err == nil {
 		err = s.Coordinator.CheckRun(authorized, snapshot)
 	}
+	var detail *run.FailureDetail
 	if err != nil {
-		probe, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		started := time.Now()
+		probe, cancel := context.WithTimeout(context.Background(), checkTimeout)
 		current := s.Coordinator.CheckRun(probe, snapshot)
+		failedAt := time.Now()
+		probeErr := probe.Err()
 		cancel()
 		if current != nil && current.Error() != "context canceled" {
 			err = current
+			if errors.Is(current, context.DeadlineExceeded) || errors.Is(probeErr, context.DeadlineExceeded) {
+				detail = failureDetail("final_check", current, probeErr, started, failedAt, checkTimeout)
+			}
 		}
 	}
 	hbMu.Lock()
-	hbErr := heartbeatErr
+	hbErr, hbDetail := heartbeatErr, heartbeatFailure
 	hbMu.Unlock()
 	if hbErr != nil && Code(err) != "permission_revoked" && !errors.Is(err, run.ErrCancelled) {
 		err = hbErr
+		detail = hbDetail
 	}
 	if err != nil {
-		outcome = run.Outcome{Status: "failed", Error: Code(err)}
+		outcome = run.Outcome{Status: "failed", Error: Code(err), FailureDetail: detail}
 		if errors.Is(err, run.ErrCancelled) {
 			outcome.Status = "cancelled"
 		}

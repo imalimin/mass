@@ -5,10 +5,8 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
-	"github.com/google/uuid"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
-	"github.com/imalimin/mass/internal/journal"
 	"io/fs"
 	"math"
 	"strings"
@@ -22,21 +20,17 @@ type CodeService struct {
 	Engine  CodeEngine
 	Files   *FileService
 	Network *Network
-	Journal *journal.Journal
-	Content *ContentStore
 }
 type codeHost struct {
 	service                   *CodeService
 	ctx                       context.Context
 	s                         run.Snapshot
-	call                      string
 	sequence, files, requests int
 	inputs, outputs           int64
 	effect                    string
-	broken                    bool
 }
 
-func (c *CodeService) Run(ctx context.Context, s run.Snapshot, call string, input run.CodeInput) (run.ToolResult, error) {
+func (c *CodeService) Run(ctx context.Context, s run.Snapshot, input run.CodeInput) (run.ToolResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(s.Definition.ToolPolicy.TimeoutMS)*time.Millisecond)
 	defer cancel()
 	if err := c.Files.Check(ctx, s); err != nil {
@@ -45,68 +39,23 @@ func (c *CodeService) Run(ctx context.Context, s run.Snapshot, call string, inpu
 	if int64(len(input.Input)+len(input.Code)) > s.Definition.ToolPolicy.MaxInputBytes {
 		return run.ToolResult{}, run.ToolFailure("code_input_limit", "none")
 	}
-	raw, _ := json.Marshal(map[string]any{"input": input, "session_id": s.SessionID, "base_workspace_snapshot_id": s.BaseSnapshotID, "engine": "goja-e6862644b38f", "policy": s.Definition.ToolPolicy})
-	o, err := c.Content.Put(ctx, s.ActorID, s.SpaceID, uuid.NewString(), "tool.input", "application/json", bytesReader(raw))
-	if err != nil {
-		return run.ToolResult{}, err
-	}
-	e := journal.New(s.ActorID, "tool.execution.input_resolved", s.ID, journal.ResolvedData{CallID: call, ContentID: o.ID, Engine: "goja-e6862644b38f", Policy: "mass-tools-v1"}, storage.Ref{Role: "io", ObjectID: o.ID, SHA256: o.SHA256})
-	e.OperationID = call
-	if _, err = AppendRun(ctx, c.Journal, s, e); err != nil {
-		return run.ToolResult{}, err
-	}
-	host := &codeHost{service: c, ctx: ctx, s: s, call: call, effect: "none", inputs: int64(len(input.Input) + len(input.Code))}
+	host := &codeHost{service: c, ctx: ctx, s: s, effect: "none", inputs: int64(len(input.Input) + len(input.Code))}
 	output, actionErr := c.Engine.Execute(ctx, input, host, s.Definition.ToolPolicy)
 	if output.Value == nil {
 		output.Value = json.RawMessage(`null`)
 	}
-	result := dataResult(map[string]any{"value": output.Value, "logs": output.Logs, "logs_complete": output.LogsComplete, "error": output.Error, "error_detail": output.Detail, "io_count": host.sequence, "io_complete": !host.broken, "engine_version": "goja-e6862644b38f"}, host.effect, storage.Ref{Role: "input", ObjectID: o.ID, SHA256: o.SHA256})
-	if output.Error != "" || actionErr != nil || host.broken {
+	result := dataResult(map[string]any{"value": output.Value, "logs": output.Logs, "logs_complete": output.LogsComplete, "error": output.Error, "error_detail": output.Detail, "io_count": host.sequence, "io_complete": true, "engine_version": "goja-e6862644b38f"}, host.effect)
+	if output.Error != "" || actionErr != nil {
 		result.Status = "failed"
 		result.Error = output.Error
 		if result.Error == "" {
 			result.Error = "code_failed"
 		}
 	}
-	if host.broken {
-		result.SideEffect = "unknown"
-		result.Complete = false
-	}
 	return result, actionErr
 }
-func (h *codeHost) record(phase, name string, payload any, effect string, refs []storage.Ref) error {
-	raw, _ := json.Marshal(payload)
-	ctx := h.ctx
-	var cancel context.CancelFunc
-	if ctx.Err() != nil {
-		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		defer cancel()
-	}
-	o, err := h.service.Content.Put(ctx, h.s.ActorID, h.s.SpaceID, uuid.NewString(), "tool.io", "application/json", bytesReader(raw))
-	if err != nil {
-		return err
-	}
-	all := []storage.Ref{{Role: "io", ObjectID: o.ID, SHA256: o.SHA256}}
-	for i, r := range refs {
-		r.Role = "source"
-		r.Ordinal = i
-		all = append(all, r)
-	}
-	complete := true
-	if fields, ok := payload.(map[string]any); ok {
-		if value, exists := fields["complete"].(bool); exists {
-			complete = value
-		}
-	}
-	e := journal.New(h.s.ActorID, "tool.io.recorded", h.s.ID, journal.IOData{CallID: h.call, Sequence: h.sequence, Phase: phase, Name: name, ContentID: o.ID, SideEffect: effect, Complete: complete}, all...)
-	e.OperationID = h.call
-	_, err = AppendRun(ctx, h.service.Journal, h.s, e)
-	return err
-}
+
 func (h *codeHost) Invoke(name string, arguments json.RawMessage) (json.RawMessage, error) {
-	if h.broken {
-		return nil, run.ToolFailure("io_journal_incomplete", "unknown")
-	}
 	if err := h.service.Files.Check(h.ctx, h.s); err != nil {
 		return nil, err
 	}
@@ -131,19 +80,7 @@ func (h *codeHost) Invoke(name string, arguments json.RawMessage) (json.RawMessa
 	if json.Unmarshal(arguments, &args) != nil {
 		return nil, storage.ErrInvalid
 	}
-	safe := args
-	if name == "net.request" {
-		m, ok := args.(map[string]any)
-		if !ok {
-			return nil, storage.ErrInvalid
-		}
-		safe = redactedRequest(m)
-	}
 	h.sequence++
-	if err := h.record("prepared", name, map[string]any{"arguments": safe}, "none", nil); err != nil {
-		h.broken = true
-		return nil, err
-	}
 	result, err := h.perform(name, args)
 	if result.SideEffect == "unknown" {
 		h.effect = "unknown"
@@ -170,21 +107,7 @@ func (h *codeHost) Invoke(name string, arguments json.RawMessage) (json.RawMessa
 	if h.outputs > policy.MaxOutputBytes && err == nil {
 		err = run.ToolFailure("code_output_limit", result.SideEffect)
 	}
-	phase := "completed"
-	var errorCode any
-	if err != nil {
-		phase = "failed"
-		errorCode = "host_operation_failed"
-		var detail *run.ToolError
-		if errors.As(err, &detail) {
-			errorCode = detail.Code
-		}
-	}
-	if saveErr := h.record(phase, name, map[string]any{"result": result.Data, "error": errorCode, "side_effect": result.SideEffect, "complete": result.Complete, "truncated": result.Truncated}, result.SideEffect, result.SourceRefs); saveErr != nil {
-		h.broken = true
-		h.effect = "unknown"
-		return nil, saveErr
-	}
+
 	if err != nil {
 		return nil, err
 	}

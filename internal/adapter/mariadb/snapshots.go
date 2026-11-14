@@ -3,7 +3,6 @@ package mariadb
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
@@ -15,7 +14,7 @@ func snapshotInTx(ctx context.Context, tx *sql.Tx, space, id string) (v storage.
 	err = tx.QueryRowContext(ctx, "SELECT "+snapshotColumns+" FROM workspace_snapshots WHERE space_id=? AND id=?", space, id).Scan(&v.ID, &v.SpaceID, &v.SessionID, &v.SourceRunID, &v.BaseSnapshotID, &v.ObjectID, &v.ManifestRef, &v.URI, &v.SHA256, &v.FormatVersion)
 	return
 }
-func saveSnapshot(ctx context.Context, tx *sql.Tx, space, session string, e journal.Proposed, v storage.Snapshot) error {
+func saveSnapshot(ctx context.Context, tx *sql.Tx, space, session string, e journal.Proposed, v storage.Snapshot, seq int64) error {
 	if v.SpaceID != space || v.SessionID != session || v.SourceRunID != e.RunID {
 		return storage.ErrInvalid
 	}
@@ -49,7 +48,7 @@ func saveSnapshot(ctx context.Context, tx *sql.Tx, space, session string, e jour
 	if matched != 2 || len(e.Refs) != 2 {
 		return storage.ErrInvalid
 	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO workspace_snapshots(space_id,id,session_id,source_run_id,base_snapshot_id,object_id,manifest_ref,tos_uri,archive_sha256,format_version,source_event_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)", space, v.ID, session, e.RunID, nullable(v.BaseSnapshotID), v.ObjectID, v.ManifestRef, v.URI, v.SHA256, v.FormatVersion, e.EventID)
+	_, err = tx.ExecContext(ctx, "INSERT INTO workspace_snapshots(space_id,id,session_id,source_run_id,base_snapshot_id,object_id,manifest_ref,tos_uri,archive_sha256,format_version,source_event_id,sequence,occurred_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", space, v.ID, session, e.RunID, nullable(v.BaseSnapshotID), v.ObjectID, v.ManifestRef, v.URI, v.SHA256, v.FormatVersion, e.EventID, seq, e.OccurredAt)
 	if err != nil {
 		return err
 	}
@@ -98,16 +97,12 @@ func (s *Store) SnapshotBase(ctx context.Context, actor, space, session, run str
 }
 func (s *Store) SnapshotEvent(ctx context.Context, actor, space, session, eventID string) (v storage.Snapshot, found bool, err error) {
 	err = s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
-		var data []byte
-		e := tx.QueryRowContext(ctx, "SELECT data FROM runtime_events WHERE space_id=? AND session_id=? AND event_id=? AND event_type='workspace.snapshot.created'", space, session, eventID).Scan(&data)
+		e := tx.QueryRowContext(ctx, "SELECT "+snapshotColumns+" FROM workspace_snapshots WHERE space_id=? AND session_id=? AND source_event_id=?", space, session, eventID).Scan(&v.ID, &v.SpaceID, &v.SessionID, &v.SourceRunID, &v.BaseSnapshotID, &v.ObjectID, &v.ManifestRef, &v.URI, &v.SHA256, &v.FormatVersion)
+		found = e == nil
 		if e == sql.ErrNoRows {
 			return nil
 		}
-		if e != nil {
-			return e
-		}
-		found = true
-		return json.Unmarshal(data, &v)
+		return e
 	})
 	return
 }

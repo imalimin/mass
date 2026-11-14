@@ -20,8 +20,9 @@ const Policy = "stage-summary-v1"
 const ExcerptBytes = 4096
 
 type Projector struct {
-	Content *resource.ContentStore
-	Cache   Cache
+	Content    *resource.ContentStore
+	Cache      Cache
+	ToolResult func(runID, callID string) json.RawMessage
 }
 
 func (p *Projector) Project(ctx context.Context, s run.Snapshot, events []journal.Event, through int64, tools []run.ToolSpec, ranges ...[]run.ContextRange) (run.Prepared, error) {
@@ -170,7 +171,7 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 		if e.Sequence > spec.Through {
 			break
 		}
-		if (spec.Renderer == LegacyRenderer && e.Sequence != previous+1) || e.SpaceID != s.SpaceID || e.SessionID != s.SessionID {
+		if (spec.Renderer == LegacyRenderer && e.Sequence <= previous) || e.SpaceID != s.SpaceID || e.SessionID != s.SessionID {
 			return result, storage.ErrIntegrity
 		}
 		previous = e.Sequence
@@ -202,7 +203,7 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 			results[d.CallID] = e
 		}
 	}
-	if spec.Renderer == LegacyRenderer && previous != spec.Through {
+	if s.UserEventID != "" && len(instructionSources) != 1 {
 		return result, storage.ErrIntegrity
 	}
 	add([]run.Message{{Role: "system", Content: system}}, instructionSources, "fixed_instructions")
@@ -260,6 +261,22 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 			if purposes[d.AttemptID] != "task" {
 				return result, storage.ErrIntegrity
 			}
+			if e.RunID != s.ID && d.FinishReason == "tool_calls" {
+				// Prior runs contribute their conversation replies. Their
+				// intermediate tool groups belong to the diagnostic archive.
+				if len(d.Calls) != 0 {
+					hasHistoricalResults := true
+					for _, call := range d.Calls {
+						if _, ok := results[call.ID]; !ok {
+							hasHistoricalResults = false
+							break
+						}
+					}
+					if !hasHistoricalResults {
+						continue
+					}
+				}
+			}
 			var reply run.Reply
 			if err := p.readJSON(ctx, s, d.ContentID, &reply); err != nil {
 				return result, err
@@ -269,20 +286,27 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 			missing := false
 			reason := "complete_interaction"
 			for _, call := range reply.Message.ToolCalls {
-				terminal, ok := results[call.ID]
-				if !ok {
+				terminal, durable := results[call.ID]
+				var raw []byte
+				var td journal.ToolData
+				if durable {
+					journal.Decode(terminal.Data, &td)
+					if terminal.RunID != e.RunID || td.ResponseEventID != e.EventID || td.Name != call.Name || used[call.ID] {
+						return result, run.ErrProtocol
+					}
+					used[call.ID] = true
+					var err error
+					raw, err = p.Cache.Read(ctx, p.Content, s.ActorID, s.SpaceID, td.ContentID, 4<<20)
+					if err != nil {
+						return result, err
+					}
+					sources = append(sources, terminal)
+				} else if e.RunID == s.ID && p.ToolResult != nil {
+					raw = p.ToolResult(s.ID, call.ID)
+				}
+				if len(raw) == 0 {
 					missing = true
 					continue
-				}
-				var td journal.ToolData
-				journal.Decode(terminal.Data, &td)
-				if terminal.RunID != e.RunID || td.ResponseEventID != e.EventID || td.Name != call.Name || used[call.ID] {
-					return result, run.ErrProtocol
-				}
-				used[call.ID] = true
-				raw, err := p.Cache.Read(ctx, p.Content, s.ActorID, s.SpaceID, td.ContentID, 4<<20)
-				if err != nil {
-					return result, err
 				}
 				text := string(raw)
 				if len(raw) > ExcerptBytes {
@@ -290,7 +314,11 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 					if json.Unmarshal(raw, &tr) != nil {
 						return result, storage.ErrIntegrity
 					}
-					excerpt, _ := json.Marshal(map[string]any{"status": tr.Status, "side_effect": tr.SideEffect, "error": tr.Error, "complete": tr.Complete, "excerpt": prefix(string(tr.Data), ExcerptBytes), "truncated": true, "original_content_id": td.ContentID})
+					fields := map[string]any{"status": tr.Status, "side_effect": tr.SideEffect, "error": tr.Error, "complete": tr.Complete, "excerpt": prefix(string(tr.Data), ExcerptBytes), "truncated": true}
+					if durable {
+						fields["original_content_id"] = td.ContentID
+					}
+					excerpt, _ := json.Marshal(fields)
 					text = string(excerpt)
 					reason = "fixed_result_excerpt"
 				}
@@ -299,44 +327,12 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 					native = call.ID
 				}
 				messages = append(messages, run.Message{Role: "tool", Content: text, ToolCallID: native})
-				sources = append(sources, terminal)
 			}
 			if missing {
-				if !run.Terminal(statuses[e.RunID]) || statuses[e.RunID] == "succeeded" {
+				if e.RunID == s.ID && !run.Terminal(statuses[e.RunID]) && (p.ToolResult != nil || len(sources) > 1) {
 					return result, run.ErrProtocol
 				}
-				// No partial assistant/tool group is sent. Include explicit effect evidence
-				// and all operation audit sources; absent results are never success.
-				effects := []string{}
-				for _, call := range reply.Message.ToolCalls {
-					effect := "unknown (no terminal result)"
-					if terminal, ok := results[call.ID]; ok {
-						var td journal.ToolData
-						journal.Decode(terminal.Data, &td)
-						effect = td.Status + "; side_effect=" + td.SideEffect
-					}
-					effects = append(effects, call.Name+": "+effect)
-				}
-				for _, audit := range events {
-					if audit.Sequence > spec.Through {
-						break
-					}
-					if audit.RunID == e.RunID && (audit.Type == "tool.io.recorded" || audit.Type == "operation.reconciled" || audit.Type == "run.finished") {
-						sources = append(sources, audit)
-						if audit.Type == "tool.io.recorded" {
-							var io journal.IOData
-							journal.Decode(audit.Data, &io)
-							for _, call := range reply.Message.ToolCalls {
-								if io.CallID == call.ID && io.Phase != "prepared" && io.SideEffect != "none" {
-									effects = append(effects, fmt.Sprintf("%s I/O %s: %s; side_effect=%s", call.Name, io.Name, io.Phase, io.SideEffect))
-								}
-							}
-						}
-					}
-				}
-				raw, _ := json.Marshal(effects)
-				messages = []run.Message{{Role: "user", Content: "[MASS interrupted tool group; verify effects before retrying: " + string(raw) + "]"}}
-				reason = "interrupted_group"
+				continue
 			}
 			add(messages, sources, reason)
 		case "workspace.restored":

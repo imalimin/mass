@@ -6,67 +6,74 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sync"
+
+	"github.com/imalimin/mass/internal/domain/run"
 )
 
-// Recorder must durably accept bytes before returning nil. D00 verifies the
-// transport with an in-memory test recorder; D04 supplies Journal/TOS storage.
-// Headers and URLs are intentionally absent: they may contain credentials.
-type Recorder interface {
-	Request(context.Context, []byte) error
-	Response(context.Context, int, []byte) error
+// responseWire keeps a bounded copy of the response for checking stream
+// completion and extracting usage fields that the SDK may omit.
+type responseWire struct {
+	mu     sync.Mutex
+	raw    bytes.Buffer
+	status int
 }
 
-type CaptureTransport struct {
-	Base             http.RoundTripper
-	Recorder         Recorder
-	MaxRequestBytes  int64
-	MaxResponseBytes int64
+func (w *responseWire) complete() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return wireComplete(w.raw.Bytes())
 }
 
-func (t *CaptureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if t.Base == nil || t.Recorder == nil || t.MaxRequestBytes <= 0 || t.MaxResponseBytes <= 0 {
-		return nil, errors.New("incomplete capture transport configuration")
-	}
+func (w *responseWire) observation() (int, run.Usage, bool, *int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	usage, present, reasoning := wireTraceUsage(w.raw.Bytes())
+	return w.status, usage, present, reasoning
+}
+
+type observedTransport struct {
+	base http.RoundTripper
+	wire *responseWire
+}
+
+func (t *observedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Body == nil {
 		return nil, errors.New("model request body is required")
 	}
-	body, err := io.ReadAll(io.LimitReader(req.Body, t.MaxRequestBytes+1))
+	const maxRequestBytes = 4 << 20
+	body, err := io.ReadAll(io.LimitReader(req.Body, maxRequestBytes+1))
 	_ = req.Body.Close()
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(body)) > t.MaxRequestBytes {
-		return nil, errors.New("model request exceeds capture limit")
-	}
-	if err = t.Recorder.Request(req.Context(), bytes.Clone(body)); err != nil {
-		return nil, err
+	if len(body) > maxRequestBytes {
+		return nil, errors.New("model request exceeds size limit")
 	}
 	copyReq := req.Clone(req.Context())
 	copyReq.Body = io.NopCloser(bytes.NewReader(body))
 	copyReq.ContentLength = int64(len(body))
 	copyReq.GetBody = nil // A retry must be a distinct gateway attempt, recorded again.
-	response, err := t.Base.RoundTrip(copyReq)
+	response, err := t.base.RoundTrip(copyReq)
 	if err != nil {
 		return nil, err
 	}
-	if sink, ok := t.Recorder.(interface{ Status(int) }); ok {
-		sink.Status(response.StatusCode)
-	}
-	response.Body = &capturedBody{ReadCloser: response.Body, ctx: req.Context(), recorder: t.Recorder, status: response.StatusCode, remaining: t.MaxResponseBytes}
+	t.wire.mu.Lock()
+	t.wire.status = response.StatusCode
+	t.wire.mu.Unlock()
+	response.Body = &observedBody{ReadCloser: response.Body, ctx: req.Context(), wire: t.wire, remaining: 8 << 20}
 	return response, nil
 }
 
-type capturedBody struct {
+type observedBody struct {
 	io.ReadCloser
 	ctx       context.Context
-	recorder  Recorder
-	status    int
+	wire      *responseWire
 	remaining int64
-	recorded  bool
 	failed    error
 }
 
-func (b *capturedBody) Read(p []byte) (int, error) {
+func (b *observedBody) Read(p []byte) (int, error) {
 	if b.failed != nil {
 		return 0, b.failed
 	}
@@ -82,17 +89,14 @@ func (b *capturedBody) Read(p []byte) (int, error) {
 	}
 	n, err := b.ReadCloser.Read(p)
 	if int64(n) > b.remaining {
-		b.failed = errors.New("model response exceeds capture limit")
+		b.failed = errors.New("model response exceeds size limit")
 		_ = b.Close()
 		return 0, b.failed
 	}
-	if n > 0 || !b.recorded && err != nil {
-		b.recorded = true
-		if saveErr := b.recorder.Response(b.ctx, b.status, bytes.Clone(p[:n])); saveErr != nil {
-			b.failed = saveErr
-			_ = b.Close()
-			return 0, saveErr
-		}
+	if n > 0 {
+		b.wire.mu.Lock()
+		b.wire.raw.Write(p[:n])
+		b.wire.mu.Unlock()
 		b.remaining -= int64(n)
 	}
 	return n, err
