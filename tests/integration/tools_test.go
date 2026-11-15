@@ -52,7 +52,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err = db.Admin.Migrate(ctx); err != nil {
+	if err = db.MigrateTo(ctx, 15); err != nil {
 		t.Fatal(err)
 	}
 	cipher, _ := secrets.New(bytes.Repeat([]byte{9}, 32))
@@ -125,11 +125,11 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	}
 	// Repeated migration preserves the fixed tool definition.
 	for i := 0; i < 2; i++ {
-		if err = db.Admin.Migrate(ctx); err != nil {
+		if err = db.MigrateTo(ctx, 15); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err = db.Store.CheckSchema(ctx); err != nil {
+	if err = db.CheckVersion(ctx, 15); err != nil {
 		t.Fatal(err)
 	}
 	limits := storage.Limits{MaxFileBytes: 1 << 20, MaxTotalBytes: 8 << 20, MaxEntries: 1000}

@@ -166,7 +166,7 @@ func (r *Recorder) ToolState(runID, callID string) Tool {
 	return Tool{}
 }
 
-func (r *Recorder) steps(id string) []ModelStep {
+func (r *Recorder) Steps(id string) []ModelStep {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	steps := make([]ModelStep, 0, len(r.runs[id]))
@@ -178,7 +178,7 @@ func (r *Recorder) steps(id string) []ModelStep {
 	return steps
 }
 
-func (r *Recorder) forget(id string) {
+func (r *Recorder) Forget(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.runs, id)

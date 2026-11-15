@@ -212,22 +212,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/spaces/{space_id}/workspace-snapshots/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getWorkspaceSnapshot"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/spaces/{space_id}/payloads/{id}": {
         parameters: {
             query?: never;
@@ -715,7 +699,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Supply exactly one of run_id or snapshot_id. The lookup is limited to spaces the caller can access. */
+        /** @description Supply exactly one run_id or session_id. Run lookup uses the session mapping. */
         get: operations["getRunDiagnostics"];
         put?: never;
         post?: never;
@@ -797,22 +781,6 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getRunArtifacts"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/spaces/{space_id}/sessions/{session_id}/workspace-snapshots": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getSessionSnapshots"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1284,19 +1252,6 @@ export interface components {
             next_after: components["schemas"]["Sequence"];
             has_more: boolean;
         };
-        WorkspaceSnapshot: {
-            id: components["schemas"]["ResourceID"];
-            space_id: components["schemas"]["ShortResourceID"];
-            session_id: components["schemas"]["ShortResourceID"];
-            source_run_id: components["schemas"]["ResourceID"];
-            base_snapshot_id?: components["schemas"]["ResourceID"];
-            object_id: components["schemas"]["ResourceID"];
-            manifest_ref: components["schemas"]["ResourceID"];
-            tos_uri: string;
-            archive_sha256: string;
-            /** @constant */
-            format_version: 1;
-        };
         RuntimeRef: {
             role: string;
             ordinal: number;
@@ -1358,123 +1313,28 @@ export interface components {
             timeout_seconds: number;
             tool_policy?: components["schemas"]["RuntimeToolPolicy"];
         };
-        RuntimeSnapshot: {
-            /** Format: uuid */
-            id: string;
-            space_id: components["schemas"]["ShortResourceID"];
-            session_id: components["schemas"]["ShortResourceID"];
-            /** Format: uuid */
-            actor_id: string;
-            definition_ref: components["schemas"]["RuntimeRef"];
-            /** Format: uuid */
-            user_event_id: string;
-            base_workspace_snapshot_id: string;
-            definition: components["schemas"]["RuntimeDefinition"];
-            build: string;
-            /** @constant */
-            protocol_profile: "mass-agui-v1";
-            /** @constant */
-            mapper_version: 1;
-            /** @constant */
-            parser_version: 1;
-            /** Format: date-time */
-            created_at: string;
-        };
         RuntimeUsage: {
             input_tokens: number | null;
             output_tokens: number | null;
             cache_read_tokens: number | null;
             cache_write_tokens: number | null;
         };
-        SessionTracePage: {
-            items: (components["schemas"]["TraceModelStep"] | components["schemas"]["TraceRunFinished"])[];
-            through_sequence: components["schemas"]["Sequence"];
-            next_after: components["schemas"]["Sequence"];
-            has_more: boolean;
-            /** @enum {string} */
-            upload_status: "recording" | "pending" | "uploaded";
-        };
-        TraceModelStep: {
-            /** @enum {string} */
-            type: "model_step";
-            /** Format: uuid */
-            run_id: string;
-            step: number;
-            /** Format: uuid */
-            attempt_id: string;
-            /** Format: uuid */
-            retry_of?: string;
-            /** @enum {string} */
-            purpose: "task" | "summary";
-            /** Format: date-time */
-            started_at: string;
-            model: {
-                id: string;
-                /** @enum {string} */
-                status: "succeeded" | "failed" | "cancelled";
-                /** @description Zero when no HTTP status was observed. */
-                http_status: number;
-                duration_ms: number;
-                first_text_ms: number | null;
-                finish_reason: string;
-                text: string;
-                reasoning: string | null;
-                tool_calls: {
-                    id: string;
-                    type: string;
-                    function: {
-                        name: string;
-                        arguments: string;
-                    };
-                }[];
-                /** @description Null when usage is absent. Individual missing counters are zero. */
-                usage: null | {
-                    input_tokens: number;
-                    input_cached_tokens: number;
-                    output_tokens: number;
-                    reasoning_tokens: number;
-                };
-                error: string;
-            };
-            tools: {
-                call_id: string;
-                native_tool_call_id: string;
-                name: string;
-                arguments: unknown;
-                status: string;
-                duration_ms: number | null;
-                result?: unknown;
-                result_ref?: string;
-            }[];
-        };
-        TraceRunFinished: {
-            /** @enum {string} */
-            type: "run_finished";
-            /** Format: uuid */
-            run_id: string;
-            /** @enum {string} */
-            status: "succeeded" | "failed" | "cancelled";
-            /** Format: date-time */
-            started_at: string | null;
-            /** Format: date-time */
-            finished_at: string;
-            duration_ms: number | null;
-            error: string;
-            failure_detail?: {
-                [key: string]: unknown;
-            };
-            /** Format: uuid */
-            snapshot_id: string | null;
-        };
         RunDiagnostics: {
-            run: components["schemas"]["RuntimeRun"];
-            /** @description The selected snapshot, or the run's saved workspace snapshot. Null when the run has not saved a snapshot. */
-            snapshot: components["schemas"]["WorkspaceSnapshot"] | null;
-            trace: components["schemas"]["SessionTracePage"];
+            items: components["schemas"]["SessionDiagnosticRecord"][];
+        };
+        SessionDiagnosticRecord: {
+            seq: number;
+            /** @enum {string} */
+            type: "session_created" | "run_accepted" | "model_step" | "context_summary" | "run_finished" | "attachment_added" | "workspace_restored";
+            /** @enum {string} */
+            role: "system" | "user" | "assistant" | "tool";
+            run_id?: components["schemas"]["ShortResourceID"];
+            workspace_snapshot_committed?: boolean;
+        } & {
+            [key: string]: unknown;
         };
         RuntimeRun: {
-            /** Format: uuid */
-            id: string;
+            id: components["schemas"]["ShortResourceID"];
             space_id: components["schemas"]["ShortResourceID"];
             session_id: components["schemas"]["ShortResourceID"];
             /** Format: uuid */
@@ -1482,7 +1342,6 @@ export interface components {
             definition_ref: components["schemas"]["RuntimeRef"];
             /** Format: uuid */
             user_event_id: string;
-            base_workspace_snapshot_id: string;
             definition: components["schemas"]["RuntimeDefinition"];
             build: string;
             /** @constant */
@@ -1499,7 +1358,7 @@ export interface components {
             final_response_event_id: string;
             error: string;
             snapshot_error: string;
-            workspace_snapshot_id: string;
+            workspace_snapshot_committed: boolean;
             started_at: string | null;
             finished_at: string | null;
             heartbeat_at: string | null;
@@ -1515,7 +1374,6 @@ export interface components {
             /** Format: uuid */
             version_id: string;
             definition_ref: components["schemas"]["RuntimeRef"];
-            latest_workspace_snapshot_id: string;
             workspace_error: string;
             last_sequence: string;
             /** Format: date-time */
@@ -1560,9 +1418,6 @@ export interface components {
         };
         RuntimeArtifacts: {
             items: components["schemas"]["RuntimeArtifact"][];
-        };
-        RuntimeSnapshots: {
-            items: components["schemas"]["WorkspaceSnapshot"][];
         };
         RuntimeRestored: {
             restored: boolean;
@@ -1618,7 +1473,6 @@ export interface components {
             idempotency_key: string;
             agent_id: components["schemas"]["ShortResourceID"];
             version_id?: string;
-            source_workspace_snapshot_id?: string;
             title?: string;
         };
         RunSubmitInput: {
@@ -2265,38 +2119,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JournalPage"];
-                };
-            };
-            /** @description 400 invalid cursor/schema, 401 unauthenticated, 403 forbidden, 404 missing or unreferenced, 503 integrity/storage failure. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-        };
-    };
-    getWorkspaceSnapshot: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                space_id: components["schemas"]["ShortResourceID"];
-                id: components["schemas"]["ResourceID"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Authorized committed data. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkspaceSnapshot"];
                 };
             };
             /** @description 400 invalid cursor/schema, 401 unauthenticated, 403 forbidden, 404 missing or unreferenced, 503 integrity/storage failure. */
@@ -5009,7 +4831,7 @@ export interface operations {
             header?: never;
             path: {
                 space_id: components["schemas"]["ShortResourceID"];
-                run_id: string;
+                run_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -5041,7 +4863,7 @@ export interface operations {
             header?: never;
             path: {
                 space_id: components["schemas"]["ShortResourceID"];
-                run_id: string;
+                run_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -5107,11 +4929,8 @@ export interface operations {
     getRunDiagnostics: {
         parameters: {
             query?: {
-                run_id?: string;
-                snapshot_id?: string;
-                after_sequence?: components["schemas"]["Sequence"];
-                through_sequence?: components["schemas"]["Sequence"];
-                limit?: number;
+                run_id?: components["schemas"]["ShortResourceID"];
+                session_id?: components["schemas"]["ShortResourceID"];
             };
             header?: never;
             path?: never;
@@ -5119,7 +4938,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Run state, workspace snapshot metadata, and a page of grouped session trace records. */
+            /** @description Diagnostic records selected from the session JSONL. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5149,7 +4968,7 @@ export interface operations {
             header?: never;
             path: {
                 space_id: components["schemas"]["ShortResourceID"];
-                run_id: string;
+                run_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -5181,7 +5000,7 @@ export interface operations {
             header?: never;
             path: {
                 space_id: components["schemas"]["ShortResourceID"];
-                run_id: string;
+                run_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -5217,7 +5036,7 @@ export interface operations {
             header?: never;
             path: {
                 space_id: components["schemas"]["ShortResourceID"];
-                run_id: string;
+                run_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -5249,7 +5068,7 @@ export interface operations {
             header?: never;
             path: {
                 space_id: components["schemas"]["ShortResourceID"];
-                run_id: string;
+                run_id: components["schemas"]["ShortResourceID"];
                 projection_id: string;
             };
             cookie?: never;
@@ -5282,7 +5101,7 @@ export interface operations {
             header?: never;
             path: {
                 space_id: components["schemas"]["ShortResourceID"];
-                run_id: string;
+                run_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -5295,38 +5114,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RuntimeArtifacts"];
-                };
-            };
-            /** @description Request rejected or dependency unavailable. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-        };
-    };
-    getSessionSnapshots: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                space_id: components["schemas"]["ShortResourceID"];
-                session_id: components["schemas"]["ShortResourceID"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful operation. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RuntimeSnapshots"];
                 };
             };
             /** @description Request rejected or dependency unavailable. */
@@ -5358,7 +5145,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkspaceSnapshot"];
+                    "application/json": {
+                        workspace_snapshot_committed: boolean;
+                    };
                 };
             };
             /** @description Request rejected or dependency unavailable. */
@@ -5410,7 +5199,7 @@ export interface operations {
             header?: never;
             path: {
                 space_id: components["schemas"]["ShortResourceID"];
-                run_id: string;
+                run_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -5481,7 +5270,7 @@ export interface operations {
             };
             path: {
                 space_id: components["schemas"]["ShortResourceID"];
-                run_id: string;
+                run_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -5549,7 +5338,7 @@ export interface operations {
             header?: never;
             path: {
                 space_id: components["schemas"]["ShortResourceID"];
-                run_id: string;
+                run_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };

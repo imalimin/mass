@@ -1,6 +1,8 @@
 package httptransport
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/imalimin/mass/internal/app/identity"
@@ -8,6 +10,10 @@ import (
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/resource/trace"
 )
+
+type sessionDiagnostics interface {
+	Diagnostics(context.Context, string, string, string) ([]json.RawMessage, error)
+}
 
 type runDiagnostics struct {
 	Run      run.View          `json:"run"`
@@ -17,6 +23,19 @@ type runDiagnostics struct {
 
 func (runtime *RuntimeOptions) diagnostics(w http.ResponseWriter, r *http.Request, u identity.User) error {
 	query := r.URL.Query()
+	if repo, ok := runtime.Repo.(sessionDiagnostics); ok {
+		runID, sessionID := query.Get("run_id"), query.Get("session_id")
+		if len(query) != 1 || (runID == "") == (sessionID == "") ||
+			!storage.ValidShortID(runID+sessionID) || len(query["run_id"])+len(query["session_id"]) != 1 {
+			return identity.ErrInvalid
+		}
+		items, err := repo.Diagnostics(r.Context(), u.ID, sessionID, runID)
+		if err != nil {
+			return err
+		}
+		writeJSON(w, 200, map[string]any{"items": items})
+		return nil
+	}
 	runID, snapshotID := query.Get("run_id"), query.Get("snapshot_id")
 	if (runID == "") == (snapshotID == "") ||
 		runID != "" && !storage.ValidID(runID) || snapshotID != "" && !storage.ValidID(snapshotID) {

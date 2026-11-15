@@ -178,7 +178,7 @@ func newFaultRigWithTimeout(t *testing.T, timeoutSeconds int) *faultRig {
 		t.Skip("requires isolated MariaDB")
 	}
 	ctx := context.Background()
-	db, err := testdb.New(ctx)
+	db, err := testdb.NewVersion(ctx, 15)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	storearchive "github.com/imalimin/mass/internal/adapter/archive"
 	"github.com/imalimin/mass/internal/adapter/codevm"
 	einoadapter "github.com/imalimin/mass/internal/adapter/eino"
 	"github.com/imalimin/mass/internal/adapter/mariadb"
@@ -59,7 +60,20 @@ func (r *runtimeLifecycle) Close(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
-func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *identity.Service, catalogue *catalog.Service, content *resource.ContentStore, workspaces resource.Workspaces, snapshots *resource.SnapshotStore, build string, logger *slog.Logger, transport modelgateway.Transport) (options *httptransport.RuntimeOptions, lifecycle *runtimeLifecycle, err error) {
+
+type runtimeStore interface {
+	httptransport.RuntimeRepository
+	journal.Repository
+	agui.Repository
+}
+
+type runCoordinator interface {
+	scheduler.Repository
+	supervisor.Coordinator
+	RecoveryCandidates(context.Context) ([]run.Snapshot, error)
+}
+
+func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *identity.Service, catalogue *catalog.Service, content *resource.ContentStore, workspaces resource.Workspaces, snapshots *resource.SnapshotStore, build string, logger *slog.Logger, transport modelgateway.Transport, persisted ...*storearchive.Runtime) (options *httptransport.RuntimeOptions, lifecycle *runtimeLifecycle, err error) {
 	lease, err := store.OpenRuntime(parent)
 	if err != nil {
 		return nil, nil, err
@@ -71,20 +85,41 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		}
 	}()
 	ctx, cancel := context.WithCancel(parent)
-	journalService := &journal.Journal{Repo: store}
+	var repo runtimeStore = store
+	var coordinator runCoordinator = lease
+	var sessions *storearchive.Runtime
+	live := store.LiveUI
+	responseText := store.UIResponseText
+	scope := func(s run.Snapshot) resource.CleanupStore { return lease.Cleanup(s) }
+	if len(persisted) > 0 {
+		sessions = persisted[0]
+		sessions.Lease, sessions.Live = lease, live
+		repo, coordinator, responseText, scope = sessions, sessions, sessions.ResponseText, sessions.Cleanup
+	}
+	journalService := &journal.Journal{Repo: repo}
 	traceRoot := c.Runtime.WorkspaceTempRoot
 	if local, ok := workspaces.(interface{ LocalPath() string }); ok {
 		traceRoot = local.LocalPath()
 	}
 	recorder := &trace.Recorder{}
-	archive := &trace.Archive{Root: filepath.Join(traceRoot, ".traces"), Prefix: content.Prefix, Blobs: content.Blobs, Recorder: recorder}
+	if sessions != nil {
+		sessions.Recorder = recorder
+	}
+	toolState := recorder.ToolState
+	if sessions != nil {
+		toolState = sessions.ToolState
+	}
+	var archive *trace.Archive
+	if sessions == nil {
+		archive = &trace.Archive{Root: filepath.Join(traceRoot, ".traces"), Prefix: content.Prefix, Blobs: content.Blobs, Recorder: recorder}
+	}
 	store.UIContent = content
 	store.UIToolState = recorder.ToolState
 	registryService := &registry.Registry{}
-	workspaceService := &resource.RunWorkspaces{Workspaces: workspaces, Repo: store, Content: content, Journal: journalService}
-	finisher := &resource.Finisher{Scope: func(s run.Snapshot) resource.CleanupStore { return lease.Cleanup(s) }, Content: content, Workspaces: workspaces, Timeout: c.Runtime.SnapshotTimeout}
-	supervisorService := &supervisor.Supervisor{Guard: auth, Coordinator: lease, Workspaces: workspaceService, Finisher: finisher, CleanupTimeout: c.Runtime.SnapshotTimeout + 5*time.Second}
-	schedulerService := &scheduler.Scheduler{Repo: lease, Launcher: supervisorService, MaxConcurrent: c.Runtime.MaxConcurrentRuns, MaxPerSpace: min(c.Runtime.MaxConcurrentRuns, 2)}
+	workspaceService := &resource.RunWorkspaces{Workspaces: workspaces, Repo: repo, Content: content, Journal: journalService}
+	finisher := &resource.Finisher{Scope: scope, Content: content, Workspaces: workspaces, Timeout: c.Runtime.SnapshotTimeout}
+	supervisorService := &supervisor.Supervisor{Guard: auth, Coordinator: coordinator, Workspaces: workspaceService, Finisher: finisher, CleanupTimeout: c.Runtime.SnapshotTimeout + 5*time.Second}
+	schedulerService := &scheduler.Scheduler{Repo: coordinator, Launcher: supervisorService, MaxConcurrent: c.Runtime.MaxConcurrentRuns, MaxPerSpace: min(c.Runtime.MaxConcurrentRuns, 2)}
 	fault := func(err error) {
 		schedulerService.Fault(err)
 		cancel()
@@ -123,23 +158,36 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	codeEngine := codevm.New(c.Tools.Code.MaxConcurrent, filepath.Join(traceRoot, ".go-wasi"))
 	supervisorService.NewRunner = func(ctx context.Context, s run.Snapshot, started time.Time) (supervisor.Runner, error) {
 		budget := control.New(s, started)
-		contextPlanner := &planner.Planner{Journal: journalService, Content: content, Projector: &projector.Projector{Content: content, ToolResult: recorder.ToolResult}, Tools: registryService}
-		gateway := &modelgateway.Gateway{Journal: journalService, Content: content, Transport: transport, Credentials: auth, Control: budget, Trace: recorder, Delta: store.LiveUI.Delta}
+		runJournal, runContent := journalService, content
+		if sessions != nil {
+			runJournal, runContent = sessions.RunServices(s, content)
+		}
+		contextPlanner := &planner.Planner{Journal: runJournal, Content: runContent, Projector: &projector.Projector{Content: runContent, ToolResult: recorder.ToolResult}, Tools: registryService}
+		gateway := &modelgateway.Gateway{Journal: runJournal, Content: runContent, Transport: transport, Credentials: auth, Control: budget, Trace: recorder, Delta: store.LiveUI.Delta}
 		contextPlanner.Model = gateway
-		fileService := &resource.FileService{Workspaces: workspaces, Content: content, Cursors: auth, MaxBytes: min(c.Storage.MaxFileBytes, 1<<20), Limits: storage.Limits{MaxFileBytes: c.Storage.MaxFileBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes, MaxEntries: c.Storage.MaxEntries}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
+		fileService := &resource.FileService{Workspaces: workspaces, Content: runContent, Cursors: auth, MaxBytes: min(c.Storage.MaxFileBytes, 1<<20), Limits: storage.Limits{MaxFileBytes: c.Storage.MaxFileBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes, MaxEntries: c.Storage.MaxEntries}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
 		fileService.EnableRunPagination()
 		code := &resource.CodeService{Engine: codeEngine, Files: fileService, Network: &resource.Network{}}
-		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: &resource.Sources{Files: fileService, Journal: journalService}, Code: code, Journal: journalService}, Control: budget, Journal: journalService, Trace: recorder}
+		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: &resource.Sources{Files: fileService, Journal: runJournal}, Code: code, Journal: runJournal}, Control: budget, Journal: runJournal, Trace: recorder}
 		return &executor.Executor{Planner: contextPlanner, Model: gateway, Tools: tools, Control: budget}, nil
 	}
 	// The connection-scoped lock proves the old dispatcher is gone before recovery.
-	interrupted, err := lease.RecoveryCandidates(ctx)
+	interrupted, err := coordinator.RecoveryCandidates(ctx)
 	if err != nil {
 		cancel()
 		return nil, nil, err
 	}
 	for _, s := range interrupted {
-		if err = lease.AdoptInterrupted(ctx, s); err != nil {
+		if sessions != nil {
+			done, err := sessions.Recover(ctx, s)
+			if err != nil {
+				cancel()
+				return nil, nil, err
+			}
+			if done {
+				continue
+			}
+		} else if err = lease.AdoptInterrupted(ctx, s); err != nil {
 			cancel()
 			return nil, nil, err
 		}
@@ -148,7 +196,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 			return nil, nil, err
 		}
 		plan := run.CleanupPlan{Outcome: run.Outcome{Status: "failed", Error: "interrupted"}, At: time.Now().UTC().Truncate(time.Microsecond), WorkspaceReady: false}
-		if err = lease.Cleanup(s).SavePlan(ctx, plan); err != nil {
+		if err = scope(s).SavePlan(ctx, plan); err != nil {
 			cancel()
 			return nil, nil, err
 		}
@@ -160,13 +208,21 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 			return nil, nil, err
 		}
 	}
-	if _, err = store.DB.ExecContext(ctx, "UPDATE sessions SET workspace_maintenance=FALSE,workspace_maintenance_actor=NULL"); err != nil {
-		cancel()
-		return nil, nil, err
+	if sessions == nil {
+		if _, err = store.DB.ExecContext(ctx, "UPDATE sessions SET workspace_maintenance=FALSE,workspace_maintenance_actor=NULL"); err != nil {
+			cancel()
+			return nil, nil, err
+		}
 	}
-	service := &sessionapp.Service{ModelAttempts: max(1, c.LLM.MaxAttempts), ToolPolicy: policy, Repo: store, Catalog: catalogue, Identity: auth, Content: content, Build: build, Ready: schedulerService.Ready, Notify: schedulerService.Notify, ResolveTools: registryService.Describe}
-	options = &httptransport.RuntimeOptions{Service: service, Repo: store, UI: &agui.Projector{Repo: store, Live: store.LiveUI, ResponseText: store.UIResponseText, ToolState: recorder.ToolState}, Trace: archive, Workspaces: workspaceService, Snapshots: snapshots, Finisher: finisher, Cancel: supervisorService.Cancel}
+	service := &sessionapp.Service{ModelAttempts: max(1, c.LLM.MaxAttempts), ToolPolicy: policy, Repo: repo, Catalog: catalogue, Identity: auth, Content: content, Build: build, Ready: schedulerService.Ready, Notify: schedulerService.Notify, ResolveTools: registryService.Describe}
+	options = &httptransport.RuntimeOptions{Service: service, Repo: repo, UI: &agui.Projector{Repo: repo, Live: live, ResponseText: responseText, ToolState: toolState}, Trace: archive, Workspaces: workspaceService, Snapshots: snapshots, Finisher: finisher, Cancel: supervisorService.Cancel}
 	saveTraces := func(ctx context.Context) map[string][]run.View {
+		if sessions != nil {
+			if err := sessions.RetryUploads(ctx); err != nil && ctx.Err() == nil {
+				logger.Warn("session upload pending", "error", err)
+			}
+			return nil
+		}
 		jobs, err := lease.PendingTraces(ctx)
 		if err != nil && ctx.Err() == nil {
 			logger.Warn("could not load pending session traces", "error", err)

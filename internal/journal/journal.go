@@ -70,7 +70,7 @@ type RunReader interface {
 }
 
 func (j *Journal) ReadRun(ctx context.Context, actor, space, session, runID string, after int64, through *int64, limit int) (Page, error) {
-	if !storage.ValidID(runID) || !storage.ValidShortID(space) || !storage.ValidShortID(session) || after < 0 || limit < 1 || limit > 100 || through != nil && *through < after {
+	if (!storage.ValidShortID(runID) && !storage.ValidID(runID)) || !storage.ValidShortID(space) || !storage.ValidShortID(session) || after < 0 || limit < 1 || limit > 100 || through != nil && *through < after {
 		return Page{}, storage.ErrInvalid
 	}
 	var page Page
@@ -140,7 +140,7 @@ func Decode(data []byte, v any) error {
 	return nil
 }
 func Validate(e Proposed) error {
-	if !storage.ValidID(e.EventID) || (e.RunID != "" && !storage.ValidID(e.RunID)) || (e.CausationID != "" && !storage.ValidID(e.CausationID)) || e.SchemaVersion != 1 || (e.Actor.Kind != "user" && e.Actor.Kind != "system") || !storage.ValidID(e.Actor.ID) || e.OccurredAt.IsZero() || e.OccurredAt.Year() < 1000 || e.OccurredAt.Year() > 9999 {
+	if !storage.ValidID(e.EventID) || (e.RunID != "" && !storage.ValidShortID(e.RunID) && !storage.ValidID(e.RunID)) || (e.CausationID != "" && !storage.ValidID(e.CausationID)) || e.SchemaVersion != 1 || (e.Actor.Kind != "user" && e.Actor.Kind != "system") || !storage.ValidID(e.Actor.ID) || e.OccurredAt.IsZero() || e.OccurredAt.Year() < 1000 || e.OccurredAt.Year() > 9999 {
 		return storage.ErrSchema
 	}
 	for _, id := range []string{e.OperationID, e.CorrelationID} {

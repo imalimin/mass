@@ -74,6 +74,6 @@ export async function startFixtureServer({ storage = false, model = false, binar
     }
     await startApplication()
     const halt = async () => { if (!child) return; child.kill('SIGTERM'); const [code, signal] = await exited; if (code !== 0 || signal) throw Error(`Unclean maintenance shutdown: ${code} ${signal}`); child = undefined }
-    return { url, stop, modelBaseURL: provider?.endpoint ?? 'https://ark.cn-beijing.volces.com/api/v3', modelCalls: () => provider?.calls ?? 0, modelRequests: () => provider?.requests ?? [], restart: async () => { child.kill('SIGKILL'); await exited; errors = ''; await startApplication() }, maintenance: { directory, connection, configPath, env, cli, halt, start: startApplication, tos } }
+    return { url, stop, modelBaseURL: provider?.endpoint ?? 'https://ark.cn-beijing.volces.com/api/v3', modelCalls: () => provider?.calls ?? 0, modelRequests: () => provider?.requests ?? [], restart: async afterStop => { child.kill('SIGKILL'); await exited; await afterStop?.(); errors = ''; await startApplication() }, maintenance: { directory, connection, configPath, env, cli, halt, start: startApplication, tos } }
   } catch (error) { await stop().catch(() => {}); throw error }
 }

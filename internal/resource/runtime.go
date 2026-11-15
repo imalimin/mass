@@ -3,6 +3,7 @@ package resource
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 
 	"github.com/imalimin/mass/internal/domain/run"
@@ -77,6 +78,12 @@ func RunHistory(ctx context.Context, j *journal.Journal, actor, space, session, 
 }
 
 func ReadBytes(ctx context.Context, content *ContentStore, actor, space, id string, max int64) ([]byte, error) {
+	if content.Inline != nil {
+		raw, err := content.inlineBytes(ctx, actor, space, id, max)
+		if !errors.Is(err, storage.ErrBlobNotFound) {
+			return raw, err
+		}
+	}
 	_, f, err := content.Read(ctx, actor, space, id)
 	if err != nil {
 		return nil, err

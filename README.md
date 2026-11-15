@@ -230,20 +230,18 @@ D07 的真实文本、工具与摘要验收使用 `make smoke-real`，需明确�
 
 “Trace 与上下文”提供事件分类、固定水位分页、原始载荷按需读取/下载和上下文来源导航；模型统计按任务/摘要及冷启动/追加/压缩阶段分组，区分未知缓存统计和明确的零命中。首个文本片段延迟不等同于供应商内部推理耗时。
 
-命令行可以用已登录的会话 Cookie 查询 `GET /api/v1/diagnostics`，传入 `snapshot_id` 或 `run_id`。接口在当前账号可访问的空间内定位记录。响应包含 Run 状态与时间戳、工作区快照元数据和一页 Trace。快照查询会定位生成该快照的 Run。按 Run 查询时，未保存工作区快照的响应中 `snapshot` 为 `null`。找不到可访问的记录时返回 `404`。
+命令行可以用已登录的会话 Cookie 查询 `GET /api/v1/diagnostics`。只传 `session_id` 返回整个会话，只传 `run_id` 返回指定运行。响应的 `items` 来自会话 JSONL，包含消息、模型与工具步骤和运行终态。
 
 ```sh
 curl -fsS --cookie "$MASS_COOKIE_JAR" \
-  "http://127.0.0.1:8080/api/v1/diagnostics?snapshot_id=${SNAPSHOT_ID}&limit=100"
+  "http://127.0.0.1:8080/api/v1/diagnostics?run_id=${RUN_ID}"
 ```
-
-`trace.items` 包含 `model_step` 和 `run_finished`。`trace.upload_status` 为 `recording`、`pending` 或 `uploaded`。当 `trace.has_more` 为真时，下一页使用 `trace.next_after` 作为 `after_sequence`，并保留首屏的 `trace.through_sequence`。聚合指标可通过 `/runs/{run_id}/metrics` 单独读取。
 
 Run 开始执行前统一查询空间成员、Run 状态和模型启用状态。执行期间使用进程内的取消、撤权通知和额度检查。模型凭证、工具业务数据和 Run 终态仍按各自的读写路径存取。启动校验超时和 Run 总超时分别在 `run_finished.failure_detail` 中标记为 `start_check` 和 `run_deadline`。
 
 连接中断后，前端通过已鉴权的 UI 快照获取当前流和游标。服务重启后根据已提交业务记录恢复 UI 快照。连续恢复失败五次后停止自动重连，可点击“重新同步事件”取得新的成对快照与游标。空间切换和权限失效清理订阅与私有内容。Markdown 禁止原始 HTML、远端图片和非 HTTP(S) 链接；载荷在线预览最多 1 MiB，运行输出按 50 条窗口展开。
 
-`make verify-d08` 只使用隔离数据库与本地供应商夹具，包含既有阶段回归及调试闭环浏览器测试；不代替仍待授权的 D07 真实云验证。该阶段的数据库 schema 为 7；当前版本须升级至 schema 15，见下文升级说明。
+`make verify-d08` 只使用隔离数据库与本地供应商夹具，包含既有阶段回归及调试闭环浏览器测试；不代替仍待授权的 D07 真实云验证。该阶段的数据库 schema 为 7；当前版本须升级至 schema 16，见下文升级说明。
 
 ### 故障与隔离验收（D09 本地）
 
@@ -253,7 +251,7 @@ Run 开始执行前统一查询空间成员、Run 状态和模型启用状态。
 
 证据索引为 `scripts/acceptance-evidence.json`，检查报告输出到忽略的 `.cache/d09-acceptance.json`。引用检查只核对用例与源文件，不代替功能测试。A21/A31 的 D07 真实模型与缓存观测已于 2026-10-24 补齐；A22 的干净部署/备份还原已在 D10 补齐真实 TOS 验收；A25 使用此前真实 TOS 验收证据，本阶段没有再次调用云资源；A33 显式缓存未启用。因此本地通过不等于全部 MVP 验收完成，当前交付和完整门槛见下文 D10。
 
-该阶段的数据库 schema 为 7；当前版本须升级至 schema 15，见下文升级说明。数据库/日志故障导致执行入口停止时，先修复依赖并检查已保存记录，再重启；已有 running 会标记中断，未确认副作用须人工核实。不要直接重放旧 Run。快照保存失败时使用已有“仅重试保存文件”或“恢复最近已提交快照”，后者会放弃未保存文件。
+该阶段的数据库 schema 为 7；当前版本须升级至 schema 16，见下文升级说明。数据库/日志故障导致执行入口停止时，先修复依赖并检查已保存记录，再重启；已有 running 会标记中断，未确认副作用须人工核实。不要直接重放旧 Run。快照保存失败时使用已有“仅重试保存文件”或“恢复最近已提交快照”，后者会放弃未保存文件。
 
 ## D10 交付包与恢复演练
 
@@ -282,7 +280,7 @@ bin/mass restore-storage --config restored.yaml --source-config original.yaml --
 bin/mass serve --config restored.yaml
 ```
 
-`original.yaml` 和 `restored.yaml` 使用同一份模板的结构，各自引用原库/恢复库及源/目标 TOS 环境；源库不会被此命令连接或修改；源 TOS 也可指向保留了原对象键和字节的备份 Bucket。目标库必须是独立库名、对象前缀必须互不包含；命令核对主密钥、日志、对象大小和 SHA-256，所有复制成功后一次性提交位置索引，支持重试，不删除源对象。历史日志保留原始 URI，当前读取以校正后的对象索引为准。所有 ready 对象（包括暂未引用的对象）仍须完整校验；已被日志、草稿、版本、附件或快照等引用的缺失/未完成对象会明确拒绝。无任何已提交引用的 uploading 意图保留原状态和位置，不复制、不删除、不改成 ready，也不会变得可下载；命令报告保留数量。这类失败上传不再阻塞恢复，无需手工删库记录。
+`original.yaml` 和 `restored.yaml` 使用同一份配置模板，各自引用原库/恢复库及源/目标 TOS 环境。目标库必须独立，对象前缀必须互不包含。命令核对主密钥，按目录和会话引用复制对象，并校验大小和 SHA-256。每组文件复制成功后写入目标目录索引或会话 JSONL，支持重试。源库和源对象保留在原位置。
 
 本地演练需隔离 MariaDB 及 MariaDB 客户端工具；不调用真实云资源：
 
@@ -329,3 +327,14 @@ Schema 14 回填业务表所需的附件关联、运行失败详情和历史查�
 停服后执行 `bin/mass migrate --config mass.yaml`。这次升级直接删除旧空间及其成员关系、模型、Agent、Skill、会话、运行、快照索引和其他空间关联记录。用户账号和登录记录保留。旧 TOS 对象与磁盘工作区仍留在原位置。
 
 新建空间、Agent 定义和会话使用 16 位小写 Base32 ID。用户、模型、Skill、发布版本、Run 和快照继续使用 UUID。
+
+
+### 会话 JSONL 与 TOS 目录（schema 16）
+
+停服后运行 `bin/mass migrate --config mass.yaml`。这次迁移删除旧会话、运行和 Agent / Skill 数据表，重建精简的 `sessions` 和 `runs`。账号、空间和成员、模型配置及管理审计保留。现有 Agent、Skill 和会话需要重新创建。旧 TOS 对象不会由数据库迁移删除。
+
+空间、Agent、会话和 Run ID 都使用 16 个小写 Base32 字符。会话消息和 Trace 共用 `<prefix>/<space_id>/sessions/<session_id>/session.jsonl`。每条记录有 `type`、`role` 和会话内递增的 `seq`。运行接收时写入用户消息，模型及工具步骤在运行结束时一批追加，再覆盖上传到同一个键。
+
+每个已提交的文件快照将 Manifest 写在对应的 `run_finished`。工作区压缩包仍单独保存，快照 ID 用于内部文件恢复。重新打开会话时，消息、运行活动和诊断数据从会话记录生成。
+
+Agent 草稿和版本 JSON、Skill 草稿和版本 ZIP 及目录索引存放在对应空间的 TOS 前缀。备份还原以 `sessions` 中的会话索引和 TOS 中的目录及文件引用为准。

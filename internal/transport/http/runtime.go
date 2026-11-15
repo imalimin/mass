@@ -48,6 +48,60 @@ type RuntimeOptions struct {
 	Cancel     func(string)
 }
 
+type runResponse struct {
+	run.View
+	BaseSnapshotID    *string `json:"base_workspace_snapshot_id,omitempty"`
+	SnapshotID        *string `json:"workspace_snapshot_id,omitempty"`
+	SnapshotCommitted bool    `json:"workspace_snapshot_committed"`
+}
+
+type sessionResponse struct {
+	run.Session
+	SnapshotID *string `json:"latest_workspace_snapshot_id,omitempty"`
+}
+
+func (r *RuntimeOptions) runResponse(v run.View) any {
+	if _, ok := r.Repo.(sessionDiagnostics); ok {
+		return runResponse{View: v, SnapshotCommitted: v.WorkspaceSnapshotID != "" && v.FinishedAt != nil}
+	}
+	return v
+}
+
+func (r *RuntimeOptions) sessionResponse(v run.Session) any {
+	if _, ok := r.Repo.(sessionDiagnostics); ok {
+		return sessionResponse{Session: v}
+	}
+	return v
+}
+
+func publicSessionEvents(items []journal.Event) []journal.Event {
+	result := make([]journal.Event, 0, len(items))
+	for _, e := range items {
+		switch e.Type {
+		case "workspace.snapshot.created":
+			e.Data = json.RawMessage(`{"workspace_snapshot_committed":true}`)
+			e.Refs = []storage.Ref{}
+		case "workspace.restored":
+			var d journal.RestoreData
+			_ = journal.Decode(e.Data, &d)
+			e.Data, _ = json.Marshal(map[string]string{"reason": d.Reason})
+		case "run.created":
+			var data struct {
+				Snapshot struct {
+					run.Snapshot
+					BaseID *string `json:"base_workspace_snapshot_id,omitempty"`
+				} `json:"snapshot"`
+			}
+			if json.Unmarshal(e.Data, &data) == nil {
+				data.Snapshot.BaseID = nil
+				e.Data, _ = json.Marshal(data)
+			}
+		}
+		result = append(result, e)
+	}
+	return result
+}
+
 func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), options IdentityOptions, query func(*http.Request, identity.User) (identity.Query, int, string, error), token func(*http.Request) string, logger *slog.Logger) {
 	runtime := options.Runtime
 	if runtime == nil {
@@ -92,7 +146,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if err != nil {
 			return err
 		}
-		writeJSON(w, 201, v)
+		writeJSON(w, 201, runtime.sessionResponse(v))
 		return nil
 	})
 	listSessions := func(w http.ResponseWriter, r *http.Request, u identity.User) error {
@@ -108,7 +162,16 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if err != nil {
 			return err
 		}
-		writeJSON(w, 200, identity.Paginate(options.Service, scope, items, n, func(v run.Session) string { return v.ID }))
+		page := identity.Paginate(options.Service, scope, items, n, func(v run.Session) string { return v.ID })
+		if _, ok := runtime.Repo.(sessionDiagnostics); ok {
+			output := make([]sessionResponse, 0, len(page.Items))
+			for _, item := range page.Items {
+				output = append(output, sessionResponse{Session: item})
+			}
+			writeJSON(w, 200, map[string]any{"items": output, "next_cursor": page.NextCursor})
+		} else {
+			writeJSON(w, 200, page)
+		}
 		return nil
 	}
 	register("GET "+base+"/sessions", true, listSessions)
@@ -118,7 +181,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if err != nil {
 			return err
 		}
-		writeJSON(w, 200, v)
+		writeJSON(w, 200, runtime.sessionResponse(v))
 		return nil
 	})
 	register("POST "+base+"/sessions/{session_id}/runs", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
@@ -130,7 +193,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if err != nil {
 			return err
 		}
-		writeJSON(w, 202, v)
+		writeJSON(w, 202, runtime.runResponse(v))
 		return nil
 	})
 	register("GET "+base+"/sessions/{session_id}/runs", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
@@ -142,7 +205,16 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if err != nil {
 			return err
 		}
-		writeJSON(w, 200, identity.Paginate(options.Service, scope, items, n, func(v run.View) string { return v.ID }))
+		page := identity.Paginate(options.Service, scope, items, n, func(v run.View) string { return v.ID })
+		if _, ok := runtime.Repo.(sessionDiagnostics); ok {
+			output := make([]runResponse, 0, len(page.Items))
+			for _, item := range page.Items {
+				output = append(output, runResponse{View: item, SnapshotCommitted: item.WorkspaceSnapshotID != "" && item.FinishedAt != nil})
+			}
+			writeJSON(w, 200, map[string]any{"items": output, "next_cursor": page.NextCursor})
+		} else {
+			writeJSON(w, 200, page)
+		}
 		return nil
 	})
 	register("GET "+base+"/runs/{run_id}", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
@@ -150,7 +222,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if err != nil {
 			return err
 		}
-		writeJSON(w, 200, v)
+		writeJSON(w, 200, runtime.runResponse(v))
 		return nil
 	})
 	register("GET /api/v1/diagnostics", true, runtime.diagnostics)
@@ -162,7 +234,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if runtime.Cancel != nil {
 			runtime.Cancel(v.ID)
 		}
-		writeJSON(w, 200, v)
+		writeJSON(w, 200, runtime.runResponse(v))
 		return nil
 	})
 	register("GET "+base+"/sessions/{session_id}/messages", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
@@ -245,6 +317,9 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 				}
 				page.Events = filtered
 			}
+			if _, ok := runtime.Repo.(sessionDiagnostics); ok {
+				page.Events = publicSessionEvents(page.Events)
+			}
 			writeJSON(w, 200, page)
 			return nil
 		})
@@ -297,6 +372,9 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 			if err = resource.ReadJSON(r.Context(), svc.Content, u.ID, space, projection.Spec.SummaryRef.ObjectID, 32<<20, summary); err != nil {
 				return err
 			}
+		}
+		if _, ok := runtime.Repo.(sessionDiagnostics); ok {
+			sources = publicSessionEvents(sources)
 		}
 		writeJSON(w, 200, map[string]any{"projection": projection, "source_events": sources, "requests": []journal.Event{}, "summary": summary})
 		return nil
@@ -354,6 +432,9 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		return nil
 	})
 	register("GET "+base+"/sessions/{session_id}/workspace-snapshots", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		if _, ok := runtime.Repo.(sessionDiagnostics); ok {
+			return identity.ErrNotFound
+		}
 		items, err := runtime.Repo.RuntimeSnapshots(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("session_id"))
 		if err != nil {
 			return err
@@ -397,7 +478,11 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if err != nil {
 			return err
 		}
-		writeJSON(w, 200, snapshot)
+		if _, ok := runtime.Repo.(sessionDiagnostics); ok {
+			writeJSON(w, 200, map[string]bool{"workspace_snapshot_committed": true})
+		} else {
+			writeJSON(w, 200, snapshot)
+		}
 		return nil
 	})
 	register("POST "+base+"/sessions/{session_id}/workspace/restore", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {

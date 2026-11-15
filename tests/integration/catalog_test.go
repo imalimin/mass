@@ -61,7 +61,7 @@ func (b *hookBlobs) PutNew(ctx context.Context, key string, r io.Reader, n int64
 func exerciseCatalog(t *testing.T, blobs storage.BlobStore, prefix string) {
 	t.Helper()
 	ctx := context.Background()
-	db, e := testdb.New(ctx)
+	db, e := testdb.NewVersion(ctx, 15)
 	if e != nil {
 		t.Fatal(e)
 	}

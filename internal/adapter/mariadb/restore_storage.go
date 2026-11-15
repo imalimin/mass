@@ -18,8 +18,12 @@ func (s *Store) RelocateStorage(ctx context.Context, expectedDatabase string, ch
 	if expectedDatabase == "" || database != expectedDatabase {
 		return result, errors.New("restore database does not match --expect-database")
 	}
-	if err := s.CheckSchema(ctx); err != nil {
+	var version int64
+	if err := s.DB.QueryRowContext(ctx, "SELECT MAX(version_id) FROM goose_db_version WHERE is_applied=1").Scan(&version); err != nil {
 		return result, err
+	}
+	if version != 15 {
+		return result, errors.New("legacy storage relocation requires schema 15")
 	}
 	lease, err := s.OpenRuntime(ctx)
 	if err != nil {

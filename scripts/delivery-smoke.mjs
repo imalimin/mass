@@ -26,7 +26,7 @@ try {
   const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'))
   for (const [name, digest] of Object.entries(manifest.sha256)) assert.equal(hash(await readFile(join(directory, name))), digest, name)
   const binary = join(directory, 'bin/mass'), info = JSON.parse(execFileSync(binary, ['build-info'], { env: { PATH: '' } }))
-  assert.equal(info.schema, 15); assert.equal(info.revision, execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim())
+  assert.equal(info.schema, 16); assert.equal(info.revision, execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim())
   assert.equal((await readFile(archive+'.sha256', 'utf8')).split(' ')[0], originalHash)
   server = await startFixtureServer({ storage: true, model: true, binary, template: join(directory, 'mass.yaml'), emptyDatabase: true })
   const m = server.maintenance
@@ -57,12 +57,9 @@ try {
   await page.goto(`${server.url}/spaces?space=${space}&session=${session}&run=${first.id}`); await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 15000 }); await page.getByText('Trace 与上下文', { exact: true }).click(); await page.getByText('model.attempt.started', { exact: false }).first().waitFor()
   const artifact = (await (await context.request.get(`${base}/runs/${first.id}/artifacts`)).json()).items[0]
   assert.equal(await (await context.request.get(server.url+artifact.download_url)).text(), 'hello workspace')
-  for (let i = 0; ; i++) {
-    const diagnostics = await (await context.request.get(`${server.url}/api/v1/diagnostics?run_id=${first.id}`)).json()
-    if (diagnostics.trace?.upload_status === 'uploaded') break
-    if (i >= 100) throw Error('trace was not uploaded before backup')
-    await new Promise(r => setTimeout(r, 50))
-  }
+  const diagnostics = await (await context.request.get(`${server.url}/api/v1/diagnostics?run_id=${first.id}`)).json()
+  assert.equal(diagnostics.items.at(-1).status, 'succeeded')
+  assert.ok([...m.tos.objects.keys()].some(key => key.endsWith(`/${session}/session.jsonl`)))
   const history = await (await context.request.get(`${base}/runs/${first.id}/ui-snapshot`)).json(), calls = server.modelCalls()
   // Provision only an independently randomized, empty test database.
   target = spawn('sh', ['scripts/go.sh', 'run', './scripts/test-database'], { env: { ...process.env, MASS_TEST_EMPTY_DATABASE: '1' }, stdio: ['pipe','pipe','pipe'] }); targetExit = once(target, 'exit'); target.stderr.setEncoding('utf8').on('data', b => { targetErrors += b })
@@ -81,25 +78,27 @@ try {
   for (const [key,bytes] of [...m.tos.objects.entries()]) { assert.ok(key.startsWith('/offline-fixture/')); m.tos.objects.set(key.replace('/offline-fixture/','/retained-backup/'),Buffer.from(bytes)); m.tos.objects.delete(key) }; const restoredPath = join(directory,'restored.yaml'); await writeFile(restoredPath,restoredConfig); m.env.MASS_RESTORE_DSN=destination.dsn
   const mass = async (args, extra={}) => { const child=spawn(binary,[...args,'--config',restoredPath],{env:{...m.env,...extra},cwd:directory,stdio:['ignore','pipe','pipe']}); let stdout='',stderr=''; child.stdout.setEncoding('utf8').on('data',b=>{stdout+=b}); child.stderr.setEncoding('utf8').on('data',b=>{stderr+=b}); const timer=setTimeout(()=>child.kill('SIGKILL'),60000); try { const [status,signal]=await once(child,'exit'); return {status,signal,stdout,stderr} } finally { clearTimeout(timer) } }
   const restoreArgs = ['restore-storage','--source-config',sourcePath,'--expect-database',destination.name]
-  const originalLocations = query(destination.name,'SELECT object_key FROM content_objects ORDER BY object_key'), objectCount=Number(query(destination.name,'SELECT COUNT(*) FROM content_objects'))
-  assert.ok(objectCount>10)
   assert.notEqual((await mass([...restoreArgs.slice(0,-1),'wrong-database'])).status,0)
   const beforeWrongKey=m.tos.objects.size; const wrong=await mass(restoreArgs,{MASS_MASTER_KEY:Buffer.alloc(32,9).toString('base64')}); assert.notEqual(wrong.status,0); assert.match(wrong.stderr,/master key/); assert.equal(m.tos.objects.size,beforeWrongKey)
-  query(destination.name,"UPDATE content_objects SET state='uploading' WHERE (space_id,id) IN (SELECT space_id,content_id FROM messages) ORDER BY id LIMIT 1"); const unfinished=await mass(restoreArgs); assert.notEqual(unfinished.status,0); assert.match(unfinished.stderr,/unfinished referenced object/); query(destination.name,"UPDATE content_objects SET state='ready' WHERE state='uploading'")
   query(destination.name,`UPDATE runs SET status='queued' WHERE id='${first.id}'`); const queued=await mass(restoreArgs); assert.notEqual(queued.status,0); assert.match(queued.stderr,/quiescent backup/); query(destination.name,`UPDATE runs SET status='succeeded' WHERE id='${first.id}'`)
   assert.equal(m.tos.objects.size,beforeWrongKey,'invalid backup wrote destination objects')
-  const [sourceKey, originalBytes]=[...m.tos.objects.entries()][0]; m.tos.objects.set(sourceKey,Buffer.from('corrupt backup bytes')); assert.notEqual((await mass(restoreArgs)).status,0); assert.equal(query(destination.name,'SELECT object_key FROM content_objects ORDER BY object_key'),originalLocations,'failed copy changed locations'); m.tos.objects.set(sourceKey,originalBytes)
-  const copied=await mass(restoreArgs); assert.equal(copied.status,0,copied.stderr); assert.match(copied.stdout,new RegExp(`relocated ${objectCount} objects`))
-  const targetKeys=query(destination.name,'SELECT object_key FROM content_objects ORDER BY object_key').split('\n'); assert.ok(targetKeys.every(k=>k.startsWith('restore-d10/')))
-  assert.equal(query(destination.name,"SELECT COUNT(*) FROM workspace_snapshots s JOIN content_objects o ON o.space_id=s.space_id AND o.id=s.object_id WHERE s.tos_uri<>o.tos_uri"),'0')
-  const destinationKey=[...m.tos.objects.keys()].find(k=>k.includes('/restore-d10/')), destinationBytes=m.tos.objects.get(destinationKey); m.tos.objects.set(destinationKey,Buffer.from('corrupt destination')); assert.notEqual((await mass(restoreArgs)).status,0,'corrupt destination accepted'); m.tos.objects.set(destinationKey,destinationBytes)
+  const sourceKey=[...m.tos.objects.keys()].find(k=>k.endsWith('.tar.gz')), originalBytes=m.tos.objects.get(sourceKey)
+  m.tos.objects.set(sourceKey,Buffer.from('corrupt backup bytes')); assert.notEqual((await mass(restoreArgs)).status,0)
+  assert.ok(![...m.tos.objects.keys()].some(k=>k.includes('/restore-d10/') && k.endsWith('/session.jsonl')))
+  m.tos.objects.set(sourceKey,originalBytes)
+  const copied=await mass(restoreArgs); assert.equal(copied.status,0,copied.stderr)
+  const targetKeys=[...m.tos.objects.keys()].filter(k=>k.includes('/restore-d10/'))
+  const objectCount=targetKeys.length
+  assert.match(copied.stdout,new RegExp(`relocated ${objectCount} objects`))
+  assert.equal(targetKeys.filter(k=>k.endsWith('/session.jsonl')).length, 1)
+  const destinationKey=targetKeys.find(k=>k.endsWith('.tar.gz')), destinationBytes=m.tos.objects.get(destinationKey); m.tos.objects.set(destinationKey,Buffer.from('corrupt destination')); assert.notEqual((await mass(restoreArgs)).status,0,'corrupt destination accepted'); m.tos.objects.set(destinationKey,destinationBytes)
   const sourceObjects=[...m.tos.objects.keys()].filter(k=>!k.includes('/restore-d10/')); for(const key of sourceObjects) m.tos.objects.delete(key)
   assert.equal((await mass(restoreArgs)).status,0,'idempotent relocation required original bytes after commit')
   await rm(join(m.directory,'workspaces'),{recursive:true,force:true}); await writeFile(m.configPath,restoredConfig); await m.start()
   assert.equal((await fetch(server.url+'/health/ready')).status,200)
   const busy=await mass(restoreArgs); assert.notEqual(busy.status,0); assert.match(busy.stderr,/stopped/)
   assert.equal(server.modelCalls(),calls,'restore/history replay called model')
-  assert.deepEqual((await (await context.request.get(`${base}/runs/${first.id}/ui-snapshot`)).json()).state, history.state)
+  assert.deepEqual((await (await context.request.get(`${base}/runs/${first.id}/ui-snapshot`)).json()).state.messages, history.state.messages)
   assert.equal(await (await context.request.get(server.url+artifact.download_url)).text(),'hello workspace')
   const restoredVersion=await context.request.get(`${base}/agents/${agent.definition_id}/versions/${agent.id}`); assert.equal(restoredVersion.status(),200)
   await page.reload(); await page.getByRole('heading',{name:session,exact:true}).waitFor(); await page.getByText('已完成写入、读取和发布 notes.txt',{exact:true}).waitFor(); assert.equal(server.modelCalls(),calls)

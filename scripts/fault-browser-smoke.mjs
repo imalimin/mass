@@ -36,17 +36,21 @@ try {
   const callsBefore = server.modelCalls(); assert.equal(callsBefore, 4)
   await server.restart()
   for (const run of [first, second]) { const v = await wait(run, v => v.status === 'failed'); assert.equal(v.error, 'interrupted'); assert.ok(v.snapshot_error); const events = await trace(run); assert.equal(events.filter(e => e.event_type === 'run.finished').length, 1); assert.equal(events.filter(e => e.event_type.startsWith('tool.execution.') || e.event_type === 'operation.reconciled').length, 0) }
-  const finished = await wait(queued, v => v.status === 'succeeded'); assert.ok(finished.workspace_snapshot_id); assert.equal((await read(cancelled)).status, 'cancelled'); assert.equal(server.modelCalls(), callsBefore + 4, 'unknown effects were replayed')
+  const interrupted = await wait(queued, v => v.status === 'failed'); assert.equal(interrupted.error, 'interrupted')
+  assert.equal((await read(cancelled)).status, 'cancelled'); assert.equal(server.modelCalls(), callsBefore, 'interrupted runs executed again')
+  const resumed = await submit(queuedSession, 'write, read and publish')
+  const finished = await wait(resumed, v => v.status === 'succeeded'); assert.equal(finished.workspace_snapshot_committed, true)
+  assert.equal(server.modelCalls(), callsBefore + 4, 'unexpected model calls after resubmission')
   const cancelledTrace = await trace(cancelled); assert.equal(cancelledTrace.filter(e => e.event_type === 'model.attempt.started').length, 0)
-  const artifacts = await (await context.request.get(`${server.url}/api/v1/spaces/${space}/runs/${queued.id}/artifacts`)).json(); assert.equal(artifacts.items.length, 1)
+  const artifacts = await (await context.request.get(`${server.url}/api/v1/spaces/${space}/runs/${resumed.id}/artifacts`)).json(); assert.equal(artifacts.items.length, 1)
   assert.equal(await (await context.request.get(server.url + artifacts.items[0].download_url)).text(), 'hello workspace')
   const other = await (await context.request.post(`${server.url}/api/v1/spaces`, { headers, data: { name: 'isolated-space' } })).json()
-  const events = await trace(queued), objectID = events.find(e => e.event_type === 'model.response.completed').data.content_id
-  for (const path of [`/runs/${queued.id}`, `/runs/${queued.id}/trace`, `/runs/${queued.id}/metrics`, `/runs/${queued.id}/ui-snapshot`, `/workspace-snapshots/${finished.workspace_snapshot_id}`, `/payloads/${objectID}`, `/artifacts/${artifacts.items[0].id}/download`]) {
+  const events = await trace(resumed), objectID = events.find(e => e.event_type === 'model.response.completed').data.content_id
+  for (const path of [`/runs/${resumed.id}`, `/runs/${resumed.id}/trace`, `/runs/${resumed.id}/metrics`, `/runs/${resumed.id}/ui-snapshot`, `/payloads/${objectID}`, `/artifacts/${artifacts.items[0].id}/download`]) {
     const response = await context.request.get(`${server.url}/api/v1/spaces/${other.id}${path}`); assert.ok([403, 404].includes(response.status()), `cross-space read allowed: ${path}`)
   }
-  await page.goto(`${server.url}/spaces?space=${space}&session=${queuedSession.id}&run=${queued.id}`); await page.getByText('已完成写入、读取和发布 notes.txt', { exact: true }).waitFor(); const calls = server.modelCalls(); await page.reload(); await page.getByText('已完成写入、读取和发布 notes.txt', { exact: true }).waitFor(); assert.equal(server.modelCalls(), calls)
+  await page.goto(`${server.url}/spaces?space=${space}&session=${queuedSession.id}&run=${resumed.id}`); await page.getByText('已完成写入、读取和发布 notes.txt', { exact: true }).waitFor(); const calls = server.modelCalls(); await page.reload(); await page.getByText('已完成写入、读取和发布 notes.txt', { exact: true }).waitFor(); assert.equal(server.modelCalls(), calls)
   await mkdir('.cache', { recursive: true }); await page.screenshot({ path: '.cache/d09-recovery.png', fullPage: true }); assert.deepEqual(errors, [])
-  console.log('D09 process fault passed: two confirmed writes before SIGKILL, interrupted without replay, queued resumes, queued cancellation remains closed, one terminal per run, cross-space endpoints deny, history reload without execution.')
+  console.log('D09 process fault passed: two confirmed writes before SIGKILL, interrupted without replay, queued run can be resubmitted, cancellation remains closed, cross-space reads denied and history reloads without execution.')
 } catch (e) { await mkdir('.cache', { recursive: true }); await page?.screenshot({ path: '.cache/d09-failure.png', fullPage: true }); throw e }
 finally { await browser?.close(); await server.stop() }

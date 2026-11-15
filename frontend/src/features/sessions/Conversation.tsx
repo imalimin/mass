@@ -425,9 +425,7 @@ function RunDetails({ space, session, chosenRun, runs, current, onSelect, onClos
       <dl className="run-detail-info">
         <div><dt>状态</dt><dd>{statuses[selected.status]}{selected.error && ` · ${selected.error}`}</dd></div>
         <div><dt>版本</dt><CopyableRunID label="版本" value={session.version_id} /></div>
-        <div><dt>文件快照</dt>{selected.workspace_snapshot_id
-          ? <CopyableRunID key={selected.workspace_snapshot_id} label="文件快照" value={selected.workspace_snapshot_id} />
-          : <dd>尚未提交</dd>}</div>
+        <div><dt>文件快照</dt><dd>{selected.workspace_snapshot_committed ? '已提交' : '尚未提交'}</dd></div>
         <div><dt>Token 用量</dt><dd>输入 {input ?? '未知'} / 输出 {output ?? '未知'} / 缓存读取 {cached ?? '未知'} / 输入缓存命中率 {cacheHitRate}</dd></div>
       </dl>
       {historical.error && <p role="alert">{historical.error}</p>}

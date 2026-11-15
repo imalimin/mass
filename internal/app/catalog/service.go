@@ -168,14 +168,16 @@ func (s *Service) Publish(ctx context.Context, actor, space, kind, id, label str
 	if err != nil {
 		return Version{}, err
 	}
-	o, err := s.Content.Put(ctx, actor, space, uuid.NewString(), "definition.bundle", "application/json", bytes.NewReader(raw))
+	versionID := uuid.NewString()
+	o, err := s.Content.PutAt(ctx, actor, space, versionID, "definition.bundle", "application/json",
+		s.Content.CatalogObjectKey(space, kind, id, "versions/"+versionID+".json"), bytes.NewReader(raw))
 	if err != nil {
 		return Version{}, err
 	}
 	if debug {
 		label = ""
 	}
-	v := Version{ID: uuid.NewString(), DefinitionID: id, Label: label, Debug: debug, ContentID: o.ID, SHA256: o.SHA256, CreatedAt: time.Now().UTC().Truncate(time.Microsecond), Bundle: b}
+	v := Version{ID: versionID, DefinitionID: id, Label: label, Debug: debug, ContentID: o.ID, SHA256: o.SHA256, CreatedAt: time.Now().UTC().Truncate(time.Microsecond), Bundle: b}
 	err = s.Repo.CatalogPublish(ctx, actor, space, &v)
 	return v, err
 }
@@ -198,10 +200,13 @@ func (s *Service) Version(ctx context.Context, actor, space, kind, id, version s
 
 func (s *Service) Versions(ctx context.Context, actor, space, kind, id string, debug bool, q identity.Query) ([]Version, error) {
 	items, err := s.Repo.CatalogVersions(ctx, actor, space, kind, id, debug, q)
-	if err != nil || kind != "skill" {
+	if err != nil {
 		return items, err
 	}
 	for i := range items {
+		if items[i].Bundle.FormatVersion != 0 {
+			continue
+		}
 		if err := s.loadVersion(ctx, actor, space, kind, &items[i]); err != nil {
 			return nil, err
 		}

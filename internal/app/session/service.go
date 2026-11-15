@@ -70,6 +70,9 @@ func (s *Service) ready(ctx context.Context) error {
 	return nil
 }
 func (s *Service) Create(ctx context.Context, actor, space string, in CreateInput) (run.Session, error) {
+	if s.Content.Inline != nil && in.SourceSnapshotID != "" {
+		return run.Session{}, identity.ErrInvalid
+	}
 	if !keyPattern.MatchString(in.Key) || !storage.ValidShortID(in.AgentID) || len(in.Title) > 200 || !utf8.ValidString(in.Title) || (in.VersionID != "" && !storage.ValidID(in.VersionID)) || (in.SourceSnapshotID != "" && !storage.ValidID(in.SourceSnapshotID)) {
 		return run.Session{}, identity.ErrInvalid
 	}
@@ -191,7 +194,16 @@ func (s *Service) Submit(ctx context.Context, actor, space, sessionID string, in
 		Session string
 		Input   SubmitInput
 	}{sessionID, in})
-	_, id, found, err := s.Repo.FindRuntimeRequest(ctx, actor, space, "run", in.Key, digest)
+	var id string
+	var found bool
+	var err error
+	if repo, ok := s.Repo.(interface {
+		FindRunRequest(context.Context, string, string, string, string, string) (string, bool, error)
+	}); ok {
+		id, found, err = repo.FindRunRequest(ctx, actor, space, sessionID, in.Key, digest)
+	} else {
+		_, id, found, err = s.Repo.FindRuntimeRequest(ctx, actor, space, "run", in.Key, digest)
+	}
 	if err != nil {
 		return run.View{}, err
 	}
@@ -246,6 +258,9 @@ func (s *Service) Submit(ctx context.Context, actor, space, sessionID string, in
 	definition.ToolPolicy = s.ToolPolicy
 	definition.ModelAttempts = max(1, s.ModelAttempts)
 	id = uuid.NewString()
+	if s.Content.Inline != nil {
+		id = storage.NewShortID()
+	}
 	definition.Instructions = ""
 	definition.Platform = ""
 	for i := range definition.Skills {

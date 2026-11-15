@@ -37,7 +37,7 @@ func (p *Projector) loadSummary(ctx context.Context, s run.Snapshot, ref storage
 		if source.EventID == "" {
 			return first, firstEvent, nil, storage.ErrIntegrity
 		}
-		object, err := p.Content.Repo.Object(ctx, s.ActorID, s.SpaceID, ref.ObjectID, true)
+		object, err := p.Content.Object(ctx, s.ActorID, s.SpaceID, ref.ObjectID)
 		if err != nil {
 			return first, firstEvent, nil, err
 		}

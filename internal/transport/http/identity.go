@@ -342,10 +342,16 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 			if err != nil {
 				return err
 			}
+			if storageOptions.Content.Inline != nil {
+				page.Events = publicSessionEvents(page.Events)
+			}
 			writeJSON(w, 200, page)
 			return nil
 		})
 		register("GET /api/v1/spaces/{space_id}/workspace-snapshots/{id}", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+			if storageOptions.Content.Inline != nil {
+				return identity.ErrNotFound
+			}
 			snapshot, err := storageOptions.Snapshots.Repo.Snapshot(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("id"))
 			if err != nil {
 				return err

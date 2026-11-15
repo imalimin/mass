@@ -73,7 +73,7 @@ func (a *Archive) Save(ctx context.Context, v run.View, failure *run.FailureDeta
 	if err := a.append(ctx, path, key, v, failure, hasPrevious); err != nil {
 		return err
 	}
-	a.Recorder.forget(v.ID)
+	a.Recorder.Forget(v.ID)
 	return nil
 }
 
@@ -141,7 +141,7 @@ func (a *Archive) append(ctx context.Context, path, key string, v run.View, fail
 		return err
 	}
 
-	steps := a.Recorder.steps(v.ID)
+	steps := a.Recorder.Steps(v.ID)
 
 	encoder := json.NewEncoder(dst)
 	for _, step := range steps {

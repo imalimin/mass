@@ -537,37 +537,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-  /api/v1/spaces/{space_id}/workspace-snapshots/{id}:
-    get:
-      operationId: getWorkspaceSnapshot
-      security:
-        - SessionCookie: []
-      parameters:
-        - name: space_id
-          in: path
-          required: true
-          schema:
-            $ref: '#/components/schemas/ShortResourceID'
-        - name: id
-          in: path
-          required: true
-          schema:
-            $ref: '#/components/schemas/ResourceID'
-      responses:
-        '200':
-          description: Authorized committed data.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/WorkspaceSnapshot'
-        default:
-          description: >-
-            400 invalid cursor/schema, 401 unauthenticated, 403 forbidden, 404 missing or unreferenced, 503
-            integrity/storage failure.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/payloads/{id}:
     get:
       operationId: downloadPayload
@@ -2828,8 +2797,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            format: uuid
+            $ref: '#/components/schemas/ShortResourceID'
       responses:
         '200':
           description: Successful operation.
@@ -2858,8 +2826,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            format: uuid
+            $ref: '#/components/schemas/ShortResourceID'
       responses:
         '200':
           description: Successful operation.
@@ -2920,38 +2887,21 @@ paths:
   /api/v1/diagnostics:
     get:
       operationId: getRunDiagnostics
-      description: Supply exactly one of run_id or snapshot_id. The lookup is limited to spaces the caller can access.
+      description: Supply exactly one run_id or session_id. Run lookup uses the session mapping.
       security:
         - SessionCookie: []
       parameters:
         - name: run_id
           in: query
           schema:
-            type: string
-            format: uuid
-        - name: snapshot_id
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: session_id
           in: query
           schema:
-            type: string
-            format: uuid
-        - name: after_sequence
-          in: query
-          schema:
-            $ref: '#/components/schemas/Sequence'
-        - name: through_sequence
-          in: query
-          schema:
-            $ref: '#/components/schemas/Sequence'
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
+            $ref: '#/components/schemas/ShortResourceID'
       responses:
         '200':
-          description: Run state, workspace snapshot metadata, and a page of grouped session trace records.
+          description: Diagnostic records selected from the session JSONL.
           content:
             application/json:
               schema:
@@ -2977,8 +2927,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            format: uuid
+            $ref: '#/components/schemas/ShortResourceID'
         - name: after_sequence
           in: query
           schema:
@@ -3021,8 +2970,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            format: uuid
+            $ref: '#/components/schemas/ShortResourceID'
       responses:
         '200':
           description: Successful operation.
@@ -3051,8 +2999,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            format: uuid
+            $ref: '#/components/schemas/ShortResourceID'
         - name: after_sequence
           in: query
           schema:
@@ -3095,8 +3042,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            format: uuid
+            $ref: '#/components/schemas/ShortResourceID'
         - name: projection_id
           in: path
           required: true
@@ -3131,8 +3077,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            format: uuid
+            $ref: '#/components/schemas/ShortResourceID'
       responses:
         '200':
           description: Successful operation.
@@ -3140,35 +3085,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RuntimeArtifacts'
-        default:
-          description: Request rejected or dependency unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-  /api/v1/spaces/{space_id}/sessions/{session_id}/workspace-snapshots:
-    get:
-      operationId: getSessionSnapshots
-      security:
-        - SessionCookie: []
-      parameters:
-        - name: space_id
-          in: path
-          required: true
-          schema:
-            $ref: '#/components/schemas/ShortResourceID'
-        - name: session_id
-          in: path
-          required: true
-          schema:
-            $ref: '#/components/schemas/ShortResourceID'
-      responses:
-        '200':
-          description: Successful operation.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RuntimeSnapshots'
         default:
           description: Request rejected or dependency unavailable.
           content:
@@ -3197,7 +3113,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WorkspaceSnapshot'
+                type: object
+                additionalProperties: false
+                required: [workspace_snapshot_committed]
+                properties:
+                  workspace_snapshot_committed:
+                    type: boolean
         default:
           description: Request rejected or dependency unavailable.
           content:
@@ -3248,8 +3169,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            format: uuid
+            $ref: '#/components/schemas/ShortResourceID'
       responses:
         '200':
           description: Successful operation.
@@ -3313,8 +3233,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            format: uuid
+            $ref: '#/components/schemas/ShortResourceID'
         - name: after
           in: query
           schema:
@@ -3395,8 +3314,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            format: uuid
+            $ref: '#/components/schemas/ShortResourceID'
       responses:
         '200':
           description: Successful operation.
@@ -4407,43 +4325,6 @@ components:
           $ref: '#/components/schemas/Sequence'
         has_more:
           type: boolean
-    WorkspaceSnapshot:
-      type: object
-      additionalProperties: false
-      required:
-        - id
-        - space_id
-        - session_id
-        - source_run_id
-        - object_id
-        - manifest_ref
-        - tos_uri
-        - archive_sha256
-        - format_version
-      properties:
-        id:
-          $ref: '#/components/schemas/ResourceID'
-        space_id:
-          $ref: '#/components/schemas/ShortResourceID'
-        session_id:
-          $ref: '#/components/schemas/ShortResourceID'
-        source_run_id:
-          $ref: '#/components/schemas/ResourceID'
-        base_snapshot_id:
-          $ref: '#/components/schemas/ResourceID'
-        object_id:
-          $ref: '#/components/schemas/ResourceID'
-        manifest_ref:
-          $ref: '#/components/schemas/ResourceID'
-        tos_uri:
-          type: string
-          pattern: ^tos://
-        archive_sha256:
-          type: string
-          pattern: ^[0-9a-f]{64}$
-        format_version:
-          type: integer
-          const: 1
     RuntimeRef:
       type: object
       additionalProperties: false
@@ -4602,57 +4483,6 @@ components:
           type: integer
         tool_policy:
           $ref: '#/components/schemas/RuntimeToolPolicy'
-    RuntimeSnapshot:
-      type: object
-      additionalProperties: false
-      required:
-        - id
-        - space_id
-        - session_id
-        - actor_id
-        - definition_ref
-        - user_event_id
-        - base_workspace_snapshot_id
-        - definition
-        - build
-        - protocol_profile
-        - mapper_version
-        - parser_version
-        - created_at
-      properties:
-        id:
-          type: string
-          format: uuid
-        space_id:
-          $ref: '#/components/schemas/ShortResourceID'
-        session_id:
-          $ref: '#/components/schemas/ShortResourceID'
-        actor_id:
-          type: string
-          format: uuid
-        definition_ref:
-          $ref: '#/components/schemas/RuntimeRef'
-        user_event_id:
-          type: string
-          format: uuid
-        base_workspace_snapshot_id:
-          type: string
-        definition:
-          $ref: '#/components/schemas/RuntimeDefinition'
-        build:
-          type: string
-        protocol_profile:
-          type: string
-          const: mass-agui-v1
-        mapper_version:
-          const: 1
-          type: integer
-        parser_version:
-          const: 1
-          type: integer
-        created_at:
-          type: string
-          format: date-time
     RuntimeUsage:
       type: object
       additionalProperties: false
@@ -4678,174 +4508,33 @@ components:
           anyOf:
             - type: integer
             - type: 'null'
-    SessionTracePage:
+    RunDiagnostics:
       type: object
       additionalProperties: false
-      required: [items, through_sequence, next_after, has_more, upload_status]
+      required: [items]
       properties:
         items:
           type: array
           items:
-            oneOf:
-              - $ref: '#/components/schemas/TraceModelStep'
-              - $ref: '#/components/schemas/TraceRunFinished'
-        through_sequence:
-          $ref: '#/components/schemas/Sequence'
-        next_after:
-          $ref: '#/components/schemas/Sequence'
-        has_more:
-          type: boolean
-        upload_status:
-          type: string
-          enum: [recording, pending, uploaded]
-    TraceModelStep:
+            $ref: '#/components/schemas/SessionDiagnosticRecord'
+    SessionDiagnosticRecord:
       type: object
-      required: [type, run_id, step, attempt_id, purpose, started_at, model, tools]
+      required: [seq, type, role]
+      additionalProperties: true
       properties:
-        type:
-          type: string
-          enum: [model_step]
-        run_id:
-          type: string
-          format: uuid
-        step:
+        seq:
           type: integer
           minimum: 1
-        attempt_id:
-          type: string
-          format: uuid
-        retry_of:
-          type: string
-          format: uuid
-        purpose:
-          type: string
-          enum: [task, summary]
-        started_at:
-          type: string
-          format: date-time
-        model:
-          type: object
-          required: [id, status, http_status, duration_ms, first_text_ms, finish_reason, text, reasoning, tool_calls, usage, error]
-          properties:
-            id:
-              type: string
-            status:
-              type: string
-              enum: [succeeded, failed, cancelled]
-            http_status:
-              type: integer
-              description: Zero when no HTTP status was observed.
-            duration_ms:
-              type: integer
-            first_text_ms:
-              type: [integer, 'null']
-            finish_reason:
-              type: string
-            text:
-              type: string
-            reasoning:
-              type: [string, 'null']
-            tool_calls:
-              type: array
-              items:
-                type: object
-                required: [id, type, function]
-                properties:
-                  id:
-                    type: string
-                  type:
-                    type: string
-                  function:
-                    type: object
-                    required: [name, arguments]
-                    properties:
-                      name:
-                        type: string
-                      arguments:
-                        type: string
-            usage:
-              description: Null when usage is absent. Individual missing counters are zero.
-              oneOf:
-                - type: 'null'
-                - type: object
-                  required: [input_tokens, input_cached_tokens, output_tokens, reasoning_tokens]
-                  properties:
-                    input_tokens:
-                      type: integer
-                    input_cached_tokens:
-                      type: integer
-                    output_tokens:
-                      type: integer
-                    reasoning_tokens:
-                      type: integer
-            error:
-              type: string
-        tools:
-          type: array
-          items:
-            type: object
-            required: [call_id, native_tool_call_id, name, arguments, status, duration_ms]
-            properties:
-              call_id:
-                type: string
-              native_tool_call_id:
-                type: string
-              name:
-                type: string
-              arguments: {}
-              status:
-                type: string
-              duration_ms:
-                type: [integer, 'null']
-              result: {}
-              result_ref:
-                type: string
-    TraceRunFinished:
-      type: object
-      required: [type, run_id, status, started_at, finished_at, duration_ms, error, snapshot_id]
-      properties:
         type:
           type: string
-          enum: [run_finished]
+          enum: [session_created, run_accepted, model_step, context_summary, run_finished, attachment_added, workspace_restored]
+        role:
+          type: string
+          enum: [system, user, assistant, tool]
         run_id:
-          type: string
-          format: uuid
-        status:
-          type: string
-          enum: [succeeded, failed, cancelled]
-        started_at:
-          type: [string, 'null']
-          format: date-time
-        finished_at:
-          type: string
-          format: date-time
-        duration_ms:
-          type: [integer, 'null']
-        error:
-          type: string
-        failure_detail:
-          type: object
-          additionalProperties: true
-        snapshot_id:
-          type: [string, 'null']
-          format: uuid
-    RunDiagnostics:
-      type: object
-      additionalProperties: false
-      required:
-        - run
-        - snapshot
-        - trace
-      properties:
-        run:
-          $ref: '#/components/schemas/RuntimeRun'
-        snapshot:
-          description: The selected snapshot, or the run's saved workspace snapshot. Null when the run has not saved a snapshot.
-          oneOf:
-            - $ref: '#/components/schemas/WorkspaceSnapshot'
-            - type: 'null'
-        trace:
-          $ref: '#/components/schemas/SessionTracePage'
+          $ref: '#/components/schemas/ShortResourceID'
+        workspace_snapshot_committed:
+          type: boolean
     RuntimeRun:
       type: object
       additionalProperties: false
@@ -4856,7 +4545,6 @@ components:
         - actor_id
         - definition_ref
         - user_event_id
-        - base_workspace_snapshot_id
         - definition
         - build
         - protocol_profile
@@ -4868,15 +4556,14 @@ components:
         - final_response_event_id
         - error
         - snapshot_error
-        - workspace_snapshot_id
+        - workspace_snapshot_committed
         - started_at
         - finished_at
         - heartbeat_at
         - usage
       properties:
         id:
-          type: string
-          format: uuid
+          $ref: '#/components/schemas/ShortResourceID'
         space_id:
           $ref: '#/components/schemas/ShortResourceID'
         session_id:
@@ -4889,8 +4576,6 @@ components:
         user_event_id:
           type: string
           format: uuid
-        base_workspace_snapshot_id:
-          type: string
         definition:
           $ref: '#/components/schemas/RuntimeDefinition'
         build:
@@ -4923,8 +4608,8 @@ components:
           type: string
         snapshot_error:
           type: string
-        workspace_snapshot_id:
-          type: string
+        workspace_snapshot_committed:
+          type: boolean
         started_at:
           anyOf:
             - type: string
@@ -4953,7 +4638,6 @@ components:
         - definition_id
         - version_id
         - definition_ref
-        - latest_workspace_snapshot_id
         - workspace_error
         - last_sequence
         - created_at
@@ -4974,8 +4658,6 @@ components:
           format: uuid
         definition_ref:
           $ref: '#/components/schemas/RuntimeRef'
-        latest_workspace_snapshot_id:
-          type: string
         workspace_error:
           type: string
         last_sequence:
@@ -5095,16 +4777,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RuntimeArtifact'
-    RuntimeSnapshots:
-      type: object
-      additionalProperties: false
-      required:
-        - items
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/WorkspaceSnapshot'
     RuntimeRestored:
       type: object
       additionalProperties: false
@@ -5267,8 +4939,6 @@ components:
         agent_id:
           $ref: '#/components/schemas/ShortResourceID'
         version_id:
-          type: string
-        source_workspace_snapshot_id:
           type: string
         title:
           type: string

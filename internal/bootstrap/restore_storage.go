@@ -11,15 +11,16 @@ import (
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/imalimin/mass/internal/adapter/archive"
 	"github.com/imalimin/mass/internal/adapter/mariadb"
 	"github.com/imalimin/mass/internal/adapter/secrets"
 	"github.com/imalimin/mass/internal/adapter/tos"
 	"github.com/imalimin/mass/internal/domain/storage"
-	"github.com/imalimin/mass/internal/resource/trace"
+	"github.com/imalimin/mass/internal/resource/sessionlog"
 )
 
-// RestoreStorage copies retained TOS bytes into a distinct namespace and then
-// atomically changes the restored database's location indexes. No model runs.
+// RestoreStorage copies retained TOS bytes into a distinct namespace.
+// Session and catalog keys are resolved using the target configuration.
 func RestoreStorage(ctx context.Context, source, target Config, expectedDatabase string) (result storage.RestoreResult, err error) {
 	fromDB, err := mysql.ParseDSN(os.Getenv(source.Database.DSNEnv))
 	if err != nil {
@@ -59,20 +60,54 @@ func RestoreStorage(ctx context.Context, source, target Config, expectedDatabase
 		return result, err
 	}
 	defer store.DB.Close()
-	return store.RelocateStorage(ctx, expectedDatabase, func(space, id, key string, ciphertext []byte) error {
-		plain, err := cipher.Open(space, id, key, ciphertext)
-		clear(plain)
-		return err
-	}, func(ctx context.Context, o storage.Object) (storage.Object, error) {
+	if err := store.CheckSchema(ctx); err != nil {
+		return result, err
+	}
+	lease, err := store.OpenRuntime(ctx)
+	if err != nil {
+		return result, errors.New("restore requires the target service to be stopped")
+	}
+	defer lease.Close()
+	var active int
+	if err := store.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM runs WHERE status IN ('queued','running')").Scan(&active); err != nil {
+		return result, err
+	}
+	if active != 0 {
+		return result, errors.New("restore requires a quiescent backup with no queued or running runs")
+	}
+	rows, err := store.DB.QueryContext(ctx, "SELECT space_id,secret_binding_id,key_id,ciphertext FROM model_configs")
+	if err != nil {
+		return result, err
+	}
+	for rows.Next() {
+		var space, id, key string
+		var ciphertext []byte
+		if err = rows.Scan(&space, &id, &key, &ciphertext); err == nil {
+			plain, err := cipher.Open(space, id, key, ciphertext)
+			clear(plain)
+			if err != nil {
+				rows.Close()
+				return result, errors.New("restore master key cannot decrypt all model keys")
+			}
+		}
+		if err != nil {
+			rows.Close()
+			return result, err
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return result, err
+	}
+	copyObject := func(ctx context.Context, o storage.Object) (storage.Object, error) {
+		if err := lease.Check(ctx); err != nil {
+			return o, err
+		}
 		if !storage.ValidShortID(o.SpaceID) || !storage.ValidID(o.ID) || o.Size < 0 || o.Size > target.Storage.MaxObjectBytes {
 			return o, storage.ErrIntegrity
 		}
-		next := o
-		next.Key = toPrefix + o.SpaceID + "/objects/" + o.ID
-		next.URI = to.URI(next.Key)
-		next.VersionID = ""
-		next.ETag = ""
-		if o.Key == next.Key && o.URI == next.URI {
+		if strings.HasPrefix(o.Key, toPrefix+o.SpaceID+"/") && o.URI == to.URI(o.Key) {
 			r, err := to.Open(ctx, o.Key, o.VersionID)
 			if err != nil {
 				return o, err
@@ -80,12 +115,17 @@ func RestoreStorage(ctx context.Context, source, target Config, expectedDatabase
 			defer r.Close()
 			return o, checkObject(ctx, r, o, io.Discard)
 		}
+		next := o
+		next.Key = toPrefix + strings.TrimPrefix(o.Key, fromPrefix)
+		next.URI = to.URI(next.Key)
+		next.VersionID = ""
+		next.ETag = ""
 		// A retained backup may live in another bucket. Its keys and bytes must
 		// match the original index; original version IDs apply only in the
 		// original bucket. A backup copy is verified by size/hash instead.
 		location, validURI := strings.CutPrefix(o.URI, "tos://")
 		bucket, logicalKey, hasKey := strings.Cut(location, "/")
-		if !strings.HasPrefix(o.Key, fromPrefix) || !validURI || !hasKey || bucket == "" || logicalKey != o.Key {
+		if !strings.HasPrefix(o.Key, fromPrefix+o.SpaceID+"/") || !validURI || !hasKey || bucket == "" || logicalKey != o.Key {
 			return o, errors.New("object is outside the declared source namespace")
 		}
 		sourceVersion := o.VersionID
@@ -125,37 +165,48 @@ func RestoreStorage(ctx context.Context, source, target Config, expectedDatabase
 		}
 		next.ETag, next.VersionID = info.ETag, info.VersionID
 		return next, nil
-	}, func(ctx context.Context, space, session string) error {
-		sourceKey := trace.Key(fromPrefix, space, session)
-		targetKey := trace.Key(toPrefix, space, session)
-		existing, err := to.Open(ctx, targetKey, "")
-		if err == nil {
-			return existing.Close()
+	}
+	catalog := &archive.Catalog{Blobs: from, Prefix: source.TOS.Prefix}
+	runtime := &archive.Runtime{Log: &sessionlog.Store{Blobs: from, Prefix: source.TOS.Prefix}}
+	rows, err = store.DB.QueryContext(ctx, "SELECT id FROM spaces ORDER BY id")
+	if err != nil {
+		return result, err
+	}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return result, err
 		}
-		if !errors.Is(err, storage.ErrBlobNotFound) {
-			return err
-		}
-		raw, err := from.Open(ctx, sourceKey, "")
+		count, err := catalog.CopyCatalog(ctx, to, target.TOS.Prefix, id, copyObject)
 		if err != nil {
-			return err
+			rows.Close()
+			return result, err
 		}
-		defer raw.Close()
-		file, err := os.CreateTemp("", "mass-restore-trace-*")
+		result.Relocated += count
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return result, err
+	}
+	rows, err = store.DB.QueryContext(ctx, "SELECT space_id,id FROM sessions ORDER BY space_id,id")
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var space, id string
+		if err = rows.Scan(&space, &id); err != nil {
+			return result, err
+		}
+		count, err := runtime.CopySession(ctx, to, target.TOS.Prefix, space, id, copyObject)
 		if err != nil {
-			return err
+			return result, err
 		}
-		defer os.Remove(file.Name())
-		defer file.Close()
-		size, err := io.Copy(file, storage.ContextReader{Context: ctx, Reader: raw})
-		if err != nil {
-			return err
-		}
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return err
-		}
-		_, err = to.PutNew(ctx, targetKey, file, size, "application/x-ndjson")
-		return err
-	})
+		result.Relocated += count
+	}
+	return result, rows.Err()
 }
 
 func checkObject(ctx context.Context, r io.Reader, o storage.Object, destination io.Writer) error {

@@ -129,7 +129,7 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 	result.Spec.ModelSHA256 = journal.Digest(s.Definition.Model)
 	result.Spec.ToolsSHA256 = journal.Digest(tools)
 	result.Spec.EffectiveConfigSHA256 = ConfigDigest(s)
-	object, err := p.Content.Repo.Object(ctx, s.ActorID, s.SpaceID, s.DefinitionRef.ObjectID, true)
+	object, err := p.Content.Object(ctx, s.ActorID, s.SpaceID, s.DefinitionRef.ObjectID)
 	if err != nil {
 		return result, err
 	}

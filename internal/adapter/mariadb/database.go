@@ -151,3 +151,9 @@ func audit(ctx context.Context, tx *sql.Tx, actor, space, action, target string)
 func (s *Store) CheckAccess(ctx context.Context, actor, space string, owner bool) error {
 	return s.scoped(ctx, actor, space, owner, func(*sql.Tx) error { return nil })
 }
+
+func (s *Store) Audit(ctx context.Context, actor, space, action, target string) error {
+	return s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
+		return audit(ctx, tx, actor, space, action, target)
+	})
+}

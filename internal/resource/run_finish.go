@@ -27,7 +27,10 @@ type Finisher struct {
 }
 
 func stableID(runID, label string) string {
-	return uuid.NewSHA1(uuid.MustParse(runID), []byte(label)).String()
+	if id, err := uuid.Parse(runID); err == nil {
+		return uuid.NewSHA1(id, []byte(label)).String()
+	}
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(runID+":"+label)).String()
 }
 func SaveForRun(s run.Snapshot, at time.Time, finish *journal.Proposed) SaveRequest {
 	return SaveRequest{SpaceID: s.SpaceID, SessionID: s.SessionID, RunID: s.ID, SnapshotID: stableID(s.ID, "snapshot"), ArchiveID: stableID(s.ID, "archive"), ManifestID: stableID(s.ID, "manifest"), EventID: stableID(s.ID, "snapshot.event"), AppendKey: stableID(s.ID, "finish.batch"), OccurredAt: at, Finish: finish}
@@ -109,6 +112,9 @@ func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, outcome run.Outco
 	request := SaveForRun(s, plan.At, &finish)
 	content := *f.Content
 	content.Repo = repo
+	if inline, ok := repo.(InlineContent); ok {
+		content.Inline = inline
+	}
 	snapshots := &SnapshotStore{Repo: repo, Content: &content, Journal: j, Workspaces: f.Workspaces, Timeout: f.Timeout, ActorKind: "system"}
 	if plan.WorkspaceReady {
 		_, err = snapshots.Save(ctx, s.ActorID, request)

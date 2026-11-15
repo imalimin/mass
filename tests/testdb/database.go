@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -28,6 +29,16 @@ type Database struct {
 
 func (d *Database) Close()                       { d.cleanup() }
 func New(ctx context.Context) (*Database, error) { return NewVersion(ctx, migrations.CurrentVersion) }
+func (d *Database) CheckVersion(ctx context.Context, expected int64) error {
+	var version int64
+	if err := d.Store.DB.QueryRowContext(ctx, "SELECT MAX(version_id) FROM goose_db_version WHERE is_applied=1").Scan(&version); err != nil {
+		return err
+	}
+	if version != expected {
+		return fmt.Errorf("schema %d, expected %d", version, expected)
+	}
+	return nil
+}
 func (d *Database) MigrateTo(ctx context.Context, version int64) error {
 	provider, err := goose.NewProvider(goose.DialectMySQL, d.Admin.DB, migrations.Files)
 	if err != nil {

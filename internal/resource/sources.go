@@ -35,6 +35,16 @@ func (r *Sources) skill(ctx context.Context, s run.Snapshot, id string) (run.Ski
 		if skill.Resources != nil {
 			return skill, nil
 		}
+		if r.Files.Content.Inline != nil {
+			var definition run.Definition
+			if err := ReadJSON(ctx, r.Files.Content, s.ActorID, s.SpaceID, s.DefinitionRef.ObjectID, 16<<20, &definition); err != nil {
+				return skill, err
+			}
+			if i >= len(definition.Skills) || definition.Skills[i].VersionID != id {
+				return skill, storage.ErrIntegrity
+			}
+			return definition.Skills[i], nil
+		}
 		// Exact version objects remain referenced by session.created, including D04.
 		page, err := r.Journal.Read(ctx, s.ActorID, s.SpaceID, s.SessionID, 0, nil, 1)
 		if err != nil {

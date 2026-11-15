@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,7 +51,10 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 	if !storage.ValidShortID(r.SpaceID) || !storage.ValidShortID(r.SessionID) {
 		return v, storage.ErrInvalid
 	}
-	for _, id := range []string{r.RunID, r.SnapshotID, r.ArchiveID, r.ManifestID, r.EventID} {
+	if !storage.ValidShortID(r.RunID) && !storage.ValidID(r.RunID) {
+		return v, storage.ErrInvalid
+	}
+	for _, id := range []string{r.SnapshotID, r.ArchiveID, r.ManifestID, r.EventID} {
 		if !storage.ValidID(id) {
 			return v, storage.ErrInvalid
 		}
@@ -81,7 +85,7 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 			return e
 		}
 		defer archive.Close()
-		if s.Journal != nil {
+		if s.Journal != nil && s.Content.Inline == nil {
 			history, err := RunHistory(ctx, s.Journal, actor, r.SpaceID, r.SessionID, r.RunID, "plan.updated", "artifact.published")
 			if err != nil {
 				return err
@@ -110,7 +114,13 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 				manifest.State, _ = json.Marshal(map[string]any{"run_id": r.RunID, "through_sequence": through, "plan": plan, "artifacts": artifacts})
 			}
 		}
-		a, e := s.Content.Put(ctx, actor, r.SpaceID, r.ArchiveID, "workspace.archive", "application/gzip", archive)
+		var a storage.Object
+		if s.Content.Inline != nil {
+			key := path.Join(s.Content.Prefix, r.SpaceID, "sessions", r.SessionID, "workspace", r.SnapshotID+".tar.gz")
+			a, e = s.Content.PutAt(ctx, actor, r.SpaceID, r.ArchiveID, "workspace.archive", "application/gzip", key, archive)
+		} else {
+			a, e = s.Content.Put(ctx, actor, r.SpaceID, r.ArchiveID, "workspace.archive", "application/gzip", archive)
+		}
 		if e != nil {
 			return e
 		}
@@ -136,7 +146,12 @@ func (s *SnapshotStore) commit(ctx context.Context, actor string, r SaveRequest,
 	if err != nil {
 		return v, err
 	}
-	m, err := s.Content.Repo.Object(ctx, actor, r.SpaceID, v.ManifestRef, false)
+	var m storage.Object
+	if s.Content.Inline != nil {
+		m, err = s.Content.Object(ctx, actor, r.SpaceID, v.ManifestRef)
+	} else {
+		m, err = s.Content.Repo.Object(ctx, actor, r.SpaceID, v.ManifestRef, false)
+	}
 	if err != nil {
 		return v, err
 	}

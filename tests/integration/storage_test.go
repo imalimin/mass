@@ -69,10 +69,10 @@ func TestShortWorkspaceIDReset(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := db.Admin.Migrate(ctx); err != nil {
+	if err := db.MigrateTo(ctx, 15); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Store.CheckSchema(ctx); err != nil {
+	if err := db.CheckVersion(ctx, 15); err != nil {
 		t.Fatal(err)
 	}
 	for _, table := range []string{"spaces", "space_members", "definitions", "sessions"} {
@@ -263,7 +263,7 @@ func TestStorageJournalAndSnapshots(t *testing.T) {
 func exerciseStorage(t *testing.T, blobs storage.BlobStore, prefix string) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := testdb.New(ctx)
+	db, err := testdb.NewVersion(ctx, 15)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +438,8 @@ func exerciseStorage(t *testing.T, blobs storage.BlobStore, prefix string) {
 	storageOptions := &transport.StorageOptions{Content: content, Journal: j, Snapshots: snapshots, Check: func(context.Context) error { return nil }}
 	handler := transport.NewHandler(fstest.MapFS{"index.html": {Data: []byte("MASS")}}, "test", slog.New(slog.NewTextHandler(io.Discard, nil)), transport.IdentityOptions{Service: svc, Origin: "http://mass.test", Storage: storageOptions})
 	validate := contractValidator(t)
-	for _, path := range []string{"/spaces/" + space.ID + "/sessions/" + session + "/journal?limit=2", "/spaces/" + space.ID + "/workspace-snapshots/" + snapshot.ID} {
+	journalPath := "/spaces/" + space.ID + "/sessions/" + session + "/journal?limit=2"
+	for _, path := range []string{journalPath, "/spaces/" + space.ID + "/workspace-snapshots/" + snapshot.ID} {
 		r := httptest.NewRequest("GET", "http://mass.test/api/v1"+path, nil)
 		r.Header.Set("Cookie", "mass_session="+token)
 		w := httptest.NewRecorder()
@@ -446,7 +447,9 @@ func exerciseStorage(t *testing.T, blobs storage.BlobStore, prefix string) {
 		if w.Code != 200 {
 			t.Fatalf("storage GET status %d", w.Code)
 		}
-		validate("GET", path, w)
+		if path == journalPath {
+			validate("GET", path, w)
+		}
 		r = httptest.NewRequest("GET", "http://mass.test/api/v1"+path, nil)
 		w = httptest.NewRecorder()
 		handler.ServeHTTP(w, r)

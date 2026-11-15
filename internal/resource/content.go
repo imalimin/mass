@@ -8,9 +8,11 @@ import (
 	"io"
 	"mime"
 	"os"
+	"path"
 	"regexp"
 	"strings"
 
+	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 )
 
@@ -24,6 +26,11 @@ type ContentStore struct {
 	Blobs    storage.BlobStore
 	Prefix   string
 	MaxBytes int64
+	Inline   InlineContent
+}
+type InlineContent interface {
+	StoreInline(context.Context, storage.Object, []byte) error
+	OpenInline(context.Context, string, string, string) (storage.Object, io.ReadCloser, error)
 }
 type File struct{ *os.File }
 
@@ -37,11 +44,32 @@ func (f *File) Close() error {
 var kindPattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,63}$`)
 
 func (c *ContentStore) Put(ctx context.Context, actor, space, id, kind, media string, source io.Reader) (storage.Object, error) {
+	key := strings.TrimSuffix(c.Prefix, "/") + "/" + space + "/objects/" + id
+	return c.PutAt(ctx, actor, space, id, kind, media, key, source)
+}
+
+func (c *ContentStore) CatalogObjectKey(space, kind, definition, filename string) string {
+	return path.Join(c.Prefix, space, kind+"s", definition, filename)
+}
+
+func (c *ContentStore) PutAt(ctx context.Context, actor, space, id, kind, media, key string, source io.Reader) (storage.Object, error) {
 	if !storage.ValidShortID(space) || !storage.ValidID(id) || !kindPattern.MatchString(kind) || c.MaxBytes < 1 {
 		return storage.Object{}, storage.ErrInvalid
 	}
 	if _, _, err := mime.ParseMediaType(media); err != nil || len(media) > 128 {
 		return storage.Object{}, storage.ErrInvalid
+	}
+	if c.Inline != nil && inlineKind(kind) {
+		raw, err := io.ReadAll(io.LimitReader(storage.ContextReader{Context: ctx, Reader: source}, c.MaxBytes+1))
+		if err != nil {
+			return storage.Object{}, err
+		}
+		if int64(len(raw)) > c.MaxBytes {
+			return storage.Object{}, storage.ErrInvalid
+		}
+		hash := sha256.Sum256(raw)
+		object := storage.Object{SpaceID: space, ID: id, Kind: kind, MediaType: media, Size: int64(len(raw)), SHA256: hex.EncodeToString(hash[:]), State: "ready"}
+		return object, c.Inline.StoreInline(ctx, object, raw)
 	}
 	file, err := os.CreateTemp("", "mass-content-*")
 	if err != nil {
@@ -57,7 +85,6 @@ func (c *ContentStore) Put(ctx context.Context, actor, space, id, kind, media st
 	if n > c.MaxBytes {
 		return storage.Object{}, storage.ErrInvalid
 	}
-	key := strings.TrimSuffix(c.Prefix, "/") + "/" + space + "/objects/" + id
 	object := storage.Object{SpaceID: space, ID: id, Kind: kind, MediaType: media, Size: n, SHA256: hex.EncodeToString(hash.Sum(nil)), Key: key, URI: c.Blobs.URI(key), State: "uploading"}
 	object, err = c.Repo.BeginObject(ctx, actor, object)
 	if err != nil {
@@ -90,6 +117,30 @@ func (c *ContentStore) Put(ctx context.Context, actor, space, id, kind, media st
 	}
 	return object, nil
 }
+
+func (c *ContentStore) inlineBytes(ctx context.Context, actor, space, id string, limit int64) ([]byte, error) {
+	if c.Inline == nil {
+		return nil, storage.ErrBlobNotFound
+	}
+	o, r, err := c.Inline.OpenInline(ctx, actor, space, id)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	if o.Size > limit {
+		return nil, run.ErrOverflow
+	}
+	return io.ReadAll(storage.ContextReader{Context: ctx, Reader: r})
+}
+
+func inlineKind(kind string) bool {
+	switch kind {
+	case "session.definition", "user.message", "model.response", "context.projection", "context.summary", "workspace.manifest":
+		return true
+	}
+	return false
+}
+
 func (c *ContentStore) verify(ctx context.Context, o storage.Object) (*File, error) {
 	if o.Size < 0 || o.Size > c.MaxBytes {
 		return nil, storage.ErrIntegrity
@@ -99,6 +150,10 @@ func (c *ContentStore) verify(ctx context.Context, o storage.Object) (*File, err
 		return nil, errors.Join(storage.ErrIntegrity, err)
 	}
 	defer reader.Close()
+	return c.verifiedFile(ctx, o, reader)
+}
+
+func (c *ContentStore) verifiedFile(ctx context.Context, o storage.Object, reader io.Reader) (*File, error) {
 	f, err := os.CreateTemp("", "mass-verified-*")
 	if err != nil {
 		return nil, err
@@ -120,10 +175,34 @@ func (c *ContentStore) verify(ctx context.Context, o storage.Object) (*File, err
 // Read exposes only ready objects already referenced by committed facts. An
 // upload that succeeded before a failed journal transaction stays invisible.
 func (c *ContentStore) Read(ctx context.Context, actor, space, id string) (storage.Object, *File, error) {
+	if c.Inline != nil {
+		o, reader, err := c.Inline.OpenInline(ctx, actor, space, id)
+		if err != nil && !errors.Is(err, storage.ErrBlobNotFound) {
+			return o, nil, err
+		}
+		if reader != nil {
+			defer reader.Close()
+			f, err := c.verifiedFile(ctx, o, reader)
+			return o, f, err
+		}
+	}
 	o, err := c.Repo.Object(ctx, actor, space, id, true)
 	if err != nil {
 		return o, nil, err
 	}
 	f, err := c.verify(ctx, o)
 	return o, f, err
+}
+
+func (c *ContentStore) Object(ctx context.Context, actor, space, id string) (storage.Object, error) {
+	if c.Inline != nil {
+		object, reader, err := c.Inline.OpenInline(ctx, actor, space, id)
+		if reader != nil {
+			reader.Close()
+		}
+		if !errors.Is(err, storage.ErrBlobNotFound) {
+			return object, err
+		}
+	}
+	return c.Repo.Object(ctx, actor, space, id, true)
 }

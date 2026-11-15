@@ -69,15 +69,15 @@ func (l *limitedModel) Stream(ctx context.Context, s run.Snapshot, p run.Prepare
 func exerciseD07(t *testing.T, blobs storage.BlobStore, prefix string) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := testdb.New(ctx)
+	db, err := testdb.NewVersion(ctx, 15)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err = db.Admin.Migrate(ctx); err != nil {
+	if err = db.MigrateTo(ctx, 15); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.Admin.Migrate(ctx); err != nil {
+	if err = db.MigrateTo(ctx, 15); err != nil {
 		t.Fatal(err)
 	}
 	cipher, _ := secrets.New(bytes.Repeat([]byte{7}, 32))

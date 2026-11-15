@@ -156,7 +156,8 @@ func (s *Service) packSkill(ctx context.Context, actor, space string, d Draft, r
 	if replacement != nil {
 		id = replacement.ObjectID
 	}
-	o, err := s.Content.Put(ctx, actor, space, id, resource.SkillPackageKind, "application/zip", f)
+	o, err := s.Content.PutAt(ctx, actor, space, id, resource.SkillPackageKind, "application/zip",
+		s.Content.CatalogObjectKey(space, "skill", d.ID, "packages/"+id+".zip"), f)
 	if err != nil {
 		return d, err
 	}

@@ -18,7 +18,7 @@ type Cache struct {
 }
 
 func (c *Cache) Read(ctx context.Context, store *resource.ContentStore, actor, space, id string, limit int64) ([]byte, error) {
-	o, err := store.Repo.Object(ctx, actor, space, id, true)
+	o, err := store.Object(ctx, actor, space, id)
 	if err != nil {
 		return nil, err
 	}

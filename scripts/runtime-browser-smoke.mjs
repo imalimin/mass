@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { startFixtureServer } from './fixture-server.mjs'
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve('.cache/playwright')
 const require = createRequire(new URL('../frontend/package.json', import.meta.url)), { chromium, expect } = require('@playwright/test')
@@ -34,13 +34,34 @@ try {
   await expect(page.getByLabel('Agent 版本')).toHaveCount(0)
   const first = await send('write, read and publish')
   assert.equal(created.id, first.session_id); assert.equal(created.title, created.id); assert.equal(created.version_id, version.id)
-  for (const id of [first.space_id, version.definition_id, first.session_id]) assert.match(id, /^[a-z2-7]{16}$/)
+  for (const id of [first.space_id, version.definition_id, first.session_id, first.id]) assert.match(id, /^[a-z2-7]{16}$/)
   await expect(page).toHaveURL(`${sessionRoot}/${created.id}`)
   await expect(page.getByLabel('Agent 版本')).toHaveCount(0)
   await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 30000 }); await page.getByText('已完成写入、读取和发布 notes.txt', { exact: true }).waitFor()
   const artifactLink = page.locator('.run-output a').filter({ hasText: 'notes.txt' }).first(); await artifactLink.waitFor(); const artifact = await context.request.get(new URL(await artifactLink.getAttribute('href'), server.url).href); assert.equal(artifact.status(), 200); assert.equal(await artifact.text(), 'hello workspace')
   const completed = await (await context.request.get(`${server.url}/api/v1/spaces/${first.space_id}/runs/${first.id}`)).json()
-  assert.ok(completed.workspace_snapshot_id)
+  assert.equal(completed.workspace_snapshot_committed, true)
+  assert.equal('workspace_snapshot_id' in completed, false)
+  const diagnostic = `${server.url}/api/v1/diagnostics`
+  const byRun = await (await context.request.get(`${diagnostic}?run_id=${first.id}`)).json()
+  const bySession = await (await context.request.get(`${diagnostic}?session_id=${first.session_id}`)).json()
+  assert.ok(byRun.items.every(record => record.run_id === first.id))
+  assert.deepEqual(byRun.items.map(record => record.type), ['run_accepted', 'model_step', 'model_step', 'model_step', 'model_step', 'run_finished'])
+  assert.equal(bySession.items[0].role, 'system')
+  assert.equal(byRun.items[0].role, 'user')
+  assert.equal(byRun.items[1].role, 'assistant')
+  assert.equal(byRun.items[1].tools[0].role, 'tool')
+  assert.equal(byRun.items[1].tools[0].tool_call_id, byRun.items[1].model.tool_calls[0].id)
+  assert.equal(byRun.items.at(-1).workspace_snapshot_committed, true)
+  assert.equal('workspace_snapshot' in byRun.items.at(-1), false)
+  const keys = [...server.maintenance.tos.objects.keys()]
+  const archiveKey = keys.find(key => key.endsWith(`/${first.session_id}/session.jsonl`))
+  const jsonl = server.maintenance.tos.objects.get(archiveKey).toString().trim().split('\n').map(line => JSON.parse(line))
+  assert.equal(jsonl.at(-1).workspace_snapshot.manifest.entries[0].path, 'notes.txt')
+  assert.equal(keys.filter(key => key.endsWith('.tar.gz')).length, 1)
+  assert.equal(keys.filter(key => key.endsWith('/trace.jsonl')).length, 0)
+  assert.equal((await context.request.get(`${diagnostic}?run_id=${first.id}&session_id=${first.session_id}`)).status(), 400)
+  assert.equal((await context.request.get(`${diagnostic}?snapshot_id=${jsonl.at(-1).workspace_snapshot.id}`)).status(), 400)
   const clipboardWrites = await page.evaluateHandle(() => {
     const values = []
     navigator.clipboard.writeText = async value => { values.push(value) }
@@ -49,14 +70,23 @@ try {
   const details = page.getByRole('dialog', { name: '运行详情' })
   await page.getByRole('button', { name: '运行详情', exact: true }).click()
   await details.getByRole('button', { name: '复制版本 ID' }).click()
-  await details.getByRole('button', { name: '复制文件快照 ID' }).click()
-  await expect(details.getByText('已复制', { exact: true })).toHaveCount(2)
-  assert.deepEqual(await clipboardWrites.jsonValue(), [version.id, completed.workspace_snapshot_id])
+  await expect(details.getByText('已提交', { exact: true })).toBeVisible()
+  await expect(details.getByText('已复制', { exact: true })).toHaveCount(1)
+  assert.deepEqual(await clipboardWrites.jsonValue(), [version.id])
   await clipboardWrites.dispose()
   await expect(details.getByText(/输入缓存命中率 0\.0%/)).toBeVisible()
   await page.getByText('Trace 与上下文', { exact: true }).click(); await page.getByText('model.attempt.started', { exact: false }).first().waitFor(); await page.getByText('model.response.completed', { exact: false }).first().waitFor()
   await page.keyboard.press('Escape')
-  await send('second read'); await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 30000 }); await page.getByText('已读取已有文件：hello workspace', { exact: true }).waitFor()
+  server.maintenance.tos.blockSessionFinish(true)
+  const second = await send('second read')
+  await expect.poll(() => server.maintenance.tos.blockedSessionFinishes()).toBeGreaterThan(0)
+  const pending = await (await context.request.get(`${server.url}/api/v1/spaces/${first.space_id}/runs/${second.id}`)).json()
+  assert.equal(pending.status, 'running')
+  await expect(page.getByTestId('run-status')).toContainText('运行中')
+  const pendingDiagnostic = await (await context.request.get(`${diagnostic}?run_id=${second.id}`)).json()
+  assert.deepEqual(pendingDiagnostic.items.map(record => record.type), ['run_accepted'])
+  server.maintenance.tos.blockSessionFinish(false)
+  await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 30000 }); await page.getByText('已读取已有文件：hello workspace', { exact: true }).waitFor()
   await page.getByRole('button', { name: '运行详情', exact: true }).click()
   await expect(details.getByText(/输入缓存命中率 20\.0%/)).toBeVisible()
   await page.keyboard.press('Escape')
@@ -79,7 +109,11 @@ try {
   await expect(details.getByText(/输入缓存命中率 未知/)).toBeVisible()
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '取消运行', exact: true }).click(); await expect(page.getByTestId('run-status')).toContainText('已取消', { timeout: 30000 })
-  await send('wait for restart'); await expect(page.getByTestId('run-status')).toContainText('运行中'); await server.restart(); await expect(page.getByTestId('run-status')).toContainText('失败', { timeout: 30000 }); await expect(page.getByTestId('run-status')).toContainText('interrupted')
+  await send('wait for restart'); await expect(page.getByTestId('run-status')).toContainText('运行中')
+  await server.restart(async () => {
+    await rm(join(server.maintenance.directory, 'workspaces'), { recursive: true, force: true })
+  })
+  await expect(page.getByTestId('run-status')).toContainText('失败', { timeout: 30000 }); await expect(page.getByTestId('run-status')).toContainText('interrupted')
   await page.getByRole('button', { name: '恢复最近已提交快照', exact: true }).click(); await expect(page.getByText('工作目录尚未确认持久化，已阻止下一轮运行。', { exact: true })).toHaveCount(0, { timeout: 15000 })
   await send('second read after restart'); await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 30000 }); await page.getByText('已读取已有文件：hello workspace', { exact: true }).last().waitFor()
   await expect(page.locator('.past-run').filter({ hasText: '已取消' })).toHaveCount(1)

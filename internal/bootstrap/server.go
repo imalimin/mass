@@ -8,9 +8,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/imalimin/mass/internal/adapter/archive"
 	"github.com/imalimin/mass/internal/adapter/mariadb"
 	"github.com/imalimin/mass/internal/adapter/secrets"
 	"github.com/imalimin/mass/internal/adapter/tos"
@@ -20,6 +22,7 @@ import (
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
 	"github.com/imalimin/mass/internal/resource"
+	"github.com/imalimin/mass/internal/resource/sessionlog"
 	httptransport "github.com/imalimin/mass/internal/transport/http"
 	"github.com/imalimin/mass/internal/transport/http/ui"
 )
@@ -52,17 +55,23 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 		return err
 	}
 	defer workspaces.Close()
-	content := &resource.ContentStore{Repo: store, Blobs: blobs, Prefix: c.TOS.Prefix, MaxBytes: c.Storage.MaxObjectBytes}
-	journalService := &journal.Journal{Repo: store}
-	snapshots := &resource.SnapshotStore{Repo: store, Content: content, Journal: journalService, Workspaces: workspaces, Timeout: c.Runtime.SnapshotTimeout}
+	objects := &archive.Objects{Authorize: store.CheckAccess}
+	sessions := &archive.Runtime{DB: store, Objects: objects, Log: &sessionlog.Store{
+		Root: filepath.Join(workspaces.LocalPath(), ".sessions"), Prefix: c.TOS.Prefix, Blobs: blobs}}
+	content := &resource.ContentStore{Repo: objects, Blobs: blobs, Prefix: c.TOS.Prefix, MaxBytes: c.Storage.MaxObjectBytes, Inline: sessions}
+	catalogStore := &archive.Catalog{Blobs: blobs, Prefix: c.TOS.Prefix, Objects: objects, Content: content, Model: store.Model, Audit: store.Audit}
+	sessions.CatalogObject = catalogStore.Lookup
+	objects.Lookups = []archive.ObjectLookup{catalogStore.Lookup, sessions.Lookup}
+	journalService := &journal.Journal{Repo: sessions}
+	snapshots := &resource.SnapshotStore{Repo: sessions, Content: content, Journal: journalService, Workspaces: workspaces, Timeout: c.Runtime.SnapshotTimeout}
 	storageOptions := &httptransport.StorageOptions{Content: content, Journal: journalService, Snapshots: snapshots, Check: httptransport.CachedReadiness(func(ctx context.Context) error {
 		if err := store.CheckSchema(ctx); err != nil {
 			return err
 		}
 		return blobs.Check(ctx)
 	})}
-	catalogue := &catalog.Service{Repo: store, Content: content}
-	runtimeOptions, lifecycle, err := StartRuntime(ctx, c, store, service, catalogue, content, workspaces, snapshots, version, logger, nil)
+	catalogue := &catalog.Service{Repo: catalogStore, Content: content}
+	runtimeOptions, lifecycle, err := StartRuntime(ctx, c, store, service, catalogue, content, workspaces, snapshots, version, logger, nil, sessions)
 	if err != nil {
 		return err
 	}
