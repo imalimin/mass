@@ -118,7 +118,7 @@ func TestModelConnectionMigration(t *testing.T) {
 				}
 			}
 			for range 2 {
-				if err = db.Admin.Migrate(ctx); err != nil {
+				if err = db.MigrateTo(ctx, 9); err != nil {
 					t.Fatal(err)
 				}
 			}

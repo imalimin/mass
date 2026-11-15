@@ -281,7 +281,7 @@ func (s *CatalogService) PublishAgent(ctx context.Context, in PublishInput) (Ver
 
 新增迁移 00004_definitions，不改动已发布的前三份迁移；D03 使用 schema 4；当前 serve 要求 schema 6。Agent 与 Skill 的元数据、草稿和版本复用 definitions / definition_drafts / definition_versions，以 kind 区分，外部 API 仍为 /agents 和 /skills。全部关联含 space_id；definition_dependencies 保存有序、准确的 Skill 内部版本 ID，数据库外键限制删除被引用版本。版本 label 在单一定义内区分大小写且唯一；latest（不区分大小写）及范围表达式不被接受。debug=true 的不可变快照无发布 label，不改变默认版本。
 
-定义名称为 1—64 字节的小写字母/数字/连字符标识，首字符为字母。agent.yaml 的 model 和 skills[].id 分别使用本空间模型配置 ID 与 Skill ID，version 是准确显示版本；name 必须与定义名称一致。严格拒绝未知字段、重复键、多 YAML 文档、alias/anchor、合并键、非法类型、未知工具、重复 Skill/工具及越界限额。草稿允许空正文和空配置便于新建；非空配置保存时校验结构，发布和调试快照进一步要求非空正文、完整配置、已启用的模型和未归档的准确依赖。输入/输出预留总量不得超过模型上下文容量，输出预留不超过模型上限。平台上限为 1000 步、86400 秒（24 小时）；这里是配置校验，D04 已接入运行限额，D05 继续扩展工具。
+定义名称为 1—64 字节的标识，以小写英文字母开头，可包含小写英文字母、数字、连字符和下划线。agent.yaml 的 model 和 skills[].id 分别使用本空间模型配置 ID 与 Skill ID，version 是准确显示版本；name 必须与定义名称一致。严格拒绝未知字段、重复键、多 YAML 文档、alias/anchor、合并键、非法类型、未知工具、重复 Skill/工具及越界限额。草稿允许空正文和空配置便于新建；非空配置保存时校验结构，发布和调试快照进一步要求非空正文、完整配置、已启用的模型和未归档的准确依赖。输入/输出预留总量不得超过模型上下文容量，输出预留不超过模型上限。平台上限为 1000 步、86400 秒（24 小时）；这里是配置校验，D04 已接入运行限额，D05 继续扩展工具。
 
 Agent 文档包含 Markdown 和配置原文，正文上限 256 KiB、配置上限 64 KiB。Skill 资源最多 100 个、单资源上限 8 MiB，资源和目录使用相对于根目录的规范路径。Skill 根目录的 SKILL.md 和 bundle.json 分别保留给正文和 ZIP 元数据。路径校验拒绝穿越、绝对路径、大小写冲突及文件/目录前缀冲突。JSON 上传接口使用 data_base64，HTTP 请求上限 12 MiB。上传写入新 ZIP 后提交草稿引用并推进 revision，已发布版本仍引用原 ZIP。
 

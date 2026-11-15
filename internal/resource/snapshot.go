@@ -47,7 +47,10 @@ type SaveRequest struct {
 }
 
 func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (v storage.Snapshot, err error) {
-	for _, id := range []string{r.SpaceID, r.SessionID, r.RunID, r.SnapshotID, r.ArchiveID, r.ManifestID, r.EventID} {
+	if !storage.ValidShortID(r.SpaceID) || !storage.ValidShortID(r.SessionID) {
+		return v, storage.ErrInvalid
+	}
+	for _, id := range []string{r.RunID, r.SnapshotID, r.ArchiveID, r.ManifestID, r.EventID} {
 		if !storage.ValidID(id) {
 			return v, storage.ErrInvalid
 		}

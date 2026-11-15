@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/imalimin/mass/internal/domain/run"
+	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
 )
 
@@ -43,7 +44,7 @@ func (r *longMetricTrace) RuntimeTrace(ctx context.Context, actor, space, id str
 }
 
 func TestMetricsStreamPastTwentyThousandBusinessFacts(t *testing.T) {
-	r := &longMetricTrace{actor: uuid.NewString(), space: uuid.NewString(), session: uuid.NewString(), runID: uuid.NewString(), attempt: uuid.NewString(), projection: uuid.NewString(), content: uuid.NewString()}
+	r := &longMetricTrace{actor: uuid.NewString(), space: storage.NewShortID(), session: storage.NewShortID(), runID: uuid.NewString(), attempt: uuid.NewString(), projection: uuid.NewString(), content: uuid.NewString()}
 	groups, through, err := modelMetrics(context.Background(), r, r.actor, r.space, r.runID)
 	if err != nil || through != 20104 || r.pages < 200 || len(groups) != 1 || groups[0].Cache.Attempts != 1 {
 		t.Fatal("long metrics", groups, through, r.pages, err)

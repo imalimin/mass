@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/imalimin/mass/internal/domain/storage"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -110,7 +111,7 @@ func (s *Service) CreateSpace(ctx context.Context, actor, name string) (Space, e
 	if !validName(name) {
 		return Space{}, ErrInvalid
 	}
-	v := Space{ID: uuid.NewString(), Name: name, IsOwner: true, CreatedAt: time.Now().UTC().Truncate(time.Microsecond)}
+	v := Space{ID: storage.NewShortID(), Name: name, IsOwner: true, CreatedAt: time.Now().UTC().Truncate(time.Microsecond)}
 	return v, s.Repo.CreateSpace(ctx, actor, v)
 }
 func (s *Service) AddMember(ctx context.Context, actor, space, name string) error {
@@ -241,16 +242,20 @@ func (s *Service) Query(scope, cursor string, limit int) (Query, error) {
 		return q, nil
 	}
 	b, err := base64.RawURLEncoding.DecodeString(cursor)
-	if err != nil || len(b) != 68 {
+	if err != nil || len(b) <= sha256.Size {
+		return q, ErrInvalid
+	}
+	id, signature := b[:len(b)-sha256.Size], b[len(b)-sha256.Size:]
+	if !storage.ValidShortID(string(id)) && !validID(string(id)) {
 		return q, ErrInvalid
 	}
 	mac := hmac.New(sha256.New, s.cursorKey)
 	mac.Write([]byte(scope + ":"))
-	mac.Write(b[:36])
-	if !hmac.Equal(b[36:], mac.Sum(nil)) || !validID(string(b[:36])) {
+	mac.Write(id)
+	if !hmac.Equal(signature, mac.Sum(nil)) {
 		return q, ErrInvalid
 	}
-	q.After = string(b[:36])
+	q.After = string(id)
 	return q, nil
 }
 func (s *Service) Cursor(scope, id string) string {

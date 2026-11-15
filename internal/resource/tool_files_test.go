@@ -67,7 +67,7 @@ func fileFixture(t *testing.T) (*resource.FileService, run.Snapshot, string) {
 	t.Cleanup(func() { w.Close() })
 	content := &resource.ContentStore{Repo: objects{}, Blobs: fakes.NewBlobs(), Prefix: "test/files/", MaxBytes: 8 << 20}
 	f := &resource.FileService{Workspaces: w, Content: content, Cursors: signer{}, MaxBytes: 1 << 20, Limits: limits, Check: func(context.Context, run.Snapshot) error { return nil }}
-	s := run.Snapshot{ID: uuid.NewString(), ActorID: uuid.NewString(), SpaceID: uuid.NewString(), SessionID: uuid.NewString()}
+	s := run.Snapshot{ID: uuid.NewString(), ActorID: uuid.NewString(), SpaceID: storage.NewShortID(), SessionID: storage.NewShortID()}
 	return f, s, filepath.Join(root, s.SpaceID+"_"+s.SessionID)
 }
 func toolData(t *testing.T, r run.ToolResult) map[string]any {
@@ -185,7 +185,7 @@ func TestBoundedReadAndStableQueryPages(t *testing.T) {
 		t.Fatal("pagination changed after write", string(second.Data))
 	}
 	wrong := s
-	wrong.SessionID = uuid.NewString()
+	wrong.SessionID = storage.NewShortID()
 	if _, err = f.Query(ctx, wrong, "glob_files", resource.PageInput{Pattern: "**/*.txt", Cursor: cursor}); err == nil {
 		t.Fatal("cursor crossed session")
 	}

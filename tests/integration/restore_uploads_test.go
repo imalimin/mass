@@ -80,7 +80,7 @@ func TestRestoreSkipsOnlyUnreferencedUploads(t *testing.T) {
 	pending = append(pending, missing)
 	confirmed := put("trace", "confirmed bytes")
 	j := &journal.Journal{Repo: db.Store}
-	session := uuid.NewString()
+	session := storage.NewShortID()
 	created := proposed(actor.ID, "session.created", "", journal.SessionData{})
 	message := proposed(actor.ID, "user.message.accepted", "", journal.UserMessageData{ID: uuid.NewString(), ContentID: confirmed.ID})
 	message.Refs = []storage.Ref{{Role: "content", ObjectID: confirmed.ID, SHA256: confirmed.SHA256}}

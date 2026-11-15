@@ -2,9 +2,12 @@ package storage
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +24,11 @@ var (
 )
 
 func ValidID(id string) bool { u, e := uuid.Parse(id); return e == nil && u.String() == id }
+
+var shortIDPattern = regexp.MustCompile(`^[a-z2-7]{16}$`)
+
+func NewShortID() string          { return strings.ToLower(rand.Text()[:16]) }
+func ValidShortID(id string) bool { return shortIDPattern.MatchString(id) }
 
 type Object struct {
 	SpaceID   string `json:"space_id"`

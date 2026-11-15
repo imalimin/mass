@@ -41,7 +41,7 @@ func TestCompleteGroupsAndExplicitFailures(t *testing.T) {
 	blobs := fakes.NewBlobs()
 	repo := objects{}
 	content := &resource.ContentStore{Repo: repo, Blobs: blobs, Prefix: "test", MaxBytes: 32 << 20}
-	s := run.Snapshot{ID: uuid.NewString(), ActorID: uuid.NewString(), SpaceID: uuid.NewString(), SessionID: uuid.NewString(), Definition: run.Definition{Platform: "fixed", Instructions: "ordered", MaxInputTokens: 100000, OutputTokens: 256, Model: run.ModelConfig{ContextWindow: 120000}}}
+	s := run.Snapshot{ID: uuid.NewString(), ActorID: uuid.NewString(), SpaceID: storage.NewShortID(), SessionID: storage.NewShortID(), Definition: run.Definition{Platform: "fixed", Instructions: "ordered", MaxInputTokens: 100000, OutputTokens: 256, Model: run.ModelConfig{ContextWindow: 120000}}}
 	put := func(v any) storage.Ref {
 		raw, _ := json.Marshal(v)
 		o, e := content.Put(ctx, s.ActorID, s.SpaceID, uuid.NewString(), "test", "application/json", bytes.NewReader(raw))

@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/resource"
 )
@@ -74,7 +73,7 @@ func TestRestoreRejectsUnsafeOrIncompleteArchives(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := m.With(context.Background(), uuid.NewString(), uuid.NewString(), func(dir resource.WorkspaceDir) error {
+			err := m.With(context.Background(), storage.NewShortID(), storage.NewShortID(), func(dir resource.WorkspaceDir) error {
 				if err := dir.Restore(context.Background(), bytes.NewReader(tc.data), tc.manifest); err == nil {
 					t.Fatal("unsafe archive accepted")
 				}
@@ -93,7 +92,7 @@ func TestRestoreRejectsUnsafeOrIncompleteArchives(t *testing.T) {
 		})
 	}
 	t.Run("valid_restricts_permissions", func(t *testing.T) {
-		if err := m.With(context.Background(), uuid.NewString(), uuid.NewString(), func(dir resource.WorkspaceDir) error {
+		if err := m.With(context.Background(), storage.NewShortID(), storage.NewShortID(), func(dir resource.WorkspaceDir) error {
 			if err := dir.Restore(context.Background(), bytes.NewReader(good), valid); err != nil {
 				return err
 			}
@@ -117,7 +116,7 @@ func TestPackBoundariesAndLockCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	space, session := uuid.NewString(), uuid.NewString()
+	space, session := storage.NewShortID(), storage.NewShortID()
 	if err = m.With(context.Background(), space, session, func(dir resource.WorkspaceDir) error {
 		if err := dir.Root().Symlink("/etc/passwd", "link"); err != nil {
 			return err
@@ -159,7 +158,7 @@ func TestPackBoundariesAndLockCancellation(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	linked := uuid.NewString()
+	linked := storage.NewShortID()
 	os.Symlink(filepath.Join(base, space+"_"+session), filepath.Join(base, space+"_"+linked))
 	if err = m.With(context.Background(), space, linked, func(resource.WorkspaceDir) error { return nil }); err == nil {
 		t.Fatal("session symlink accepted")

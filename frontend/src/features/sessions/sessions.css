@@ -137,6 +137,9 @@
 .run-detail-info > div { display: grid; grid-template-columns: 75px minmax(0, 1fr); gap: 8px; }
 .run-detail-info dt { color: #566461; }
 .run-detail-info dd { margin: 0; overflow-wrap: anywhere; }
+.run-copy-id { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.run-copy-id code { min-width: 0; }
+.run-copy-id button { padding: 4px 8px; font-size: 12px; }
 @media (max-width: 1080px) and (min-width: 701px) {
   .session-workspace { grid-template-columns: 170px minmax(0, 1fr); }
 }

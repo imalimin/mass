@@ -6,8 +6,8 @@
   "required": ["event_id", "space_id", "session_id", "sequence", "event_type", "schema_version", "actor", "occurred_at", "recorded_at", "data", "content_refs"],
   "properties": {
     "event_id": {"type": "string", "format": "uuid"},
-    "space_id": {"type": "string", "format": "uuid"},
-    "session_id": {"type": "string", "format": "uuid"},
+    "space_id": {"type": "string", "pattern": "^[a-z2-7]{16}$"},
+    "session_id": {"type": "string", "pattern": "^[a-z2-7]{16}$"},
     "run_id": {"type": ["string", "null"], "format": "uuid"},
     "sequence": {"type": "string", "pattern": "^[1-9][0-9]{0,18}$"},
     "event_type": {"type": "string", "pattern": "^[a-z]+(\\.[a-z_]+)+$"},

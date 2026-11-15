@@ -6,7 +6,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/imalimin/mass/internal/adapter/workspace"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
@@ -21,7 +20,7 @@ func TestWriteCASBoundariesAndQuotas(t *testing.T) {
 	}
 	defer manager.Close()
 	service := &resource.FileService{Workspaces: manager, MaxBytes: 16, Limits: limits, Check: func(context.Context, run.Snapshot) error { return nil }}
-	snapshot := run.Snapshot{SpaceID: uuid.NewString(), SessionID: uuid.NewString()}
+	snapshot := run.Snapshot{SpaceID: storage.NewShortID(), SessionID: storage.NewShortID()}
 	ctx := context.Background()
 	write := func(path, text, sha string) error {
 		_, err := service.Write(ctx, snapshot, resource.WriteFileInput{Path: path, Content: text, ExpectedSHA256: sha, MediaType: "text/plain"})

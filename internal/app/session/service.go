@@ -70,7 +70,7 @@ func (s *Service) ready(ctx context.Context) error {
 	return nil
 }
 func (s *Service) Create(ctx context.Context, actor, space string, in CreateInput) (run.Session, error) {
-	if !keyPattern.MatchString(in.Key) || !storage.ValidID(in.AgentID) || len(in.Title) > 200 || !utf8.ValidString(in.Title) || (in.VersionID != "" && !storage.ValidID(in.VersionID)) || (in.SourceSnapshotID != "" && !storage.ValidID(in.SourceSnapshotID)) {
+	if !keyPattern.MatchString(in.Key) || !storage.ValidShortID(in.AgentID) || len(in.Title) > 200 || !utf8.ValidString(in.Title) || (in.VersionID != "" && !storage.ValidID(in.VersionID)) || (in.SourceSnapshotID != "" && !storage.ValidID(in.SourceSnapshotID)) {
 		return run.Session{}, identity.ErrInvalid
 	}
 	digest := journal.Digest(in)
@@ -135,7 +135,7 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 	}
 	defRef := Ref(o, "definition")
 	refs = append(refs, defRef)
-	id = uuid.NewString()
+	id = storage.NewShortID()
 	title := in.Title
 	if title == "" {
 		title = id

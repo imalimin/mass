@@ -20,7 +20,8 @@ export async function startModelFixture() {
     const count = messages.slice(index + 1).filter(m => m.role === 'tool').length
     res.setHeader('Content-Type', 'text/event-stream'); res.flushHeaders()
     const frame = (delta, reason = null, usage = undefined) => res.write(`data: ${JSON.stringify({ id: 'fixture-completion', choices: [{ index: 0, delta, finish_reason: reason }], ...(usage ? { usage } : {}) })}\n\n`)
-    const usage = { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110, prompt_tokens_details: { cached_tokens: 0 } }
+    const cachedTokens = task === 'second read' && count > 0 ? 40 : 0
+    const usage = { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110, prompt_tokens_details: { cached_tokens: cachedTokens } }
     if (messages[0]?.content?.startsWith('Summarize this historical transcript') || task.startsWith('D06')) {
       const summary = messages[0]?.content?.startsWith('Summarize this historical transcript')
       if (summary && body.tools?.length) throw new Error('summary bound tools')

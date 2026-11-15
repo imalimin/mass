@@ -59,7 +59,7 @@ func (r *generatedHistory) ReadEvents(_ context.Context, actor, space, session s
 	return p, nil
 }
 func TestPagedHistoryBoundaries(t *testing.T) {
-	s := run.Snapshot{ID: uuid.NewString(), ActorID: uuid.NewString(), SpaceID: uuid.NewString(), SessionID: uuid.NewString()}
+	s := run.Snapshot{ID: uuid.NewString(), ActorID: uuid.NewString(), SpaceID: storage.NewShortID(), SessionID: storage.NewShortID()}
 	r := &generatedHistory{snapshot: s, count: 30100}
 	items, ranges, through, err := ReadHistory(context.Background(), &journal.Journal{Repo: r}, s)
 	if err != nil || len(items) != 0 || len(ranges) != 1 || through != 30100 || r.maxPage > 100 {
@@ -91,7 +91,7 @@ func TestPagedHistoryBoundaries(t *testing.T) {
 }
 
 func TestAuditRangeReplayRejectsChangedOrPartialFacts(t *testing.T) {
-	s := run.Snapshot{ID: uuid.NewString(), ActorID: uuid.NewString(), SpaceID: uuid.NewString(), SessionID: uuid.NewString()}
+	s := run.Snapshot{ID: uuid.NewString(), ActorID: uuid.NewString(), SpaceID: storage.NewShortID(), SessionID: storage.NewShortID()}
 	r := &generatedHistory{snapshot: s, count: 2}
 	p, err := r.ReadEvents(context.Background(), s.ActorID, s.SpaceID, s.SessionID, 0, nil, 100)
 	if err != nil {

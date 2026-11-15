@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/imalimin/mass/internal/domain/run"
+	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/tests/fakes"
 )
 
@@ -19,7 +20,7 @@ func TestSessionArchiveRetriesAndOverwrites(t *testing.T) {
 	archive := &Archive{Root: t.TempDir(), Prefix: "test", Blobs: blobs, Recorder: recorder}
 	started := time.Now().UTC()
 	finished := started.Add(time.Second)
-	s := run.Snapshot{SpaceID: uuid.NewString(), SessionID: uuid.NewString(), ID: uuid.NewString()}
+	s := run.Snapshot{SpaceID: storage.NewShortID(), SessionID: storage.NewShortID(), ID: uuid.NewString()}
 	first := run.View{Snapshot: s, Status: "failed", StartedAt: &started, FinishedAt: &finished, Error: "model_failed"}
 	one, two := uuid.NewString(), uuid.NewString()
 	recorder.Start(s, one, "", "task", started)

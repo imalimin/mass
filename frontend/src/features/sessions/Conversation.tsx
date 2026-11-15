@@ -404,6 +404,9 @@ function RunDetails({ space, session, chosenRun, runs, current, onSelect, onClos
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const selected = !chosenRun || chosenRun === current?.id ? current : runs.find(run => run.id === chosenRun)
+  const { input_tokens: input, output_tokens: output, cache_read_tokens: cached } = selected?.usage ?? {}
+  const cacheHitRate = input != null && input > 0 && cached != null && cached <= input
+    ? `${(100 * cached / input).toFixed(1)}%` : '未知'
   const historical = useRunStream(space, session.id, selected && selected.id !== current?.id ? selected.id : '', 0)
   const state = historical.state
   useEffect(() => {
@@ -421,9 +424,11 @@ function RunDetails({ space, session, chosenRun, runs, current, onSelect, onClos
     {selected && <>
       <dl className="run-detail-info">
         <div><dt>状态</dt><dd>{statuses[selected.status]}{selected.error && ` · ${selected.error}`}</dd></div>
-        <div><dt>版本</dt><dd>{session.version_id}</dd></div>
-        <div><dt>文件快照</dt><dd>{selected.workspace_snapshot_id || '尚未提交'}</dd></div>
-        <div><dt>Token 用量</dt><dd>输入 {selected.usage.input_tokens ?? '未知'} / 输出 {selected.usage.output_tokens ?? '未知'} / 缓存读取 {selected.usage.cache_read_tokens ?? '未知'}</dd></div>
+        <div><dt>版本</dt><CopyableRunID label="版本" value={session.version_id} /></div>
+        <div><dt>文件快照</dt>{selected.workspace_snapshot_id
+          ? <CopyableRunID key={selected.workspace_snapshot_id} label="文件快照" value={selected.workspace_snapshot_id} />
+          : <dd>尚未提交</dd>}</div>
+        <div><dt>Token 用量</dt><dd>输入 {input ?? '未知'} / 输出 {output ?? '未知'} / 缓存读取 {cached ?? '未知'} / 输入缓存命中率 {cacheHitRate}</dd></div>
       </dl>
       {historical.error && <p role="alert">{historical.error}</p>}
       {selected.id !== current?.id && state?.messages.filter(m => m.incomplete && m.text).map(m =>
@@ -432,4 +437,21 @@ function RunDetails({ space, session, chosenRun, runs, current, onSelect, onClos
       <Suspense fallback={<p role="status">正在载入 Trace…</p>}><Trace key={selected.id} space={space} runID={selected.id} /></Suspense>
     </>}
   </dialog>
+}
+
+function CopyableRunID({ label, value }: { label: string; value: string }) {
+  const [feedback, setFeedback] = useState('')
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value)
+      setFeedback('已复制')
+    } catch {
+      setFeedback('复制失败')
+    }
+  }
+  return <dd className="run-copy-id">
+    <code>{value}</code>
+    <button type="button" className="secondary" aria-label={`复制${label} ID`} onClick={copy}>复制</button>
+    <span className="muted" role="status">{feedback}</span>
+  </dd>
 }

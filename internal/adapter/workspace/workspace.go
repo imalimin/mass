@@ -65,7 +65,7 @@ func New(base string, limits storage.Limits) (*Manager, error) {
 func (m *Manager) LocalPath() string { return m.root.Name() }
 func (m *Manager) Close() error      { return m.root.Close() }
 func (m *Manager) With(ctx context.Context, space, session string, fn func(resource.WorkspaceDir) error) error {
-	if !storage.ValidID(space) || !storage.ValidID(session) {
+	if !storage.ValidShortID(space) || !storage.ValidShortID(session) {
 		return storage.ErrInvalid
 	}
 	name := space + "_" + session
@@ -365,7 +365,7 @@ func (d *directory) Clear() error {
 }
 
 func (m *Manager) Exists(space, session string) bool {
-	if !storage.ValidID(space) || !storage.ValidID(session) {
+	if !storage.ValidShortID(space) || !storage.ValidShortID(session) {
 		return false
 	}
 	info, err := m.root.Lstat(space + "_" + session)

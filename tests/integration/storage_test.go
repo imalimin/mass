@@ -33,6 +33,66 @@ func proposed(actor, kind, run string, data any) journal.Proposed {
 	return journal.Proposed{EventID: uuid.NewString(), RunID: run, Type: kind, SchemaVersion: 1, Actor: journal.Actor{Kind: "user", ID: actor}, OccurredAt: time.Now(), Data: raw}
 }
 
+func TestShortWorkspaceIDReset(t *testing.T) {
+	if os.Getenv("MASS_TEST_ADMIN_DSN") == "" {
+		t.Skip("requires isolated MariaDB")
+	}
+	ctx := context.Background()
+	db, err := testdb.NewVersion(ctx, 14)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	auth, err := identity.New(db.Store, nil, time.Hour, []byte("short-ids"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := auth.CreateUser(ctx, "short_id_user", "fixture-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, token, _, err := auth.Login(ctx, user.Username, "fixture-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	space, agent, session := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for _, seed := range []struct {
+		query string
+		args  []any
+	}{
+		{"INSERT INTO spaces(id,name) VALUES(?,'Legacy space')", []any{space}},
+		{"INSERT INTO space_members(space_id,user_id,is_owner) VALUES(?,?,TRUE)", []any{space, user.ID}},
+		{"INSERT INTO definitions(space_id,id,kind,name) VALUES(?,?,'agent','legacy-agent')", []any{space, agent}},
+		{"INSERT INTO sessions(space_id,id,actor_id) VALUES(?,?,?)", []any{space, session, user.ID}},
+	} {
+		if _, err := db.Admin.DB.ExecContext(ctx, seed.query, seed.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Admin.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Store.CheckSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"spaces", "space_members", "definitions", "sessions"} {
+		var count int
+		if err := db.Admin.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("old rows in %s: count=%d err=%v", table, count, err)
+		}
+	}
+	if retained, err := auth.Me(ctx, token); err != nil || retained.ID != user.ID {
+		t.Fatalf("login did not survive: %v", err)
+	}
+	created, err := auth.CreateSpace(ctx, user.ID, "New space")
+	if err != nil || !storage.ValidShortID(created.ID) {
+		t.Fatalf("new space ID: %q, %v", created.ID, err)
+	}
+	if _, err := db.Admin.DB.ExecContext(ctx, "INSERT INTO definitions(space_id,id,kind,name) VALUES(?,?,'agent','old-format')", created.ID, agent); err == nil {
+		t.Fatal("old UUID Agent ID accepted by shared definitions table")
+	}
+}
+
 func TestDropSessionFactsUpgrade(t *testing.T) {
 	if os.Getenv("MASS_TEST_ADMIN_DSN") == "" {
 		t.Skip("requires isolated MariaDB")
@@ -59,7 +119,7 @@ func TestDropSessionFactsUpgrade(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	session, runID, projection, attempt := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	session, runID, projection, attempt := storage.NewShortID(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	userMessage, assistantMessage, attachment := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	sessionEvent, userEvent, runEvent, attemptEvent, responseEvent, projectionEvent, finishEvent := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	at := time.Now().UTC().Truncate(time.Microsecond)
@@ -102,10 +162,7 @@ func TestDropSessionFactsUpgrade(t *testing.T) {
 	for _, call := range calls {
 		exec("INSERT INTO model_calls(space_id,run_id,response_event_id,call_id,name,arguments_sha256) VALUES(?,?,?,?,?,?)", space.ID, runID, responseEvent, call.ID, call.Name, journal.Digest(call.Arguments))
 	}
-	if err = db.Admin.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err = db.Store.CheckSchema(ctx); err != nil {
+	if err = db.MigrateTo(ctx, 14); err != nil {
 		t.Fatal(err)
 	}
 	var dropped int
@@ -174,13 +231,10 @@ func TestD02UpgradeCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = db.Admin.Migrate(ctx); err != nil {
+	if err = db.MigrateTo(ctx, 14); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.Admin.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err = db.Store.CheckSchema(ctx); err != nil {
+	if err = db.MigrateTo(ctx, 14); err != nil {
 		t.Fatal(err)
 	}
 	migrated, err := db.Store.Model(ctx, user.ID, space.ID, model.ID)
@@ -234,7 +288,7 @@ func exerciseStorage(t *testing.T, blobs storage.BlobStore, prefix string) {
 	}
 	content := &resource.ContentStore{Repo: db.Store, Blobs: blobs, Prefix: prefix, MaxBytes: 1 << 20}
 	j := &journal.Journal{Repo: db.Store}
-	session, run := uuid.NewString(), uuid.NewString()
+	session, run := storage.NewShortID(), uuid.NewString()
 	initial := appendRequest(space.ID, session, proposed(user.ID, "session.created", "", journal.SessionData{}), proposed(user.ID, "run.created", run, struct{}{}), proposed(user.ID, "run.started", run, struct{}{}))
 	events, err := j.Append(ctx, user.ID, initial)
 	if err != nil {
@@ -447,7 +501,7 @@ func exerciseStorage(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if _, err = os.Stat(filepath.Join(root, space.ID+"_"+session, "empty")); err != nil {
 		t.Fatal("empty directory lost")
 	}
-	clone := uuid.NewString()
+	clone := storage.NewShortID()
 	if _, err = j.Append(ctx, user.ID, appendRequest(space.ID, clone, proposed(user.ID, "session.created", "", journal.SessionData{SourceSnapshotID: snapshot.ID}))); err != nil {
 		t.Fatal(err)
 	}
@@ -471,10 +525,10 @@ func exerciseStorage(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if string(cloned) != "first run" {
 		t.Fatal("clone shared directory")
 	}
-	if err = snapshots.Restore(ctx, other.ID, otherSpace.ID, uuid.NewString()); err == nil {
+	if err = snapshots.Restore(ctx, other.ID, otherSpace.ID, storage.NewShortID()); err == nil {
 		t.Fatal("nonexistent session restore")
 	}
-	if _, err = j.Append(ctx, other.ID, appendRequest(otherSpace.ID, uuid.NewString(), proposed(other.ID, "session.created", "", journal.SessionData{SourceSnapshotID: snapshot.ID}))); err == nil {
+	if _, err = j.Append(ctx, other.ID, appendRequest(otherSpace.ID, storage.NewShortID(), proposed(other.ID, "session.created", "", journal.SessionData{SourceSnapshotID: snapshot.ID}))); err == nil {
 		t.Fatal("cross-space snapshot restore")
 	}
 	run2 := uuid.NewString()

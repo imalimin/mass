@@ -106,7 +106,7 @@ type Repository interface {
 	CatalogDraft(context.Context, string, string, string, string) (Draft, error)
 	CatalogSave(context.Context, string, string, Draft) error
 	CatalogPrepare(context.Context, string, string, string, int64) (Bundle, error)
-	CatalogPublish(context.Context, string, string, Version) error
+	CatalogPublish(context.Context, string, string, *Version) error
 	CatalogVersions(context.Context, string, string, string, string, bool, identity.Query) ([]Version, error)
 	CatalogVersion(context.Context, string, string, string, string, string) (Version, error)
 	CatalogReferences(context.Context, string, string, string, string, string, identity.Query) ([]Reference, error)

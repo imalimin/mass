@@ -106,7 +106,7 @@ func TestExplicitRetrySafety(t *testing.T) {
 			control := &budget{}
 			transport := &provider{partial: tc.partial, repo: repo, failLog: tc.fail}
 			g := &Gateway{Journal: &journal.Journal{Repo: repo}, Content: &resource.ContentStore{Repo: repo, Blobs: fakes.NewBlobs(), Prefix: "test", MaxBytes: 1 << 20}, Transport: transport, Credentials: credentials, Control: control}
-			s := run.Snapshot{ID: uuid.NewString(), ActorID: uuid.NewString(), SpaceID: uuid.NewString(), SessionID: uuid.NewString(), Definition: run.Definition{ModelAttempts: tc.attempts, OutputTokens: 10}}
+			s := run.Snapshot{ID: uuid.NewString(), ActorID: uuid.NewString(), SpaceID: storage.NewShortID(), SessionID: storage.NewShortID(), Definition: run.Definition{ModelAttempts: tc.attempts, OutputTokens: 10}}
 			p := run.Prepared{EventID: uuid.NewString(), InputTokens: 10, Spec: run.ProjectionSpec{Purpose: "task"}}
 			reply, err := g.Call(context.Background(), s, p)
 			for i, endpoint := range transport.endpoints {

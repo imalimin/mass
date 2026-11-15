@@ -64,7 +64,7 @@ func RestoreStorage(ctx context.Context, source, target Config, expectedDatabase
 		clear(plain)
 		return err
 	}, func(ctx context.Context, o storage.Object) (storage.Object, error) {
-		if !storage.ValidID(o.SpaceID) || !storage.ValidID(o.ID) || o.Size < 0 || o.Size > target.Storage.MaxObjectBytes {
+		if !storage.ValidShortID(o.SpaceID) || !storage.ValidID(o.ID) || o.Size < 0 || o.Size > target.Storage.MaxObjectBytes {
 			return o, storage.ErrIntegrity
 		}
 		next := o

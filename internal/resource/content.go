@@ -37,7 +37,7 @@ func (f *File) Close() error {
 var kindPattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,63}$`)
 
 func (c *ContentStore) Put(ctx context.Context, actor, space, id, kind, media string, source io.Reader) (storage.Object, error) {
-	if !storage.ValidID(space) || !storage.ValidID(id) || !kindPattern.MatchString(kind) || c.MaxBytes < 1 {
+	if !storage.ValidShortID(space) || !storage.ValidID(id) || !kindPattern.MatchString(kind) || c.MaxBytes < 1 {
 		return storage.Object{}, storage.ErrInvalid
 	}
 	if _, _, err := mime.ParseMediaType(media); err != nil || len(media) > 128 {

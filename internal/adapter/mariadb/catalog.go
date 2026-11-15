@@ -170,7 +170,7 @@ func (s *Store) CatalogPrepare(ctx context.Context, actor, space, id string, rev
 	})
 	return
 }
-func (s *Store) CatalogPublish(ctx context.Context, actor, space string, v catalog.Version) error {
+func (s *Store) CatalogPublish(ctx context.Context, actor, space string, v *catalog.Version) error {
 	return s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
 		b := v.Bundle
 		if b.Kind == "skill" {
@@ -187,6 +187,9 @@ func (s *Store) CatalogPublish(ctx context.Context, actor, space string, v catal
 			}
 			if o.SHA256 != v.SHA256 {
 				return storage.ErrIntegrity
+			}
+			if err = assignPublishLabel(ctx, tx, space, v); err != nil {
+				return err
 			}
 			_, err = tx.ExecContext(ctx, "INSERT INTO skill_versions(space_id,id,definition_id,label,content_id,created_at) VALUES(?,?,?,?,?,?)", space, v.ID, v.DefinitionID, v.Label, v.ContentID, v.CreatedAt)
 			if err = publishError(err); err != nil {
@@ -209,6 +212,9 @@ func (s *Store) CatalogPublish(ctx context.Context, actor, space string, v catal
 		sum := sha256.Sum256(raw)
 		if o.SHA256 != v.SHA256 || hex.EncodeToString(sum[:]) != o.SHA256 {
 			return storage.ErrIntegrity
+		}
+		if err = assignPublishLabel(ctx, tx, space, v); err != nil {
+			return err
 		}
 		var label any = v.Label
 		if v.Debug {
@@ -234,6 +240,26 @@ func (s *Store) CatalogPublish(ctx context.Context, actor, space string, v catal
 		}
 		return audit(ctx, tx, actor, space, action, v.ID)
 	})
+}
+
+// The publisher already holds the draft row lock, which serializes numbering
+// and insertion for a definition. Use a locking read to see the previous commit.
+func assignPublishLabel(ctx context.Context, tx *sql.Tx, space string, v *catalog.Version) error {
+	if v.Debug || v.Label != "" {
+		return nil
+	}
+	const number = "CAST(SUBSTRING(label, 2) AS DECIMAL(64,0))"
+	err := tx.QueryRowContext(ctx, "SELECT CONCAT('v', "+number+" + 1) FROM "+versionTable(v.Bundle.Kind)+
+		" WHERE space_id=? AND definition_id=? AND label REGEXP '^v[0-9]+$' ORDER BY "+number+" DESC LIMIT 1 FOR UPDATE",
+		space, v.DefinitionID).Scan(&v.Label)
+	if errors.Is(err, sql.ErrNoRows) {
+		v.Label = "v1"
+		return nil
+	}
+	if err == nil && !catalog.ValidLabel(v.Label) {
+		return catalog.ErrConfig
+	}
+	return err
 }
 
 func publishError(err error) error {

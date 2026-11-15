@@ -70,7 +70,7 @@ type RunReader interface {
 }
 
 func (j *Journal) ReadRun(ctx context.Context, actor, space, session, runID string, after int64, through *int64, limit int) (Page, error) {
-	if !storage.ValidID(runID) || !storage.ValidID(space) || !storage.ValidID(session) || after < 0 || limit < 1 || limit > 100 || through != nil && *through < after {
+	if !storage.ValidID(runID) || !storage.ValidShortID(space) || !storage.ValidShortID(session) || after < 0 || limit < 1 || limit > 100 || through != nil && *through < after {
 		return Page{}, storage.ErrInvalid
 	}
 	var page Page
@@ -162,7 +162,7 @@ func Validate(e Proposed) error {
 		if e.RunID != "" || len(d.Title) > 200 {
 			return storage.ErrSchema
 		}
-		if d.DefinitionRef != nil && (!storage.ValidID(d.DefinitionID) || !storage.ValidID(d.VersionID) || !storage.ValidID(d.DefinitionRef.ObjectID) || !hashPattern.MatchString(d.DefinitionRef.SHA256)) {
+		if d.DefinitionRef != nil && (!storage.ValidShortID(d.DefinitionID) || !storage.ValidID(d.VersionID) || !storage.ValidID(d.DefinitionRef.ObjectID) || !hashPattern.MatchString(d.DefinitionRef.SHA256)) {
 			return storage.ErrSchema
 		}
 	case "run.created":
@@ -239,7 +239,7 @@ func Digest(v any) string {
 	return hex.EncodeToString(sum[:])
 }
 func Prepare(actor string, r Request) (Batch, error) {
-	if !storage.ValidID(r.SpaceID) || !storage.ValidID(r.SessionID) || !keyPattern.MatchString(r.AppendKey) || len(r.Events) == 0 || len(r.Events) > 100 || (r.ExpectedSequence != nil && *r.ExpectedSequence < 0) {
+	if !storage.ValidShortID(r.SpaceID) || !storage.ValidShortID(r.SessionID) || !keyPattern.MatchString(r.AppendKey) || len(r.Events) == 0 || len(r.Events) > 100 || (r.ExpectedSequence != nil && *r.ExpectedSequence < 0) {
 		return Batch{}, storage.ErrInvalid
 	}
 	// Canonicalize without float64 conversion: equivalent key order is a retry,
@@ -287,7 +287,7 @@ func (j *Journal) Append(ctx context.Context, actor string, r Request) ([]Event,
 	return j.Repo.AppendEvents(ctx, actor, b)
 }
 func (j *Journal) Read(ctx context.Context, actor, space, session string, after int64, through *int64, limit int) (Page, error) {
-	if !storage.ValidID(space) || !storage.ValidID(session) || after < 0 || limit < 1 || limit > 100 || (through != nil && (*through < after || *through < 0)) {
+	if !storage.ValidShortID(space) || !storage.ValidShortID(session) || after < 0 || limit < 1 || limit > 100 || (through != nil && (*through < after || *through < 0)) {
 		return Page{}, storage.ErrInvalid
 	}
 	page, err := j.Repo.ReadEvents(ctx, actor, space, session, after, through, limit)

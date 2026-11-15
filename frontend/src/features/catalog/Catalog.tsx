@@ -33,7 +33,11 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
   const create = useMutation({ mutationFn: () => request<Draft>(base, 'POST', { name }), onSuccess: d => { select(d.id); setName(''); refresh() } })
   return <section className="panel catalog">{selected ? <><Link className="text-link back-link" to={base}>← 返回 {kind === 'skill' ? 'Skills' : 'Agents'} 列表</Link><DefinitionEditor key={`${kind}-${selected}`} space={space.id} kind={kind} id={selected} onCopied={select} refresh={refresh} /></> : <>
     <h2>{kind === 'skill' ? 'Skill 方法库' : 'Agent 定义'}</h2><p className="muted">保存草稿后发布独立版本。Agent 始终绑定指定的 Skill 版本。</p>
-    <form className="inline-form" onSubmit={e => { e.preventDefault(); create.mutate() }}><label>定义名称<input value={name} onChange={e => setName(e.target.value)} pattern="[a-z][a-z0-9-]{0,63}" placeholder="例如 report-writer" required /></label><button disabled={create.isPending}>创建 {kind === 'skill' ? 'Skill' : 'Agent'}</button></form>
+    <form className="inline-form" onSubmit={e => { e.preventDefault(); create.mutate() }}>
+      <label>定义名称<input value={name} onChange={e => setName(e.target.value)} pattern={String.raw`[a-z][a-z0-9_\-]{0,63}`} aria-describedby="definition-name-hint" placeholder="例如 report_writer" required /></label>
+      <button disabled={create.isPending}>创建 {kind === 'skill' ? 'Skill' : 'Agent'}</button>
+    </form>
+    <small id="definition-name-hint">以小写英文字母开头，最多 64 个字符，可使用小写英文字母、数字、连字符（-）和下划线（_）。</small>
     {[query.error, create.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}
     <div className="definition-list">{query.data?.map(d => kind === 'agent' ? <div className="agent-entry" key={d.id}>
       <Link className="resource-link" to={`${base}/${d.id}`}>{d.name}{d.archived ? '（已归档）' : ''}</Link>
@@ -53,7 +57,7 @@ function DefinitionEditor(props: { space: string; kind: Kind; id: string; onCopi
 }
 function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: string; kind: Kind; id: string; initial: Draft; refresh: () => void; onCopied: (id: string) => void }) {
   const base = `/spaces/${space}/${kind}s/${id}`
-  const [draft, setDraft] = useState(initial), [doc, setDoc] = useState<Doc>(initial.document), [label, setLabel] = useState('v1'), [notice, setNotice] = useState('')
+  const [draft, setDraft] = useState(initial), [doc, setDoc] = useState<Doc>(initial.document), [notice, setNotice] = useState('')
   const [conflict, setConflict] = useState<Draft | null>(null), [copyName, setCopyName] = useState(''), [versionID, setVersionID] = useState(''), [fromID, setFromID] = useState('')
   const uploadInput = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null), [path, setPath] = useState<string | null>(null), [preview, setPreview] = useState(false)
@@ -120,7 +124,7 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
         setNotice('草稿已保存')
         revision = saved.revision
       }
-      return request<Version>(`${base}/${debug ? 'debug-snapshots' : 'versions'}`, 'POST', { expected_revision: revision, label: debug ? '' : label })
+      return request<Version>(`${base}/${debug ? 'debug-snapshots' : 'versions'}`, 'POST', { expected_revision: revision })
     },
     onSuccess: v => { refresh(); setVersionID(v.id); setNotice(v.debug ? '调试快照已固定，可在会话与运行中选择它。' : `已发布 ${v.label}`) },
     onError: failed,
@@ -200,7 +204,6 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
       <div className="actions">{previewToggle}</div>
       {previewContent}
       <ConfigBuilder key={draft.revision} space={space} name={draft.name} config={doc.config_yaml} disabled={pending || draft.archived}
-        label={label} onLabelChange={setLabel}
         onAction={(action, configYaml) => action === 'draft' ? save.mutate({ configYaml }) : publish.mutate({ debug: action === 'debug', configYaml })} />
       <details className="config-builder"><summary>高级配置</summary>
         <Suspense fallback={<p>正在载入编辑器…</p>}><CodeEditor label="agent.yaml" language="yaml" value={doc.config_yaml}
@@ -209,7 +212,7 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
     </>}
     {kind === 'skill' && [!save.variables && save.error, !upload.variables?.creating && upload.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}
     {conflict && <div className="error"><p role="alert">草稿已被其他编辑者修改。本地内容已保留，请查看差异后重新编辑。</p><Suspense fallback={<p>读取差异…</p>}><CodeEditor label="草稿冲突差异" language="yaml" original={JSON.stringify(conflict.document, null, 2)} value={JSON.stringify(doc, null, 2)} /></Suspense><button disabled={pending} onClick={() => { accept(conflict); setResourceEdits(new Map()); save.reset(); upload.reset() }}>载入服务器草稿</button></div>}
-    {kind === 'skill' && <><h3>发布</h3><div className="inline-form"><label>发布版本号<input value={label} onChange={e => setLabel(e.target.value)} maxLength={64} /></label><button disabled={pending || changed || draft.archived} onClick={() => publish.mutate({})}>发布版本</button></div></>}
+    {kind === 'skill' && <div className="actions"><button disabled={pending || changed || draft.archived} onClick={() => publish.mutate({})}>发布版本</button></div>}
     <h3>版本与差异</h3><div className="form-grid"><label>查看版本<select value={versionID} onChange={e => { setVersionID(e.target.value); setFromID('') }}><option value="">选择历史版本</option>{all.map(v => <option key={v.id} value={v.id}>{displayVersion(v)}{v.archived ? '（已归档）' : ''}{draft.default_version_id === v.id ? '（默认）' : ''}</option>)}</select></label><label>对比基准<select value={fromID} onChange={e => setFromID(e.target.value)}><option value="">不比较</option>{all.filter(v => v.id !== versionID).map(v => <option key={v.id} value={v.id}>{displayVersion(v)}</option>)}</select></label></div>
     {detail.data && <div className="version-detail"><h3>不可变版本：{displayVersion(detail.data)}</h3><p className="muted">SHA-256：{detail.data.sha256}</p><pre data-testid="version-markdown">{detail.data.bundle.document.markdown}</pre><pre data-testid="version-config">{detail.data.bundle.document.config_yaml}</pre>{detail.data.bundle.bindings.map(b => <p key={b.skill_id}>Skill {b.skill_id} → {b.version} · {b.version_id}</p>)}{detail.data.bundle.document.assets?.map(a => <p key={a.path}><a download href={`/api/v1${assetPayload(space, a)}`}>{a.path}</a></p>)}
       <div className="actions">{kind === 'agent' && !draft.archived && !detail.data.archived && <Link className="primary-link" to={agentSessionsPath(space, id) + '?version=' + encodeURIComponent(detail.data.id)}>使用此版本开始调试</Link>}{kind === 'agent' && !detail.data.debug && !detail.data.archived && <button disabled={pending || draft.archived} onClick={() => mutateState.mutate({ suffix: 'default-version', body: { version_id: versionID } })}>设为默认版本</button>}<button className="secondary" disabled={pending || kind === 'skill' && changed} onClick={() => mutateState.mutate({ suffix: `versions/${versionID}/archive`, body: { archived: !detail.data!.archived } })}>{detail.data.archived ? '恢复版本选择' : '归档此版本'}</button></div>
@@ -220,9 +223,8 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
     {notice && <p role="status">{notice}</p>}{[kind === 'agent' && save.error, publish.error, mutateState.error, copy.error, versions.error, snapshots.error, detail.error, references.error, diff.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}
   </div>
 }
-function ConfigBuilder({ space, name, config, disabled, label, onLabelChange, onAction }: {
-  space: string; name: string; config: string; disabled: boolean; label: string
-  onLabelChange: (label: string) => void
+function ConfigBuilder({ space, name, config, disabled, onAction }: {
+  space: string; name: string; config: string; disabled: boolean
   onAction: (action: ConfigAction, config: string) => void
 }) {
   const models = useQuery({ queryKey: ['private', space, 'catalog-models'], queryFn: ({ signal }) => list<Schema['Model']>(`/spaces/${space}/models?available=true`, signal) })
@@ -316,9 +318,8 @@ function ConfigBuilder({ space, name, config, disabled, label, onLabelChange, on
         onChange={e => select({ tools: e.target.checked ? [...state.tools, tool] : state.tools.filter(t => t !== tool) })} />{tool}
     </label>)}</div>
     {codeTools.some(tool => state.tools.includes(tool)) && <p className="muted">run_code 运行 Python，run_code_js 运行 JavaScript，run_code_go 运行 Go。启用后可读写当前会话文件及发送 HTTP 请求。</p>}
-    <div className="inline-form">
-      <label>发布版本号<input disabled={disabled} value={label} onChange={e => onLabelChange(e.target.value)} maxLength={64} /></label>
-      <button type="button" disabled={disabled || !canPublish || !label.trim()} onClick={() => submit('publish')}>发布版本</button>
+    <div className="actions">
+      <button type="button" disabled={disabled || !canPublish} onClick={() => submit('publish')}>发布版本</button>
       <button type="button" className="secondary" disabled={disabled || !canSave} onClick={() => submit('draft')}>保存草稿</button>
       <button type="button" className="secondary" disabled={disabled || !canPublish} onClick={() => submit('debug')}>创建调试快照</button>
     </div>

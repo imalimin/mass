@@ -341,6 +341,32 @@ func exerciseCatalog(t *testing.T, blobs storage.BlobStore, prefix string) {
 	api("PUT", path(agent)+"/draft", map[string]any{"expected_revision": agent.Revision, "document": agent.Document}, 400)
 	api("GET", root+"/agents?limit=1", nil, 200)
 	api("GET", root+"/skills", nil, 200)
+	publish(s2, "v9")
+	tenth := publish(s2, "v10")
+	publish(s2, "nightly")
+	api("PUT", path(s2)+"/versions/"+tenth.ID+"/archive", map[string]bool{"archived": true}, 204)
+	type publication struct {
+		version catalog.Version
+		err     error
+	}
+	publications := make(chan publication, 2)
+	for range 2 {
+		go func() {
+			version, err := svc.Publish(ctx, u.ID, space.ID, "skill", s2.ID, "", s2.Revision, false)
+			publications <- publication{version, err}
+		}()
+	}
+	labels := map[string]bool{}
+	for range 2 {
+		result := <-publications
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		labels[result.version.Label] = true
+	}
+	if !labels["v11"] || !labels["v12"] {
+		t.Fatalf("unexpected automatic labels %v", labels)
+	}
 	t.Log("catalog: exact versions, immutable debug/resource content, CAS, publication rollback, cross-space checks, archive/default and API contracts passed")
 }
 
@@ -385,12 +411,9 @@ func TestD01UpgradeCompatibility(t *testing.T) {
 		}
 	}
 	for i := 0; i < 2; i++ {
-		if err = db.Admin.Migrate(ctx); err != nil {
+		if err = db.MigrateTo(ctx, 14); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err = db.Store.CheckSchema(ctx); err != nil {
-		t.Fatal(err)
 	}
 	for _, table := range []string{"sessions", "runs"} {
 		var count int
@@ -472,7 +495,7 @@ func TestSkillPackageUpgrade(t *testing.T) {
 	session := uuid.NewString()
 	exec("INSERT INTO sessions(space_id,id,actor_id,definition_id,version_id) VALUES(?,?,?,?,?)", space.ID, session, actor.ID, agent, agentVersion)
 
-	if err = db.Admin.Migrate(ctx); err != nil {
+	if err = db.MigrateTo(ctx, 14); err != nil {
 		t.Fatal(err)
 	}
 	items, err := db.Store.CatalogList(ctx, actor.ID, space.ID, "skill", identity.Query{Limit: 10})

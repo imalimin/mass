@@ -52,7 +52,7 @@ func (s *Service) createDraft(ctx context.Context, actor, space string, d Draft)
 }
 
 func (s *Service) Create(ctx context.Context, actor, space, kind, name string) (Draft, error) {
-	d := Draft{Definition: Definition{ID: uuid.NewString(), Kind: kind, Name: name}, Revision: 1}
+	d := Draft{Definition: newDefinition(kind, name), Revision: 1}
 	if kind == "skill" {
 		d.Document.Assets = []Asset{}
 	}
@@ -135,7 +135,7 @@ func (s *Service) Upload(ctx context.Context, actor, space, kind, id, path, medi
 	return s.saveDraft(ctx, actor, space, d, &a, raw)
 }
 func (s *Service) Publish(ctx context.Context, actor, space, kind, id, label string, revision int64, debug bool) (Version, error) {
-	if (!debug && !ValidLabel(label)) || (debug && kind != "agent") {
+	if (!debug && label != "" && !ValidLabel(label)) || (debug && kind != "agent") {
 		return Version{}, ErrConfig
 	}
 	if kind == "skill" {
@@ -157,7 +157,8 @@ func (s *Service) Publish(ctx context.Context, actor, space, kind, id, label str
 			return Version{}, err
 		}
 		v := Version{ID: uuid.NewString(), DefinitionID: id, Label: label, ContentID: o.ID, SHA256: o.SHA256, CreatedAt: time.Now().UTC().Truncate(time.Microsecond), Bundle: skillBundle(d)}
-		return v, s.Repo.CatalogPublish(ctx, actor, space, v)
+		err = s.Repo.CatalogPublish(ctx, actor, space, &v)
+		return v, err
 	}
 	b, err := s.Repo.CatalogPrepare(ctx, actor, space, id, revision)
 	if err != nil {
@@ -175,7 +176,8 @@ func (s *Service) Publish(ctx context.Context, actor, space, kind, id, label str
 		label = ""
 	}
 	v := Version{ID: uuid.NewString(), DefinitionID: id, Label: label, Debug: debug, ContentID: o.ID, SHA256: o.SHA256, CreatedAt: time.Now().UTC().Truncate(time.Microsecond), Bundle: b}
-	return v, s.Repo.CatalogPublish(ctx, actor, space, v)
+	err = s.Repo.CatalogPublish(ctx, actor, space, &v)
+	return v, err
 }
 func (s *Service) Version(ctx context.Context, actor, space, kind, id, version string) (Version, error) {
 	v, err := s.Repo.CatalogVersion(ctx, actor, space, kind, id, version)
@@ -258,7 +260,14 @@ func (s *Service) Copy(ctx context.Context, actor, space, kind, id, name string)
 			d.Document.ConfigYAML = string(raw)
 		}
 	}
-	d.Definition = Definition{ID: uuid.NewString(), Kind: kind, Name: name}
+	d.Definition = newDefinition(kind, name)
 	d.Revision = 1
 	return s.createDraft(ctx, actor, space, d)
+}
+
+func newDefinition(kind, name string) Definition {
+	if kind == "agent" {
+		return Definition{ID: storage.NewShortID(), Kind: kind, Name: name}
+	}
+	return Definition{ID: uuid.NewString(), Kind: kind, Name: name}
 }

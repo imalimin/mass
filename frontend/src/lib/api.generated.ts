@@ -938,8 +938,7 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         Definition: {
-            /** Format: uuid */
-            id: string;
+            id: components["schemas"]["DefinitionID"];
             /** @enum {string} */
             kind: "agent" | "skill";
             name: string;
@@ -965,8 +964,7 @@ export interface components {
             directories?: string[];
         };
         DefinitionDraft: {
-            /** Format: uuid */
-            id: string;
+            id: components["schemas"]["DefinitionID"];
             /** @enum {string} */
             kind: "agent" | "skill";
             name: string;
@@ -1009,8 +1007,7 @@ export interface components {
         DefinitionBundle: {
             /** @constant */
             format_version: 1;
-            /** Format: uuid */
-            definition_id: string;
+            definition_id: components["schemas"]["DefinitionID"];
             /** @enum {string} */
             kind: "agent" | "skill";
             name: string;
@@ -1023,8 +1020,7 @@ export interface components {
         DefinitionVersion: {
             /** Format: uuid */
             id: string;
-            /** Format: uuid */
-            definition_id: string;
+            definition_id: components["schemas"]["DefinitionID"];
             label: string;
             debug: boolean;
             archived: boolean;
@@ -1038,8 +1034,7 @@ export interface components {
         DefinitionReference: {
             /** Format: uuid */
             id: string;
-            /** Format: uuid */
-            definition_id: string;
+            definition_id: components["schemas"]["ShortResourceID"];
             name: string;
             label: string;
             debug: boolean;
@@ -1064,6 +1059,7 @@ export interface components {
         };
         DefinitionPublishInput: {
             expected_revision: number;
+            /** @description Omit to assign the next vN for this definition, starting at v1. Debug snapshots do not have a label. */
             label?: string;
         };
         DefinitionArchiveInput: {
@@ -1102,6 +1098,10 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** @description Server-generated space, Agent, or session ID. */
+        ShortResourceID: string;
+        /** @description Agent definitions use short IDs and Skill definitions use UUIDs. */
+        DefinitionID: components["schemas"]["ShortResourceID"] | components["schemas"]["ResourceID"];
         /**
          * Format: uuid
          * @description Server-generated UUID; opaque to callers, case-sensitive in storage.
@@ -1121,7 +1121,7 @@ export interface components {
             username: string;
         };
         Space: {
-            id: components["schemas"]["ResourceID"];
+            id: components["schemas"]["ShortResourceID"];
             name: string;
             is_owner: boolean;
             /** Format: date-time */
@@ -1250,10 +1250,8 @@ export interface components {
         JournalEvent: {
             /** Format: uuid */
             event_id: string;
-            /** Format: uuid */
-            space_id: string;
-            /** Format: uuid */
-            session_id: string;
+            space_id: components["schemas"]["ShortResourceID"];
+            session_id: components["schemas"]["ShortResourceID"];
             /** Format: uuid */
             run_id?: string | null;
             sequence: string;
@@ -1288,8 +1286,8 @@ export interface components {
         };
         WorkspaceSnapshot: {
             id: components["schemas"]["ResourceID"];
-            space_id: components["schemas"]["ResourceID"];
-            session_id: components["schemas"]["ResourceID"];
+            space_id: components["schemas"]["ShortResourceID"];
+            session_id: components["schemas"]["ShortResourceID"];
             source_run_id: components["schemas"]["ResourceID"];
             base_snapshot_id?: components["schemas"]["ResourceID"];
             object_id: components["schemas"]["ResourceID"];
@@ -1346,8 +1344,7 @@ export interface components {
             compression?: "summary" | "reject";
             /** Format: uuid */
             version_id: string;
-            /** Format: uuid */
-            agent_id: string;
+            agent_id: components["schemas"]["ShortResourceID"];
             debug: boolean;
             platform_version: string;
             platform: string;
@@ -1364,10 +1361,8 @@ export interface components {
         RuntimeSnapshot: {
             /** Format: uuid */
             id: string;
-            /** Format: uuid */
-            space_id: string;
-            /** Format: uuid */
-            session_id: string;
+            space_id: components["schemas"]["ShortResourceID"];
+            session_id: components["schemas"]["ShortResourceID"];
             /** Format: uuid */
             actor_id: string;
             definition_ref: components["schemas"]["RuntimeRef"];
@@ -1480,10 +1475,8 @@ export interface components {
         RuntimeRun: {
             /** Format: uuid */
             id: string;
-            /** Format: uuid */
-            space_id: string;
-            /** Format: uuid */
-            session_id: string;
+            space_id: components["schemas"]["ShortResourceID"];
+            session_id: components["schemas"]["ShortResourceID"];
             /** Format: uuid */
             actor_id: string;
             definition_ref: components["schemas"]["RuntimeRef"];
@@ -1513,15 +1506,12 @@ export interface components {
             usage: components["schemas"]["RuntimeUsage"];
         };
         RuntimeSession: {
-            /** Format: uuid */
-            id: string;
-            /** Format: uuid */
-            space_id: string;
+            id: components["schemas"]["ShortResourceID"];
+            space_id: components["schemas"]["ShortResourceID"];
             /** Format: uuid */
             actor_id: string;
             title: string;
-            /** Format: uuid */
-            definition_id: string;
+            definition_id: components["schemas"]["ShortResourceID"];
             /** Format: uuid */
             version_id: string;
             definition_ref: components["schemas"]["RuntimeRef"];
@@ -1555,10 +1545,8 @@ export interface components {
         RuntimeArtifact: {
             /** Format: uuid */
             id: string;
-            /** Format: uuid */
-            space_id: string;
-            /** Format: uuid */
-            session_id: string;
+            space_id: components["schemas"]["ShortResourceID"];
+            session_id: components["schemas"]["ShortResourceID"];
             /** Format: uuid */
             run_id: string;
             call_id: string;
@@ -1604,8 +1592,7 @@ export interface components {
             plan?: components["schemas"]["RuntimePlan"];
         };
         UICheckpoint: {
-            /** Format: uuid */
-            session_id: string;
+            session_id: components["schemas"]["ShortResourceID"];
             /** Format: uuid */
             stream_id?: string;
             source_sequence: string;
@@ -1629,8 +1616,7 @@ export interface components {
         };
         SessionCreateInput: {
             idempotency_key: string;
-            /** Format: uuid */
-            agent_id: string;
+            agent_id: components["schemas"]["ShortResourceID"];
             version_id?: string;
             source_workspace_snapshot_id?: string;
             title?: string;
@@ -1664,8 +1650,7 @@ export interface components {
         RuntimeAttachment: {
             /** Format: uuid */
             id: string;
-            /** Format: uuid */
-            session_id: string;
+            session_id: components["schemas"]["ShortResourceID"];
             name: string;
             media_type: string;
             size: number;
@@ -1947,7 +1932,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: components["schemas"]["ResourceID"];
+                space_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -1981,7 +1966,7 @@ export interface operations {
                 Origin: string;
             };
             path: {
-                space_id: components["schemas"]["ResourceID"];
+                space_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -2017,7 +2002,7 @@ export interface operations {
                 Origin: string;
             };
             path: {
-                space_id: components["schemas"]["ResourceID"];
+                space_id: components["schemas"]["ShortResourceID"];
                 user_id: components["schemas"]["ResourceID"];
             };
             cookie?: never;
@@ -2052,7 +2037,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: components["schemas"]["ResourceID"];
+                space_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -2086,7 +2071,7 @@ export interface operations {
                 Origin: string;
             };
             path: {
-                space_id: components["schemas"]["ResourceID"];
+                space_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -2121,7 +2106,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: components["schemas"]["ResourceID"];
+                space_id: components["schemas"]["ShortResourceID"];
                 id: components["schemas"]["ResourceID"];
             };
             cookie?: never;
@@ -2156,7 +2141,7 @@ export interface operations {
                 Origin: string;
             };
             path: {
-                space_id: components["schemas"]["ResourceID"];
+                space_id: components["schemas"]["ShortResourceID"];
                 id: components["schemas"]["ResourceID"];
             };
             cookie?: never;
@@ -2195,7 +2180,7 @@ export interface operations {
                 Origin: string;
             };
             path: {
-                space_id: components["schemas"]["ResourceID"];
+                space_id: components["schemas"]["ShortResourceID"];
                 id: components["schemas"]["ResourceID"];
             };
             cookie?: never;
@@ -2229,7 +2214,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: components["schemas"]["ResourceID"];
+                space_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -2266,8 +2251,8 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: components["schemas"]["ResourceID"];
-                session_id: components["schemas"]["ResourceID"];
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -2298,7 +2283,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: components["schemas"]["ResourceID"];
+                space_id: components["schemas"]["ShortResourceID"];
                 id: components["schemas"]["ResourceID"];
             };
             cookie?: never;
@@ -2333,7 +2318,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: components["schemas"]["ResourceID"];
+                space_id: components["schemas"]["ShortResourceID"];
                 id: components["schemas"]["ResourceID"];
             };
             cookie?: never;
@@ -2368,7 +2353,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -2444,7 +2429,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -2524,8 +2509,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -2605,8 +2590,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -2682,8 +2667,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -2766,8 +2751,8 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -2843,8 +2828,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -2924,8 +2909,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
                 version_id: string;
             };
             cookie?: never;
@@ -3002,8 +2987,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
                 version_id: string;
             };
             cookie?: never;
@@ -3074,8 +3059,8 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -3151,8 +3136,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -3232,8 +3217,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
                 version_id: string;
             };
             cookie?: never;
@@ -3313,8 +3298,8 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
                 version_id: string;
             };
             cookie?: never;
@@ -3394,8 +3379,8 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -3471,8 +3456,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -3550,8 +3535,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
                 version_id: string;
             };
             cookie?: never;
@@ -3630,8 +3615,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -3712,7 +3697,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -3788,7 +3773,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -3868,7 +3853,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 id: string;
             };
             cookie?: never;
@@ -3949,7 +3934,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 id: string;
             };
             cookie?: never;
@@ -4026,7 +4011,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 id: string;
             };
             cookie?: never;
@@ -4107,7 +4092,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 id: string;
             };
             cookie?: never;
@@ -4191,7 +4176,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 id: string;
             };
             cookie?: never;
@@ -4268,7 +4253,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 id: string;
             };
             cookie?: never;
@@ -4349,7 +4334,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 id: string;
                 version_id: string;
             };
@@ -4427,7 +4412,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 id: string;
                 version_id: string;
             };
@@ -4499,7 +4484,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 id: string;
                 version_id: string;
             };
@@ -4580,7 +4565,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 id: string;
             };
             cookie?: never;
@@ -4657,7 +4642,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 id: string;
             };
             cookie?: never;
@@ -4736,7 +4721,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 id: string;
                 version_id: string;
             };
@@ -4819,7 +4804,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -4850,7 +4835,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -4888,8 +4873,8 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
-                agent_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                agent_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -4920,8 +4905,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                session_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -4955,8 +4940,8 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
-                session_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -4987,8 +4972,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                session_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -5023,7 +5008,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 run_id: string;
             };
             cookie?: never;
@@ -5055,7 +5040,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 run_id: string;
             };
             cookie?: never;
@@ -5092,8 +5077,8 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
-                session_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -5163,7 +5148,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 run_id: string;
             };
             cookie?: never;
@@ -5195,7 +5180,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 run_id: string;
             };
             cookie?: never;
@@ -5231,7 +5216,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 run_id: string;
             };
             cookie?: never;
@@ -5263,7 +5248,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 run_id: string;
                 projection_id: string;
             };
@@ -5296,7 +5281,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 run_id: string;
             };
             cookie?: never;
@@ -5328,8 +5313,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                session_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -5360,8 +5345,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                session_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -5392,8 +5377,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                session_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -5424,7 +5409,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 run_id: string;
             };
             cookie?: never;
@@ -5456,7 +5441,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 id: string;
             };
             cookie?: never;
@@ -5495,7 +5480,7 @@ export interface operations {
                 "Last-Event-ID"?: string;
             };
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 run_id: string;
             };
             cookie?: never;
@@ -5527,8 +5512,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
-                session_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
             };
             cookie?: never;
         };
@@ -5563,7 +5548,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                space_id: string;
+                space_id: components["schemas"]["ShortResourceID"];
                 run_id: string;
             };
             cookie?: never;

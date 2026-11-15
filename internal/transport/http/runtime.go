@@ -97,7 +97,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 	})
 	listSessions := func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		agent := r.PathValue("agent_id")
-		if agent != "" && !storage.ValidID(agent) {
+		if agent != "" && !storage.ValidShortID(agent) {
 			return storage.ErrInvalid
 		}
 		q, n, scope, err := query(r, u)

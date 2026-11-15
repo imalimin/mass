@@ -22,7 +22,16 @@ try {
     await root.locator('.view-lines').click(); await target.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A'); await target.keyboard.insertText(value)
   }
   const save = async (target = page) => { const response = target.waitForResponse(r => r.url().endsWith('/draft') && r.request().method() === 'PUT'); await target.getByRole('button', { name: '保存草稿', exact: true }).click(); assert.equal((await response).status(), 200) }
-  const publish = async label => { await page.getByLabel('发布版本号').fill(label); const res = page.waitForResponse(r => r.url().endsWith('/versions') && r.request().method() === 'POST'); await page.getByRole('button', { name: '发布版本', exact: true }).click(); const r = await res; assert.equal(r.status(), 201, await r.text()); await page.getByRole('heading', { name: `不可变版本：${label}`, exact: true }).waitFor(); return r.json() }
+  const publish = async label => {
+    const response = page.waitForResponse(r => r.url().endsWith('/versions') && r.request().method() === 'POST')
+    await page.getByRole('button', { name: '发布版本', exact: true }).click()
+    const result = await response
+    assert.equal(result.status(), 201, await result.text())
+    const version = await result.json()
+    assert.equal(version.label, label)
+    await page.getByRole('heading', { name: `不可变版本：${label}`, exact: true }).waitFor()
+    return version
+  }
   const create = async (kind, name) => { await page.locator('.app-sidebar').getByRole('link', { name: kind === 'Skill' ? 'Skills' : 'Agents', exact: true }).click(); await page.getByLabel('定义名称').fill(name); await page.getByRole('button', { name: `创建 ${kind}`, exact: true }).click(); await page.getByRole('heading', { name: `${name} · ${kind}`, exact: true }).waitFor() }
   await create('Skill', 'extract')
   await edit('SKILL.md', '# Extract v1\nUse the original method.')
@@ -89,11 +98,19 @@ try {
   const skill1 = await publish('v1')
   assert.deepEqual(skill1.bundle.document.directories, ['scripts/python', 'scripts/python/empty'])
   assert.ok(skill1.bundle.document.assets.some(asset => asset.path === codePath))
-  await create('Skill', 'report'); await edit('SKILL.md', '# Report v1'); await save(); const skill2 = await publish('v1')
-  await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await create('Agent', 'assistant'); await edit('AGENTS.md', '# Assistant v1')
+  await create('Skill', 'report_template'); await edit('SKILL.md', '# Report v1'); await save(); const skill2 = await publish('v1')
+  await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click()
+  const agentName = page.getByLabel('定义名称')
+  await agentName.fill('测试 Agent')
+  await page.getByRole('button', { name: '创建 Agent', exact: true }).click()
+  assert.equal(await agentName.evaluate(input => input.validity.patternMismatch), true)
+  await agentName.fill('report-writer')
+  assert.equal(await agentName.evaluate(input => input.validity.valid), true)
+  const assistantName = 'report_writer'
+  await create('Agent', assistantName); await edit('AGENTS.md', '# Assistant v1')
   await expect(page.locator('[data-editor="agent.yaml"]')).toBeHidden()
   await expect(page.getByRole('button', { name: '上传资源', exact: true })).toHaveCount(0)
-  await page.getByLabel('绑定模型').selectOption({ label: '发布模型' }); await page.getByLabel('Skill 版本：extract', { exact: true }).selectOption('v1'); await page.getByLabel('Skill 版本：report', { exact: true }).selectOption('v1'); await page.getByLabel('run_code_js', { exact: true }).check(); await page.getByText('run_code_js 运行 JavaScript', { exact: false }).waitFor()
+  await page.getByLabel('绑定模型').selectOption({ label: '发布模型' }); await page.getByLabel('Skill 版本：extract', { exact: true }).selectOption('v1'); await page.getByLabel('Skill 版本：report_template', { exact: true }).selectOption('v1'); await page.getByLabel('run_code_js', { exact: true }).check(); await page.getByText('run_code_js 运行 JavaScript', { exact: false }).waitFor()
   const maxSteps = page.getByLabel('最大步数', { exact: true })
   const runTimeout = page.getByLabel('运行超时（秒）', { exact: true })
   await expect(maxSteps).toHaveValue('30')
@@ -146,10 +163,10 @@ try {
   await codeFile.click()
   await expect(page.locator(`[data-editor="${codePath}"] .view-lines`)).toContainText('新版模板')
   const skillV2 = await publish('v2')
-  await page.getByLabel('查看版本').selectOption(skill1.id); await expect(page.getByTestId('version-markdown')).toContainText('Extract v1'); await page.getByText('assistant · v1', { exact: true }).waitFor()
+  await page.getByLabel('查看版本').selectOption(skill1.id); await expect(page.getByTestId('version-markdown')).toContainText('Extract v1'); await page.getByText(`${assistantName} · v1`, { exact: true }).waitFor()
   const download = await context.request.get(new URL(await page.locator('.version-detail').getByRole('link', { name: codePath, exact: true }).getAttribute('href'), server.url).href)
   assert.equal(download.status(), 200); assert.equal(await download.text(), 'const title = "original template";')
-  await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByRole('link', { name: 'assistant', exact: true }).click()
+  await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByRole('link', { name: assistantName, exact: true }).click()
   await expect(maxSteps).toHaveValue('60')
   await expect(runTimeout).toHaveValue('1800')
   const yaml = Object.entries({ ...agent1.bundle.config, limits: { max_steps: 75, timeout_seconds: 2400 } })
@@ -175,12 +192,12 @@ try {
   await page.getByRole('button', { name: '设为默认版本', exact: true }).click(); await expect(page.getByLabel('查看版本').locator('option:checked')).toHaveText('v2（默认）')
   await page.getByLabel('查看版本').selectOption(agent1.id); await expect(page.getByTestId('version-markdown')).toHaveText('# Assistant v1')
   // A second browser editor changes the same draft; the first must retain its work.
-  const second = await context.newPage(); await second.goto(server.url); await second.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await second.getByRole('link', { name: 'assistant', exact: true }).click()
+  const second = await context.newPage(); await second.goto(server.url); await second.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await second.getByRole('link', { name: assistantName, exact: true }).click()
   await edit('AGENTS.md', '# Concurrent server change', second); await save(second)
   await edit('AGENTS.md', '# My unsaved content'); const conflict = page.waitForResponse(r => r.url().endsWith('/draft') && r.request().method() === 'PUT'); await page.getByRole('button', { name: '保存草稿', exact: true }).click(); assert.equal((await conflict).status(), 409); await page.getByText('草稿已被其他编辑者修改。', { exact: false }).waitFor(); await page.locator('[data-editor="草稿冲突差异"] .monaco-diff-editor').waitFor()
   await page.getByRole('button', { name: '载入服务器草稿', exact: true }).click(); await second.close()
   await mkdir('.cache', { recursive: true }); await page.screenshot({ path: '.cache/d03-desktop.png', fullPage: true })
-  await page.setViewportSize({ width: 390, height: 844 }); await page.getByRole('heading', { name: 'assistant · Agent', exact: true }).scrollIntoViewIfNeeded(); await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile overflow'); await page.screenshot({ path: '.cache/d03-mobile.png' })
+  await page.setViewportSize({ width: 390, height: 844 }); await page.getByRole('heading', { name: `${assistantName} · Agent`, exact: true }).scrollIntoViewIfNeeded(); await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile overflow'); await page.screenshot({ path: '.cache/d03-mobile.png' })
   assert.deepEqual(errors, [])
   console.log('D03 browser flow passed: two Skills, Agent v1/v2, resources, immutable old content, debug snapshot, default version, Monaco diff and edit conflict.')
 } catch (e) { await page?.screenshot({ path: '.cache/d03-failure.png', fullPage: true }); throw e }

@@ -28,6 +28,15 @@ type Database struct {
 
 func (d *Database) Close()                       { d.cleanup() }
 func New(ctx context.Context) (*Database, error) { return NewVersion(ctx, migrations.CurrentVersion) }
+func (d *Database) MigrateTo(ctx context.Context, version int64) error {
+	provider, err := goose.NewProvider(goose.DialectMySQL, d.Admin.DB, migrations.Files)
+	if err != nil {
+		return err
+	}
+	_, err = provider.UpTo(ctx, version)
+	return err
+}
+
 func NewVersion(ctx context.Context, version int64) (*Database, error) {
 	source := os.Getenv("MASS_TEST_ADMIN_DSN")
 	if source == "" {
@@ -82,15 +91,10 @@ func NewVersion(ctx context.Context, version int64) (*Database, error) {
 		return fail(err)
 	}
 	if version > 0 {
-		provider, err := goose.NewProvider(goose.DialectMySQL, d.Admin.DB, migrations.Files)
-		if err != nil {
-			return fail(err)
-		}
-		if _, err = provider.UpTo(ctx, version); err != nil {
-			return fail(err)
-		}
-		if _, err = provider.UpTo(ctx, version); err != nil {
-			return fail(err)
+		for range 2 {
+			if err = d.MigrateTo(ctx, version); err != nil {
+				return fail(err)
+			}
 		}
 	}
 	cfg.User = user
