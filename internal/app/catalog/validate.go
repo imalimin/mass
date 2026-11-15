@@ -18,7 +18,7 @@ import (
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 var versionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 var hashPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-var Tools = []string{"list_files", "glob_files", "search_files", "read_file", "write_file", "edit_file", "move_file", "delete_file", "list_skill_resources", "read_skill_resource", "read_attachment", run.PythonTool, run.JavaScriptTool, run.GoTool, "update_plan", "publish_artifact"}
+var Tools = []string{"list_files", "glob_files", "search_files", "read_file", "write_file", "edit_file", "move_file", "delete_file", "list_skill_resources", "read_skill_resource", "read_attachment", run.PythonTool, run.JavaScriptTool, run.GoTool, run.CommandTool, "update_plan", "publish_artifact"}
 
 func ValidName(s string) bool { return namePattern.MatchString(s) }
 func ValidLabel(s string) bool {

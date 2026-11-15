@@ -9,7 +9,7 @@ import (
 
 func TestAllToolSchemasAndFrozenDefinitions(t *testing.T) {
 	specs := Specs()
-	if len(specs) != 16 {
+	if len(specs) != 17 {
 		t.Fatal(len(specs))
 	}
 	seen := map[string]bool{}

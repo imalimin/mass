@@ -52,6 +52,7 @@ const (
 	PythonTool     = "run_code"
 	JavaScriptTool = "run_code_js"
 	GoTool         = "run_code_go"
+	CommandTool    = "run_command"
 )
 
 func CodeLanguage(tool string) string {

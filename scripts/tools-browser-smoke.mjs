@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import { startFixtureServer } from './fixture-server.mjs'
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve('.cache/playwright')
 const require = createRequire(new URL('../frontend/package.json', import.meta.url)), { chromium, expect } = require('@playwright/test')
-const server = await startFixtureServer({ storage: true, model: true })
+const server = await startFixtureServer({ storage: true, model: true, commandPath: '/usr/bin:/bin' })
 let browser, page
 try {
   browser = await chromium.launch({ headless: true, channel: 'chromium' })
@@ -26,7 +26,7 @@ try {
   const uploaded = page.waitForResponse(r => r.url().endsWith('/resources')); await page.getByRole('button', { name: '上传资源', exact: true }).click(); assert.equal((await uploaded).status(), 200); await publish()
   await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByLabel('定义名称').fill('tools-assistant'); await page.getByRole('button', { name: '创建 Agent', exact: true }).click(); await edit('AGENTS.md', '# Tools assistant\nProcess the accepted attachment with the selected tools.')
   await page.getByLabel('绑定模型').selectOption({ label: '工具模型' }); await page.getByLabel('Skill 版本：rules', { exact: true }).selectOption('v1')
-  const checks = page.locator('.tool-options input'); assert.equal(await checks.count(), 16); for (const check of await checks.all()) await check.check()
+  const checks = page.locator('.tool-options input'); assert.equal(await checks.count(), 17); for (const check of await checks.all()) await check.check()
   await page.getByLabel('输入 Token 上限').fill('100000'); const agentVersion = await publish()
   await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByRole('link', { name: '打开 tools-assistant 的会话', exact: true }).click()
   await page.getByLabel('Agent 版本').selectOption(agentVersion.id)
@@ -54,6 +54,24 @@ try {
   await page.getByText('Trace 与上下文', { exact: true }).click(); await page.getByText('model.attempt.started', { exact: false }).first().waitFor()
   await page.keyboard.press('Escape')
   await mkdir('.cache', { recursive: true }); await page.screenshot({ path: '.cache/d05-desktop.png', fullPage: true }); await page.setViewportSize({ width: 390, height: 844 }); await page.getByRole('complementary', { name: '当前运行计划' }).scrollIntoViewIfNeeded(); await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile overflow'); await page.screenshot({ path: '.cache/d05-mobile.png' })
+  if (process.platform === 'darwin') {
+    await page.getByLabel('输入任务', { exact: true }).fill('run a host command')
+    const starting = page.waitForResponse(r => /\/sessions\/[^/]+\/runs$/.test(r.url()) && r.request().method() === 'POST')
+    await page.getByRole('button', { name: '发送任务', exact: true }).click()
+    const runResponse = await starting; assert.equal(runResponse.status(), 202); const commandRun = await runResponse.json()
+    const commandRunURL = `${server.url}/api/v1/spaces/${run.space_id}/runs/${commandRun.id}`
+    await expect.poll(async () => (await (await context.request.get(commandRunURL)).json()).status).toMatch(/^(succeeded|failed|cancelled)$/)
+    const completed = await (await context.request.get(commandRunURL)).json(); assert.equal(completed.status, 'succeeded', JSON.stringify(completed.failure_detail))
+    await page.getByText('已运行宿主命令并发布 command.txt', { exact: true }).waitFor()
+    const report = page.locator('.run-output a').filter({ hasText: 'command.txt' }).first(); await report.waitFor()
+    const file = await context.request.get(new URL(await report.getAttribute('href'), server.url).href); assert.equal(file.status(), 200); assert.equal(await file.text(), 'hello workspace')
+    const trace = await context.request.get(`${server.url}/api/v1/diagnostics?run_id=${commandRun.id}`)
+    assert.equal(trace.status(), 200)
+    const commands = (await trace.json()).items.flatMap(record => record.tools ?? []).filter(tool => tool.name === 'run_command')
+    assert.deepEqual(commands.map(tool => [tool.status, tool.result.data.exit_code]), [['failed', 7], ['completed', 0]])
+    assert.equal(commands[0].result.data.stderr, 'problem')
+    console.log('Host command browser flow passed: Agent opt-in, failure details, workspace artifact and session JSONL.')
+  }
   assert.deepEqual(errors, []); console.log('D05 browser passed: all 14 tools through actual Eino/HTTP, accepted attachment and fixed Skill, JS file/network/CSV IO, plan, immutable artifact after deletion, replay without execution and mobile layout.')
 } catch (e) { await mkdir('.cache', { recursive: true }); await page?.screenshot({ path: '.cache/d05-failure.png', fullPage: true }); throw e }
 finally { await browser?.close(); await server.stop() }

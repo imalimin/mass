@@ -20,7 +20,7 @@ type Limit = keyof typeof agentLimits
 const limitFields = Object.keys(agentLimits) as Limit[]
 const validLimit = (key: Limit, value: string) => Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= agentLimits[key].max
 const codeTools = ['run_code', 'run_code_js', 'run_code_go']
-const tools = ['list_files', 'read_file', 'write_file', 'edit_file', 'glob_files', 'search_files', 'move_file', 'delete_file', 'list_skill_resources', 'read_skill_resource', 'read_attachment', ...codeTools, 'update_plan', 'publish_artifact']
+const tools = ['list_files', 'read_file', 'write_file', 'edit_file', 'glob_files', 'search_files', 'move_file', 'delete_file', 'list_skill_resources', 'read_skill_resource', 'read_attachment', ...codeTools, 'run_command', 'update_plan', 'publish_artifact']
 const errorText = (e: unknown) => e instanceof Error ? e.message : '操作未完成'
 const displayVersion = (v: Version) => v.debug ? `调试快照 ${v.id.slice(0, 8)}` : v.label
 export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind }) {
@@ -318,6 +318,7 @@ function ConfigBuilder({ space, name, config, disabled, onAction }: {
         onChange={e => select({ tools: e.target.checked ? [...state.tools, tool] : state.tools.filter(t => t !== tool) })} />{tool}
     </label>)}</div>
     {codeTools.some(tool => state.tools.includes(tool)) && <p className="muted">run_code 运行 Python，run_code_js 运行 JavaScript，run_code_go 运行 Go。启用后可读写当前会话文件及发送 HTTP 请求。</p>}
+    {state.tools.includes('run_command') && <p className="muted">run_command 可运行服务所在机器 PATH 中的命令，读写当前会话目录并联网。</p>}
     <div className="actions">
       <button type="button" disabled={disabled || !canPublish} onClick={() => submit('publish')}>发布版本</button>
       <button type="button" className="secondary" disabled={disabled || !canSave} onClick={() => submit('draft')}>保存草稿</button>

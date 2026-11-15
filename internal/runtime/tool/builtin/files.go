@@ -25,6 +25,7 @@ type Handler struct {
 	Files   Files
 	Sources *resource.Sources
 	Code    CodeRunner
+	Command *resource.CommandService
 	Journal *journal.Journal
 }
 
@@ -88,6 +89,13 @@ func (h *Handler) Execute(ctx context.Context, s run.Snapshot, call run.Call, ar
 		}
 		input, _ := json.Marshal(args["input"])
 		result, err = h.Code.Run(ctx, s, run.CodeInput{Language: text("language"), Code: text("code"), Input: input})
+	case run.CommandTool:
+		values := args["args"].([]any)
+		argv := make([]string, len(values))
+		for i, value := range values {
+			argv[i] = value.(string)
+		}
+		result, err = h.Command.Run(ctx, s, text("command"), argv)
 	case "publish_artifact":
 		var a run.Artifact
 		a, result, err = h.Files.Publish(ctx, s, call.ID, resource.PublishInput{Path: text("path"), ExpectedSHA256: text("expected_sha256"), DisplayName: text("display_name"), MediaType: text("media_type")})

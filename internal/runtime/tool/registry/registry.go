@@ -46,6 +46,10 @@ func Specs() []run.ToolSpec {
 		for _, key := range fields {
 			selected[key] = dataProps[key]
 		}
+		if name == run.CommandTool {
+			fields = []string{"exit_code", "stdout", "stderr", "duration_ms"}
+			selected = map[string]any{"exit_code": map[string]any{"type": "integer"}, "stdout": str(), "stderr": str(), "duration_ms": map[string]any{"type": "integer", "minimum": 0}}
+		}
 		envelope["allOf"] = []any{map[string]any{"if": map[string]any{"properties": map[string]any{"status": map[string]any{"const": "completed"}}}, "then": map[string]any{"properties": map[string]any{"data": map[string]any{"type": "object", "properties": selected, "required": fields}}}}}
 		resultSchema, _ := json.Marshal(envelope)
 		specs = append(specs, run.ToolSpec{Name: name, Version: "1", Description: description, Schema: raw, ResultSchema: resultSchema})
@@ -77,6 +81,7 @@ func Specs() []run.ToolSpec {
 	addCode(run.PythonTool, "Execute a Python function body. The JSON input is available as input. Use return to produce a value and log(value) for logs."+hostAPI)
 	addCode(run.JavaScriptTool, "Execute a synchronous JavaScript function body with JSON input. APIs: fs.list(directory='.', {cursor,limit}?); fs.readFile(path, {expected_sha256,range}?); fs.mkdir(path); fs.writeFile(path,text,{expected_sha256,media_type?}); fs.editFile(path,[{old_text,new_text}],{expected_sha256}); fs.rename(source,target,{expected_sha256}); fs.remove(path,{expected_sha256}). net.request({method?,url,headers?,body?}) returns status/headers/body/encoding/complete. CSV.parse(text), CSV.stringify(rows), JSON and log(value) are available.")
 	addCode(run.GoTool, "Execute a Go function body. input is decoded as any; return a JSON-encodable value. Predeclared imports: encoding/json (json), fmt, strings, strconv, math. Use log(value) for logs."+hostAPI)
+	add(run.CommandTool, "Run an installed command from PATH in the current session workspace. Pass each argument as a separate string. Network access is available. Returns exit code and bounded stdout/stderr. Files created in the workspace can be published as artifacts.", map[string]any{"command": map[string]any{"type": "string", "pattern": `^[^/]+$`}, "args": map[string]any{"type": "array", "items": str()}}, "command", "args")
 	add("update_plan", "Replace this Run's complete progress plan using expected_revision (initial 0). At most one in_progress; stable IDs retain titles. This is reported progress, not proof of success.", map[string]any{"expected_revision": integer(0, 1000000), "steps": map[string]any{"type": "array", "maxItems": 100, "items": object(map[string]any{"id": map[string]any{"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,64}$"}, "title": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "status": map[string]any{"enum": []string{"pending", "in_progress", "completed", "skipped"}}}, "id", "title", "status")}}, "expected_revision", "steps")
 	add("publish_artifact", "Publish an immutable copy of the exact current file and return an authenticated download URL.", map[string]any{"path": path, "expected_sha256": sha, "display_name": map[string]any{"type": "string", "minLength": 1, "maxLength": 200}, "media_type": media}, "path", "expected_sha256", "display_name", "media_type")
 	return specs

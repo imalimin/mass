@@ -338,3 +338,7 @@ Schema 14 回填业务表所需的附件关联、运行失败详情和历史查�
 每个已提交的文件快照将 Manifest 写在对应的 `run_finished`。工作区压缩包仍单独保存，快照 ID 用于内部文件恢复。重新打开会话时，消息、运行活动和诊断数据从会话记录生成。
 
 Agent 草稿和版本 JSON、Skill 草稿和版本 ZIP 及目录索引存放在对应空间的 TOS 前缀。备份还原以 `sessions` 中的会话索引和 TOS 中的目录及文件引用为准。
+
+### 运行宿主命令
+
+在 macOS 部署中，发布 Agent 版本时勾选 `run_command` 即可使用。命令按 MASS 服务进程的 `PATH` 查找，例如 `{"command":"ffprobe","args":["-v","error","input.mp4"]}`。Seatbelt 允许进程读写当前会话目录和命令临时目录，并允许 IP 网络访问。超时沿用 `tools.code.timeout` 与当前 Run 的剩余时间，取消或超时时终止命令进程组。退出码、标准输出和错误输出随工具结果进入会话 Trace。输出文件仍通过 `publish_artifact` 发布。

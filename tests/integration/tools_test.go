@@ -107,7 +107,10 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	}
 	config := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Skills: []catalog.SkillRef{{ID: skill.ID, Version: "v1"}}, Tools: []string{}}
 	for _, spec := range registry.Specs() {
-		config.Tools = append(config.Tools, spec.Name)
+		// The host command tool has a separate platform-specific smoke test.
+		if spec.Name != run.CommandTool {
+			config.Tools = append(config.Tools, spec.Name)
+		}
 	}
 	config.Context.MaxInputTokens = 196000
 	config.Context.ReservedOutputTokens = 1024
@@ -470,7 +473,7 @@ return input.(float64) + float64(len(rows))`}
 			}
 		}
 	}
-	if len(names) != len(registry.Specs()) {
+	if len(names) != len(config.Tools) {
 		t.Fatal("tools not covered", names)
 	}
 	plan, err := db.Store.RuntimePlan(ctx, actor.ID, space.ID, first.ID)

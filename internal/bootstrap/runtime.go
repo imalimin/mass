@@ -10,6 +10,7 @@ import (
 
 	storearchive "github.com/imalimin/mass/internal/adapter/archive"
 	"github.com/imalimin/mass/internal/adapter/codevm"
+	"github.com/imalimin/mass/internal/adapter/command"
 	einoadapter "github.com/imalimin/mass/internal/adapter/eino"
 	"github.com/imalimin/mass/internal/adapter/mariadb"
 	"github.com/imalimin/mass/internal/app/catalog"
@@ -168,7 +169,8 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		fileService := &resource.FileService{Workspaces: workspaces, Content: runContent, Cursors: auth, MaxBytes: min(c.Storage.MaxFileBytes, 1<<20), Limits: storage.Limits{MaxFileBytes: c.Storage.MaxFileBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes, MaxEntries: c.Storage.MaxEntries}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
 		fileService.EnableRunPagination()
 		code := &resource.CodeService{Engine: codeEngine, Files: fileService, Network: &resource.Network{}}
-		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: &resource.Sources{Files: fileService, Journal: runJournal}, Code: code, Journal: runJournal}, Control: budget, Journal: runJournal, Trace: recorder}
+		commands := &resource.CommandService{Workspaces: workspaces, Execute: command.Execute}
+		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: &resource.Sources{Files: fileService, Journal: runJournal}, Code: code, Command: commands, Journal: runJournal}, Control: budget, Journal: runJournal, Trace: recorder}
 		return &executor.Executor{Planner: contextPlanner, Model: gateway, Tools: tools, Control: budget}, nil
 	}
 	// The connection-scoped lock proves the old dispatcher is gone before recovery.

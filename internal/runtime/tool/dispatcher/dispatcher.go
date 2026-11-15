@@ -74,7 +74,7 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 		argumentErr = compiled.Validate(args)
 	}
 	if argumentErr != nil {
-		if run.CodeLanguage(call.Name) == "" {
+		if run.CodeLanguage(call.Name) == "" && call.Name != run.CommandTool {
 			return run.ErrProtocol
 		}
 		detail := fmt.Sprintf("Invalid %s arguments: %.1024s", call.Name, argumentErr)

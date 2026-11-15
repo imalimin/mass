@@ -62,12 +62,22 @@ export async function startModelFixture() {
       ]
       if (actions[count]) [name, args] = actions[count]()
     }
+    else if (task === 'run a host command') {
+      const results = messages.slice(index + 1).filter(m => m.role === 'tool').map(m => JSON.parse(m.content))
+      const actions = [
+        ['run_command', { command: 'sh', args: ['-c', 'printf problem >&2; exit 7'] }],
+        ['run_command', { command: 'sh', args: ['-c', 'printf "%s" "$1" > command.txt', 'mass', 'hello workspace'] }],
+        ['publish_artifact', { path: 'command.txt', expected_sha256: sha, display_name: 'command.txt', media_type: 'text/plain' }],
+      ]
+      if (count === 1 && (results[0].data.exit_code !== 7 || results[0].data.stderr !== 'problem')) throw new Error('missing command failure details')
+      if (actions[count]) [name, args] = actions[count]
+    }
     else if (/second|读取已有/.test(task)) { if (!count) { name = 'read_file'; args = { path: 'notes.txt' } } }
     else if (count === 0) { name = 'write_file'; args = { path: 'notes.txt', content: 'hello workspace', media_type: 'text/plain', expected_sha256: 'missing' } }
     else if (count === 1) { name = 'read_file'; args = { path: 'notes.txt' } }
     else if (count === 2) { name = 'publish_artifact'; args = { path: 'notes.txt', expected_sha256: sha, display_name: 'notes.txt', media_type: 'text/plain' } }
     if (name) frame({ role: 'assistant', tool_calls: [{ index: 0, id: task.startsWith('D05') ? 'reused-native-id' : randomUUID(), type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, 'tool_calls', usage)
-    else { frame({ role: 'assistant', content: task.startsWith('D05') ? '十四工具处理完成，汇总结果为 10。' : /second|读取已有/.test(task) ? '已读取已有文件：hello workspace' : '已完成写入、读取和发布 notes.txt' }); frame({}, 'stop', usage) }
+    else { frame({ role: 'assistant', content: task.startsWith('D05') ? '十四工具处理完成，汇总结果为 10。' : task === 'run a host command' ? '已运行宿主命令并发布 command.txt' : /second|读取已有/.test(task) ? '已读取已有文件：hello workspace' : '已完成写入、读取和发布 notes.txt' }); frame({}, 'stop', usage) }
     res.end('data: [DONE]\n\n')
   })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')

@@ -7,7 +7,7 @@ import { createServer } from 'node:net'
 import { startTOSFixture } from './tos-fixture.mjs'
 import { startModelFixture } from './model-fixture.mjs'
 
-export async function startFixtureServer({ storage = false, model = false, binary = resolve('bin/mass'), template = 'configs/mass.example.yaml', emptyDatabase = false } = {}) {
+export async function startFixtureServer({ storage = false, model = false, binary = resolve('bin/mass'), template = 'configs/mass.example.yaml', emptyDatabase = false, commandPath = '' } = {}) {
   if (!process.env.MASS_TEST_ADMIN_DSN) throw new Error('MASS_TEST_ADMIN_DSN must identify a disposable MariaDB test server')
   const directory = await mkdtemp(join(tmpdir(), 'mass-d02-'))
   const database = spawn('sh', ['scripts/go.sh', 'run', './scripts/test-database'], { env: { ...process.env, MASS_TEST_EMPTY_DATABASE: emptyDatabase ? '1' : '0' }, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -48,7 +48,7 @@ export async function startFixtureServer({ storage = false, model = false, binar
     if (storage) tos = await startTOSFixture()
     if (model) provider = await startModelFixture()
     const env = {
-      PATH: '', MASS_MARIADB_DSN: connection.dsn, MASS_MARIADB_MIGRATION_DSN: connection.migration_dsn,
+      PATH: commandPath, MASS_MARIADB_DSN: connection.dsn, MASS_MARIADB_MIGRATION_DSN: connection.migration_dsn,
       MASS_TOS_ENDPOINT: tos?.endpoint ?? 'offline-fixture', MASS_TOS_REGION: 'offline-fixture', MASS_TOS_BUCKET: 'offline-fixture',
       MASS_TOS_ACCESS_KEY: 'offline-fixture', MASS_TOS_SECRET_KEY: 'offline-fixture', MASS_MASTER_KEY: Buffer.alloc(32, 5).toString('base64'),
     }
