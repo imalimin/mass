@@ -36,6 +36,11 @@ func TestAllToolSchemasAndFrozenDefinitions(t *testing.T) {
 				if err := compiled.Validate(input); err != nil {
 					t.Fatal(spec.Name, err)
 				}
+				delete(input, "input")
+				if err := compiled.Validate(input); err != nil {
+					t.Fatal("optional input rejected", spec.Name, err)
+				}
+				input["input"] = nil
 				input["language"] = "other"
 				if compiled.Validate(input) == nil {
 					t.Fatal("wrong language accepted", spec.Name)

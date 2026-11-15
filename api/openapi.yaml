@@ -3484,13 +3484,13 @@ components:
           additionalProperties: false
           required:
             - max_input_tokens
-            - reserved_output_tokens
             - compression
           properties:
             max_input_tokens:
               type: integer
-            reserved_output_tokens:
+            max_tokens:
               type: integer
+              description: Defaults to 32000 when omitted.
             compression:
               type: string
               enum:

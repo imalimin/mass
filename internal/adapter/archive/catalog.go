@@ -231,8 +231,8 @@ func (c *Catalog) prepare(ctx context.Context, actor, space string, d *definitio
 	if err != nil {
 		return catalog.Bundle{}, err
 	}
-	if !model.Enabled || model.Provider != "ark" || cfg.Context.MaxInputTokens+cfg.Context.ReservedOutputTokens > model.ContextWindow ||
-		cfg.Context.ReservedOutputTokens > model.MaxOutputTokens {
+	if !model.Enabled || model.Provider != "ark" || cfg.Context.MaxInputTokens+cfg.Context.MaxTokens > model.ContextWindow ||
+		cfg.Context.MaxTokens > model.MaxOutputTokens {
 		return catalog.Bundle{}, identity.ErrCapability
 	}
 	b := catalog.Bundle{FormatVersion: 1, Kind: d.Kind, DefinitionID: d.ID, Name: d.Name, Revision: d.Revision, Document: draft.Document,

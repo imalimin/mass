@@ -955,7 +955,8 @@ export interface components {
             tools: string[] | null;
             context: {
                 max_input_tokens: number;
-                reserved_output_tokens: number;
+                /** @description Defaults to 32000 when omitted. */
+                max_tokens?: number;
                 /** @enum {string} */
                 compression: "summary" | "reject";
             };

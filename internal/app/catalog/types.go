@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -49,18 +50,41 @@ type SkillRef struct {
 	ID      string `json:"id" yaml:"id"`
 	Version string `json:"version" yaml:"version"`
 }
+
+const DefaultMaxTokens = 32000
+
+type ContextConfig struct {
+	MaxInputTokens int    `json:"max_input_tokens" yaml:"max_input_tokens"`
+	MaxTokens      int    `json:"max_tokens" yaml:"max_tokens"`
+	Compression    string `json:"compression" yaml:"compression"`
+}
+
+// Normalize applies the default output budget.
+func (c *ContextConfig) Normalize() {
+	if c.MaxTokens == 0 {
+		c.MaxTokens = DefaultMaxTokens
+	}
+}
+
+func (c *ContextConfig) UnmarshalJSON(raw []byte) error {
+	type contextConfig ContextConfig
+	var value contextConfig
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return err
+	}
+	*c = ContextConfig(value)
+	c.Normalize()
+	return nil
+}
+
 type Config struct {
-	SchemaVersion int        `json:"schema_version" yaml:"schema_version"`
-	Name          string     `json:"name" yaml:"name"`
-	Model         string     `json:"model" yaml:"model"`
-	Skills        []SkillRef `json:"skills" yaml:"skills"`
-	Tools         []string   `json:"tools" yaml:"tools"`
-	Context       struct {
-		MaxInputTokens       int    `json:"max_input_tokens" yaml:"max_input_tokens"`
-		ReservedOutputTokens int    `json:"reserved_output_tokens" yaml:"reserved_output_tokens"`
-		Compression          string `json:"compression" yaml:"compression"`
-	} `json:"context" yaml:"context"`
-	Limits struct {
+	SchemaVersion int           `json:"schema_version" yaml:"schema_version"`
+	Name          string        `json:"name" yaml:"name"`
+	Model         string        `json:"model" yaml:"model"`
+	Skills        []SkillRef    `json:"skills" yaml:"skills"`
+	Tools         []string      `json:"tools" yaml:"tools"`
+	Context       ContextConfig `json:"context" yaml:"context"`
+	Limits        struct {
 		MaxSteps       int `json:"max_steps" yaml:"max_steps"`
 		TimeoutSeconds int `json:"timeout_seconds" yaml:"timeout_seconds"`
 	} `json:"limits" yaml:"limits"`

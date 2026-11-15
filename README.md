@@ -153,7 +153,7 @@ bin/mass serve --config mass.yaml
 
 会话固定创建时的 Agent/Skill 定义，后续修改默认版本不会改变已有会话。容量不足会明确报错，当前不自动压缩或截断上下文。文件写入/编辑限每文件 1 MiB UTF-8，读取返回至多 64 KiB 范围及摘要；附件每个最多 8 MiB，工具解析支持 UTF-8 文本、JSON、CSV。写入、编辑、移动、删除通过 `expected_sha256` 防止冲突；发布的产物保持原版本，即使源文件被删除也可下载。
 
-`run_code` 执行 Python，`run_code_js` 执行 JavaScript，`run_code_go` 执行 Go。三个工具都接收 `language`、函数体 `code` 和 JSON `input`。Python 和 Go 通过 `host(operation, arguments)` 访问当前会话文件、HTTP(S) 和 CSV。JavaScript 继续使用 `fs`、`net.request` 和 `CSV`。Go 执行要求服务能找到 Go 1.25 或更新的本地工具链，编译计入 `tools.code.timeout`，首次编译需要建立缓存。三个工具共用原有执行限额、并发名额和 Trace，代码异常会返回详情，已确认的文件修改和请求效果会保留。
+`run_code` 执行 Python，`run_code_js` 执行 JavaScript，`run_code_go` 执行 Go。三个工具都接收 `language`、函数体 `code` 和可选 JSON `input`（省略或传 null）。Python 与 Go 在隔离的 WASM/WASI 运行时中执行，不提供子进程、直接网络或直接工作区文件访问；通过 `host(operation, arguments)` 操作当前会话文件、HTTP(S) 与 CSV，需要运行已安装命令时使用 `run_command`。JavaScript 使用 `fs`、`net.request` 和 `CSV`。Go 执行要求服务能找到 Go 1.25 或更新的本地工具链，编译计入 `tools.code.timeout`，首次编译需要建立缓存。三个工具共用原有执行限额、并发名额和 Trace，代码异常会返回详情，已确认的文件修改和请求效果会保留。
 
 已有会话配置中的 `run_code` 会使用 Python。已有 Agent 如需继续使用 JavaScript，请选择 `run_code_js`、发布新版本并用该版本新建会话。
 
@@ -218,7 +218,7 @@ unset MASS_INITIAL_PASSWORD
 
 `mass.yaml` 的 `llm.timeout` 控制单次模型 HTTP 请求的总时长，包含流式响应读取。省略时为 30 分钟，仍受当前 Run 剩余时间约束。
 
-`llm.max_attempts` 可设为 1—3，省略时为 1。该策略固定到每个新 Run；开启后仅对尚未输出文本的 HTTP 429/502/503/504 进行有限重试，每次均重新检查授权、解析当前凭证、预留和结算预算。SDK 重试始终关闭。取消、协议错误、持久化失败以及部分输出不自动重试；已有工具不会因为模型重试重新执行。
+`llm.max_attempts` 可设为 1—3，省略时为 1，示例配置为 2。该策略固定到每个新 Run；开启后对尚未输出文本的 HTTP 429/502/503/504，以及模型返回的工具调用参数不是合法 JSON 的协议失败进行有限重试，每次均重新检查授权、解析当前凭证、预留和结算预算。SDK 重试始终关闭。取消、其他协议错误、持久化失败以及部分输出不自动重试；已有工具不会因为模型重试重新执行。
 
 会话 Trace 按模型尝试及其工具调用记录耗时、首个文本片段延迟、HTTP 状态、输出文本、供应商 reasoning 和原始工具调用。供应商未返回 usage 时为 `null`，已返回 usage 时缺失的单项为 `0`。模型请求和流式响应分片只在调用期间处理。
 

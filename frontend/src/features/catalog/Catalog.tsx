@@ -23,6 +23,16 @@ const codeTools = ['run_code', 'run_code_js', 'run_code_go']
 const tools = ['list_files', 'read_file', 'write_file', 'edit_file', 'glob_files', 'search_files', 'move_file', 'delete_file', 'list_skill_resources', 'read_skill_resource', 'read_attachment', ...codeTools, 'run_command', 'update_plan', 'publish_artifact']
 const errorText = (e: unknown) => e instanceof Error ? e.message : '操作未完成'
 const displayVersion = (v: Version) => v.debug ? `调试快照 ${v.id.slice(0, 8)}` : v.label
+const parseConfig = (value: string) => {
+  if (!value.trim()) return undefined
+  try {
+    const parsed = load(value, {
+      schema: CORE_SCHEMA,
+      listener: (event, node) => { if (event === 'close' && node.anchor) throw new Error('YAML anchors are not supported') },
+    })
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Schema['DefinitionConfig'] : undefined
+  } catch { return undefined }
+}
 export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind }) {
   const { definitionId: selected = '' } = useParams(), navigate = useNavigate()
   const [name, setName] = useState('')
@@ -61,6 +71,7 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
   const [conflict, setConflict] = useState<Draft | null>(null), [copyName, setCopyName] = useState(''), [versionID, setVersionID] = useState(''), [fromID, setFromID] = useState('')
   const uploadInput = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null), [path, setPath] = useState<string | null>(null), [preview, setPreview] = useState(false)
+  const [builderDirty, setBuilderDirty] = useState(false)
   const [activePath, setActivePath] = useState(skillDocument)
   const [resourceEdits, setResourceEdits] = useState(() => new Map<string, string>())
   const changeResource = (id: string, text: string | undefined) => setResourceEdits(edits => {
@@ -78,7 +89,7 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
   const references = useQuery({ queryKey: ['private', space, kind, id, 'refs', versionID], queryFn: ({ signal }) => list<Schema['DefinitionReference']>(`${base}/versions/${versionID}/references`, signal), enabled: kind === 'skill' && !!versionID })
   const diff = useQuery({ queryKey: ['private', space, kind, id, 'diff', fromID, versionID], queryFn: ({ signal }) => request<Schema['DefinitionDiff']>(`${base}/diff?from=${fromID}&to=${versionID}`, 'GET', undefined, signal), enabled: !!fromID && !!versionID })
   const documentChanged = JSON.stringify(doc) !== JSON.stringify(draft.document)
-  const changed = documentChanged || resourceEdits.size > 0
+  const changed = documentChanged || resourceEdits.size > 0 || builderDirty
   useEffect(() => {
     if (kind !== 'skill' || !changed) return
     const confirmExit = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
@@ -204,6 +215,7 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
       <div className="actions">{previewToggle}</div>
       {previewContent}
       <ConfigBuilder key={draft.revision} space={space} name={draft.name} config={doc.config_yaml} disabled={pending || draft.archived}
+        onDirtyChange={setBuilderDirty}
         onAction={(action, configYaml) => action === 'draft' ? save.mutate({ configYaml }) : publish.mutate({ debug: action === 'debug', configYaml })} />
       <details className="config-builder"><summary>高级配置</summary>
         <Suspense fallback={<p>正在载入编辑器…</p>}><CodeEditor label="agent.yaml" language="yaml" value={doc.config_yaml}
@@ -223,8 +235,9 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
     {notice && <p role="status">{notice}</p>}{[kind === 'agent' && save.error, publish.error, mutateState.error, copy.error, versions.error, snapshots.error, detail.error, references.error, diff.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}
   </div>
 }
-function ConfigBuilder({ space, name, config, disabled, onAction }: {
+function ConfigBuilder({ space, name, config, disabled, onDirtyChange, onAction }: {
   space: string; name: string; config: string; disabled: boolean
+  onDirtyChange?: (dirty: boolean) => void
   onAction: (action: ConfigAction, config: string) => void
 }) {
   const models = useQuery({ queryKey: ['private', space, 'catalog-models'], queryFn: ({ signal }) => list<Schema['Model']>(`/spaces/${space}/models?available=true`, signal) })
@@ -233,46 +246,67 @@ function ConfigBuilder({ space, name, config, disabled, onAction }: {
     return Promise.all(definitions.filter(d => !d.archived).map(async d => ({ ...d, versions: (await list<Version>(`/spaces/${space}/skills/${d.id}/versions`, signal)).filter(v => !v.archived) })))
   } })
   type Selection = { model: string; skills: Record<string, string>; tools: string[]; input: number; limits: Record<Limit, string> }
-  const [edits, setEdits] = useState<{ source: string; selection: Partial<Selection> }>()
-  const existing = useMemo(() => {
-    try {
-      return load(config, {
-        schema: CORE_SCHEMA,
-        listener: (event, node) => { if (event === 'close' && node.anchor) throw new Error('YAML anchors are not supported') },
-      }) as Schema['DefinitionConfig'] | undefined
-    } catch { return undefined }
-  }, [config])
-  const selection = edits?.source === config ? edits.selection : undefined
-  const { limits: editedLimits, ...configEdits } = selection ?? {}
+  type Overrides = { model?: string; skills?: Record<string, string>; tools?: string[]; input?: number; limits?: Partial<Record<Limit, string>> }
+  const [edits, setEdits] = useState<{ base: string; selection: Partial<Selection> }>()
+  const existing = useMemo(() => parseConfig(config), [config])
+  const previous = useMemo(() => parseConfig(edits?.base ?? ''), [edits?.base])
+  // Apply pending selections only where the raw YAML did not change the same field afterwards.
+  const overrides = useMemo<Overrides | undefined>(() => {
+    if (!edits) return undefined
+    const sel = edits.selection, before = previous, raw = existing
+    const result: Overrides = {}
+    if (sel.model !== undefined && (before?.model ?? '') === (raw?.model ?? '')) result.model = sel.model
+    if (sel.skills) {
+      const changed: Record<string, string> = {}
+      for (const [id, version] of Object.entries(sel.skills)) {
+        const old = before?.skills?.find(skill => skill.id === id)?.version ?? ''
+        const now = raw?.skills?.find(skill => skill.id === id)?.version ?? ''
+        if (old === now) changed[id] = version
+      }
+      if (Object.keys(changed).length > 0) result.skills = changed
+    }
+    if (sel.tools && JSON.stringify(before?.tools ?? []) === JSON.stringify(raw?.tools ?? [])) result.tools = sel.tools
+    if (sel.input !== undefined && (before?.context?.max_input_tokens ?? 24000) === (raw?.context?.max_input_tokens ?? 24000)) result.input = sel.input
+    if (sel.limits) {
+      const changed: Partial<Record<Limit, string>> = {}
+      for (const key of limitFields) {
+        if (String(before?.limits?.[key] ?? agentLimits[key].initial) === String(raw?.limits?.[key] ?? agentLimits[key].initial)) changed[key] = sel.limits[key]
+      }
+      if (Object.keys(changed).length > 0) result.limits = changed
+    }
+    return result
+  }, [edits, previous, existing])
+  const { limits: editedLimits, ...configEdits } = overrides ?? {}
   const state: Selection = {
     model: existing?.model ?? '',
     skills: Object.fromEntries(Array.isArray(existing?.skills) ? existing.skills.filter(skill => skill?.id).map(skill => [skill.id, skill.version]) : []),
     tools: existing ? (Array.isArray(existing.tools) ? existing.tools : []) : ['read_file', 'write_file', 'publish_artifact'],
     input: existing?.context?.max_input_tokens ?? 24000,
     ...configEdits,
-    limits: editedLimits ?? {
-      max_steps: String(existing?.limits?.max_steps ?? agentLimits.max_steps.initial),
-      timeout_seconds: String(existing?.limits?.timeout_seconds ?? agentLimits.timeout_seconds.initial),
+    limits: {
+      max_steps: String(editedLimits?.max_steps ?? existing?.limits?.max_steps ?? agentLimits.max_steps.initial),
+      timeout_seconds: String(editedLimits?.timeout_seconds ?? existing?.limits?.timeout_seconds ?? agentLimits.timeout_seconds.initial),
     },
   }
-  const select = (change: Partial<Selection>) => setEdits({ source: config, selection: { ...selection, ...change } })
+  const select = (change: Partial<Selection>) => setEdits(current => current
+    ? { ...current, selection: { ...current.selection, ...change } }
+    : { base: config, selection: { ...change } })
   const model = models.data?.find(m => m.id === state.model)
-  const rebuild = !!selection && (!existing?.model || Object.keys(configEdits).length > 0)
+  const valid = !config.trim() || !!existing
   const limitsValid = limitFields.every(key => validLimit(key, state.limits[key]))
-  const canSave = (!selection || limitsValid) && (!rebuild || !!model)
+  const pending = !!overrides && Object.keys(overrides).length > 0
+  const canSave = limitsValid && valid && (!pending || !!model)
+  const canPublish = canSave && (pending || !!config.trim())
+  const builderDisabled = disabled || !valid
+  useEffect(() => { onDirtyChange?.(pending) }, [pending, onDirtyChange])
   const submit = (action: ConfigAction) => {
     if (!canSave) return
-    if (!selection) {
+    if (!pending) {
       onAction(action, config)
       return
     }
-    const limits = { max_steps: Number(state.limits.max_steps), timeout_seconds: Number(state.limits.timeout_seconds) }
-    if (!rebuild) {
-      onAction(action, JSON.stringify({ ...existing, limits }, null, 2))
-      return
-    }
     if (!model) return
-    const output = Math.min(existing?.context?.reserved_output_tokens ?? 4000, model.max_output_tokens, Math.floor(model.context_window / 2))
+    const output = Math.min(existing?.context?.max_tokens ?? 32000, model.max_output_tokens, Math.floor(model.context_window / 2))
     onAction(action, JSON.stringify({
       schema_version: 1,
       name,
@@ -281,25 +315,25 @@ function ConfigBuilder({ space, name, config, disabled, onAction }: {
       tools: state.tools,
       context: {
         max_input_tokens: Math.min(state.input, model.context_window - output),
-        reserved_output_tokens: output,
+        max_tokens: output,
         compression: existing?.context?.compression ?? 'summary',
       },
-      limits,
+      limits: { max_steps: Number(state.limits.max_steps), timeout_seconds: Number(state.limits.timeout_seconds) },
     }, null, 2))
   }
-  const canPublish = canSave && (!!selection || !!config.trim())
   return <details className="config-builder" open>
     <summary>模型、Skill、工具与运行限制</summary>
+    {!valid && <p className="muted" role="alert">agent.yaml 当前不是有效配置，请先在高级配置中修复。</p>}
     <div className="form-grid">
-      <label>绑定模型<select disabled={disabled} value={state.model} onChange={e => select({ model: e.target.value })}>
+      <label>绑定模型<select disabled={builderDisabled} value={state.model} onChange={e => select({ model: e.target.value })}>
         <option value="">选择可用模型</option>{models.data?.map(m => <option value={m.id} key={m.id}>{m.name}</option>)}
       </select></label>
-      <label>输入 Token 上限<input disabled={disabled} type="number" min={1} max={2000000} value={state.input} onChange={e => select({ input: Number(e.target.value) })} /></label>
+      <label>输入 Token 上限<input disabled={builderDisabled} type="number" min={1} max={2000000} value={state.input} onChange={e => select({ input: Number(e.target.value) })} /></label>
       {limitFields.map(key => {
         const { label, max } = agentLimits[key]
         const invalid = !validLimit(key, state.limits[key])
         return <label key={key}>{label}
-          <input id={key} aria-describedby={`${key}-hint`} aria-invalid={invalid} disabled={disabled}
+          <input id={key} aria-describedby={`${key}-hint`} aria-invalid={invalid} disabled={builderDisabled}
             aria-label={label} required type="number" min={1} max={max} step={1} value={state.limits[key]}
             onChange={e => select({ limits: { ...state.limits, [key]: e.target.value } })} />
           <small id={`${key}-hint`} role={invalid ? 'alert' : undefined}>
@@ -308,13 +342,13 @@ function ConfigBuilder({ space, name, config, disabled, onAction }: {
         </label>
       })}
       {skills.data?.map(skill => <label key={skill.id}>Skill 版本：{skill.name}
-        <select disabled={disabled} aria-label={`Skill 版本：${skill.name}`} value={state.skills[skill.id] ?? ''} onChange={e => select({ skills: { ...state.skills, [skill.id]: e.target.value } })}>
+        <select disabled={builderDisabled} aria-label={`Skill 版本：${skill.name}`} value={state.skills[skill.id] ?? ''} onChange={e => select({ skills: { ...state.skills, [skill.id]: e.target.value } })}>
           <option value="">不绑定</option>{skill.versions.map(v => <option value={v.label} key={v.id}>{v.label}</option>)}
         </select>
       </label>)}
     </div>
     <div className="tool-options">{tools.map(tool => <label className="checkbox" key={tool}>
-      <input type="checkbox" disabled={disabled} checked={state.tools.includes(tool)}
+      <input type="checkbox" disabled={builderDisabled} checked={state.tools.includes(tool)}
         onChange={e => select({ tools: e.target.checked ? [...state.tools, tool] : state.tools.filter(t => t !== tool) })} />{tool}
     </label>)}</div>
     {codeTools.some(tool => state.tools.includes(tool)) && <p className="muted">run_code 运行 Python，run_code_js 运行 JavaScript，run_code_go 运行 Go。启用后可读写当前会话文件及发送 HTTP 请求。</p>}

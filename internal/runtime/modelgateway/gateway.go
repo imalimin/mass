@@ -50,8 +50,7 @@ func (g *Gateway) Call(ctx context.Context, s run.Snapshot, p run.Prepared) (run
 	for ordinal := 0; ordinal < min(3, max(1, s.Definition.ModelAttempts)); ordinal++ {
 		state := &attemptState{id: uuid.NewString(), retryOf: previous}
 		reply, err := g.callOnce(ctx, s, p, state)
-		var failure *run.ModelFailure
-		if err == nil || !state.recorded || state.partial || !errors.As(err, &failure) || !failure.Retryable || ordinal+1 >= min(3, max(1, s.Definition.ModelAttempts)) {
+		if err == nil || !state.recorded || state.partial || !retryable(err) || ordinal+1 >= min(3, max(1, s.Definition.ModelAttempts)) {
 			return reply, err
 		}
 		previous = state.id
@@ -65,6 +64,27 @@ func (g *Gateway) Call(ctx context.Context, s run.Snapshot, p run.Prepared) (run
 	}
 	return run.Reply{}, run.ErrProtocol
 }
+
+// retryableProtocol marks a malformed tool call that arrived before any tool
+// ran or any text reached the caller. A bounded retry can recover it without
+// duplicating user-visible output.
+type retryableProtocol struct{}
+
+func (retryableProtocol) Error() string { return run.ErrProtocol.Error() }
+func (retryableProtocol) Unwrap() error { return run.ErrProtocol }
+
+// retryable reports whether the platform may repeat a logical model call.
+// HTTP failures opt in through ModelFailure; invalid tool arguments are safe
+// to retry because the reply was rejected before dispatch.
+func retryable(err error) bool {
+	var failure *run.ModelFailure
+	if errors.As(err, &failure) {
+		return failure.Retryable
+	}
+	var protocol retryableProtocol
+	return errors.As(err, &protocol)
+}
+
 func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, state *attemptState) (reply run.Reply, err error) {
 	if err = g.Control.Check(ctx); err != nil {
 		return reply, err
@@ -165,8 +185,13 @@ func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, 
 	reply.ResponseEventID = uuid.NewString()
 	seen := map[string]bool{}
 	for i, c := range reply.Message.ToolCalls {
-		if c.ID == "" || len(c.ID) > 128 || !utf8.ValidString(c.ID) || seen[c.ID] || !json.Valid([]byte(c.Arguments)) || len(c.Arguments) > 2<<20 {
+		if c.ID == "" || len(c.ID) > 128 || !utf8.ValidString(c.ID) || seen[c.ID] || len(c.Arguments) > 2<<20 {
 			return reply, run.ErrProtocol
+		}
+		if !json.Valid([]byte(c.Arguments)) {
+			// Models occasionally emit truncated or misquoted arguments. Nothing
+			// has run yet, so one bounded re-sample is safe and keeps the Run.
+			return reply, retryableProtocol{}
 		}
 		seen[c.ID] = true
 		reply.Message.ToolCalls[i].NativeID = c.ID

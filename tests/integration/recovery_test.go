@@ -225,7 +225,7 @@ func TestTOSRecovery(t *testing.T) {
 	}
 	definition := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Skills: []catalog.SkillRef{{ID: skill.ID, Version: "v1"}}, Tools: []string{"write_file", "read_file", "publish_artifact"}}
 	definition.Context.MaxInputTokens = 24000
-	definition.Context.ReservedOutputTokens = 512
+	definition.Context.MaxTokens = 512
 	definition.Context.Compression = "summary"
 	definition.Limits.MaxSteps = 4
 	definition.Limits.TimeoutSeconds = 180

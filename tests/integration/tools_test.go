@@ -113,7 +113,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		}
 	}
 	config.Context.MaxInputTokens = 196000
-	config.Context.ReservedOutputTokens = 1024
+	config.Context.MaxTokens = 1024
 	config.Context.Compression = "summary"
 	config.Limits.MaxSteps = 40
 	config.Limits.TimeoutSeconds = 300
@@ -193,11 +193,11 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		if task == "correct invalid run_code_js arguments and source" {
 			switch len(results) {
 			case 0:
-				return toolReply("run_code_js", map[string]any{"language": "javascript", "code": "return 42;"}), nil
+				return toolReply("run_code_js", map[string]any{"language": "javascript", "input": nil}), nil
 			case 1:
 				got := results[0]
 				if got.Status != "failed" || got.Error != "invalid_tool_input" || got.SideEffect != "none" ||
-					!bytes.Contains(got.Data, []byte("missing property")) || !bytes.Contains(got.Data, []byte("input")) {
+					!bytes.Contains(got.Data, []byte("missing property")) || !bytes.Contains(got.Data, []byte("code")) {
 					return nil, fmt.Errorf("missing argument error detail: %s", got.Data)
 				}
 				return toolReply("run_code_js", map[string]any{"language": "javascript", "code": "const = ;", "input": nil}), nil

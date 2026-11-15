@@ -73,7 +73,7 @@ func TestContextStages(t *testing.T) {
 	}
 	config := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Skills: []catalog.SkillRef{}, Tools: []string{}}
 	config.Context.MaxInputTokens = 8000
-	config.Context.ReservedOutputTokens = 256
+	config.Context.MaxTokens = 256
 	config.Context.Compression = "summary"
 	config.Limits.MaxSteps = 8
 	config.Limits.TimeoutSeconds = 30

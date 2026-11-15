@@ -72,6 +72,7 @@ type provider struct {
 	keys      []string
 	calls     int
 	partial   bool
+	badArgs   bool
 	repo      *memory
 	failLog   bool
 }
@@ -86,6 +87,9 @@ func (p *provider) Stream(_ context.Context, snapshot run.Snapshot, _ run.Prepar
 			if err := delta("partial"); err != nil {
 				return run.Reply{}, err
 			}
+		}
+		if p.badArgs {
+			return run.Reply{Message: run.Message{Role: "assistant", ToolCalls: []run.Call{{ID: "call-1", Name: run.PythonTool, Arguments: `{"code":`}}}, FinishReason: "tool_calls"}, nil
 		}
 		if p.failLog {
 			p.repo.fail = true
@@ -134,6 +138,41 @@ func TestExplicitRetrySafety(t *testing.T) {
 				}
 			} else if err == nil {
 				t.Fatal("unexpected success")
+			}
+		})
+	}
+}
+
+func TestInvalidToolArgumentsRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		attempts int
+		partial  bool
+		want     int
+		fail     bool
+	}{
+		{"bounded retry", 2, false, 2, false},
+		{"single attempt", 1, false, 1, true},
+		{"partial output", 2, true, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &memory{objects: map[string]storage.Object{}}
+			transport := &provider{badArgs: true, partial: tc.partial, repo: repo}
+			g := &Gateway{Journal: &journal.Journal{Repo: repo}, Content: &resource.ContentStore{Repo: repo, Blobs: fakes.NewBlobs(), Prefix: "test", MaxBytes: 1 << 20}, Transport: transport, Credentials: &secrets{}, Control: &budget{}}
+			s := run.Snapshot{ID: uuid.NewString(), ActorID: uuid.NewString(), SpaceID: storage.NewShortID(), SessionID: storage.NewShortID(), Definition: run.Definition{ModelAttempts: tc.attempts, OutputTokens: 10}}
+			p := run.Prepared{EventID: uuid.NewString(), InputTokens: 10, Spec: run.ProjectionSpec{Purpose: "task"}}
+			reply, err := g.Call(context.Background(), s, p)
+			if transport.calls != tc.want {
+				t.Fatal("attempt count", transport.calls)
+			}
+			if tc.fail {
+				if !errors.Is(err, run.ErrProtocol) {
+					t.Fatal("want protocol error", err)
+				}
+				return
+			}
+			if err != nil || reply.Message.Content != "done" {
+				t.Fatal("retry did not recover", err, reply.Message.Content)
 			}
 		})
 	}

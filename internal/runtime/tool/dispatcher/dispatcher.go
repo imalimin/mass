@@ -74,9 +74,9 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 		argumentErr = compiled.Validate(args)
 	}
 	if argumentErr != nil {
-		if run.CodeLanguage(call.Name) == "" && call.Name != run.CommandTool {
-			return run.ErrProtocol
-		}
+		// Schema violations come from the model's own tool arguments. Return a
+		// recoverable tool result so the next step can correct them; protocol
+		// errors stay reserved for malformed platform or transport data.
 		detail := fmt.Sprintf("Invalid %s arguments: %.1024s", call.Name, argumentErr)
 		raw, _ := json.Marshal(map[string]string{"error_detail": detail})
 		result = run.ToolResult{

@@ -102,7 +102,7 @@ func exerciseD07(t *testing.T, blobs storage.BlobStore, prefix string) {
 	}
 	config := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Skills: []catalog.SkillRef{}, Tools: []string{"list_files", "glob_files"}}
 	config.Context.MaxInputTokens = 20000
-	config.Context.ReservedOutputTokens = 1024
+	config.Context.MaxTokens = 1024
 	config.Context.Compression = "summary"
 	config.Limits.MaxSteps = 8
 	config.Limits.TimeoutSeconds = 180

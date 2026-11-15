@@ -145,7 +145,7 @@ func prepareCatalog(ctx context.Context, tx *sql.Tx, space, id string, revision 
 	if err != nil {
 		return b, err
 	}
-	if c.Context.MaxInputTokens+c.Context.ReservedOutputTokens > m.ContextWindow || c.Context.ReservedOutputTokens > m.MaxOutputTokens || m.Provider != "ark" {
+	if c.Context.MaxInputTokens+c.Context.MaxTokens > m.ContextWindow || c.Context.MaxTokens > m.MaxOutputTokens || m.Provider != "ark" {
 		return b, identity.ErrCapability
 	}
 	b.Model = &m

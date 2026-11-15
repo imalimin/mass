@@ -217,7 +217,7 @@ func newFaultRigWithTimeout(t *testing.T, timeoutSeconds int) *faultRig {
 	r.agent = agent.ID
 	cfg := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Tools: []string{"write_file", "read_file", "publish_artifact", "run_code_js"}, Skills: []catalog.SkillRef{}}
 	cfg.Context.MaxInputTokens = 24000
-	cfg.Context.ReservedOutputTokens = 512
+	cfg.Context.MaxTokens = 512
 	cfg.Context.Compression = "summary"
 	cfg.Limits.MaxSteps = 4
 	cfg.Limits.TimeoutSeconds = timeoutSeconds

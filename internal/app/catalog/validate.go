@@ -119,6 +119,7 @@ func ValidateDocument(kind, name string, doc Document, publish bool) (*Config, e
 	if dec.Decode(&c) != nil || c.SchemaVersion != 1 || c.Name != name || !storage.ValidID(c.Model) || len(c.Skills) > 32 || len(c.Tools) > len(Tools) {
 		return nil, ErrConfig
 	}
+	c.Context.Normalize()
 	ids := map[string]bool{}
 	for _, r := range c.Skills {
 		if !storage.ValidID(r.ID) || !ValidLabel(r.Version) || ids[r.ID] {
@@ -137,7 +138,7 @@ func ValidateDocument(kind, name string, doc Document, publish bool) (*Config, e
 		}
 		used[t] = true
 	}
-	if c.Context.MaxInputTokens < 1 || c.Context.MaxInputTokens > 2000000 || c.Context.ReservedOutputTokens < 1 || c.Context.ReservedOutputTokens > 1000000 || (c.Context.Compression != "summary" && c.Context.Compression != "reject") || c.Limits.MaxSteps < 1 || c.Limits.MaxSteps > 1000 || c.Limits.TimeoutSeconds < 1 || c.Limits.TimeoutSeconds > 86400 {
+	if c.Context.MaxInputTokens < 1 || c.Context.MaxInputTokens > 2000000 || c.Context.MaxTokens < 1 || c.Context.MaxTokens > 1000000 || (c.Context.Compression != "summary" && c.Context.Compression != "reject") || c.Limits.MaxSteps < 1 || c.Limits.MaxSteps > 1000 || c.Limits.TimeoutSeconds < 1 || c.Limits.TimeoutSeconds > 86400 {
 		return nil, ErrConfig
 	}
 	return &c, nil

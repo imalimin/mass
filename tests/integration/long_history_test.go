@@ -37,7 +37,7 @@ func longHistoryAgent(t *testing.T, r *faultRig, space string) (string, string) 
 	}
 	cfg := catalog.Config{SchemaVersion: 1, Name: d.Name, Model: m.ID, Skills: []catalog.SkillRef{}, Tools: []string{"write_file", "read_file", "publish_artifact"}}
 	cfg.Context.MaxInputTokens = 24000
-	cfg.Context.ReservedOutputTokens = 512
+	cfg.Context.MaxTokens = 512
 	cfg.Context.Compression = "summary"
 	cfg.Limits.MaxSteps = 8
 	cfg.Limits.TimeoutSeconds = 60

@@ -24,7 +24,7 @@ auth:
   cookie_secure: false # Loopback development only; HTTPS deployments use true.
 llm:
   # Explicit platform attempts per logical call; SDK retries remain disabled.
-  max_attempts: 1
+  max_attempts: 2
   timeout: "30m"
   framework: "eino"
   provider: "ark"

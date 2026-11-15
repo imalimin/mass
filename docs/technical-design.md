@@ -235,7 +235,7 @@ skills:
 tools: [read_file, write_file, read_skill_resource]
 context:
   max_input_tokens: 24000
-  reserved_output_tokens: 4000
+  max_tokens: 32000
   compression: summary
 limits:
   max_steps: 30
@@ -755,7 +755,7 @@ Gateway 统一接受显式 purpose=task/summary 的 Prepared 输入，summary �
 
 ### T08.6 D07 实现进展
 
-每个新 Run 固定 `model_attempts`，由部署配置 `llm.max_attempts`（1—3，省略为 1）提供。SDK RetryTimes 仍显式为 0；平台仅在未输出文本、失败与用量结算已经持久化、状态为 HTTP 429/502/503/504 时，按 250ms/500ms 有界等待重试。每次尝试独立 attempt/message、retry_of、凭证 revision 和预算；重试复用同一固定投影。部分输出、协议错误、取消、存储失败不自动重试。Journal reducer 校验 retry_of 为同一 Run/投影/用途的失败尝试。
+每个新 Run 固定 `model_attempts`，由部署配置 `llm.max_attempts`（1—3，省略为 1）提供。SDK RetryTimes 仍显式为 0；平台仅在未输出文本、失败与用量结算已经持久化，且失败为 HTTP 429/502/503/504 或工具调用参数不是合法 JSON 时，按 250ms/500ms 有界等待重试。每次尝试独立 attempt/message、retry_of、凭证 revision 和预算；重试复用同一固定投影。部分输出、其他协议错误、取消、存储失败不自动重试。Journal reducer 校验 retry_of 为同一 Run/投影/用途的失败尝试。
 
 每个完成/失败响应附 observation，保存耗时、首个模型文本片段延迟（无文本为 null）、HTTP 状态（尚无响应为 0）与组件版本。空响应仍记录 HTTP 状态。失败流从调用期间已读到的帧提取用量，null usage 帧不覆盖此前统计。
 
@@ -782,7 +782,7 @@ MVP 固定提供下列 14 个平台内置工具。每个 Agent 选择授权子�
 | list_skill_resources | skill_binding_id、prefix、cursor、limit | 绑定版本的资源清单、类型、大小及可用说明 |
 | read_skill_resource | skill_binding_id、path、range | 固定 SkillVersion 的只读内容、版本及来源 |
 | read_attachment | attachment_id、range、format | 读取本会话已接受的附件；返回原文引用、解析方式/版本、范围和完整性 |
-| run_code / run_code_js / run_code_go | language、code、input | 分别执行 Python、JavaScript 和 Go 函数体，使用相同的会话文件、HTTP 和 CSV 接口，返回 JSON、日志和副作用状态 |
+| run_code / run_code_js / run_code_go | language、code、input（可选） | 分别执行 Python、JavaScript 和 Go 函数体，使用相同的会话文件、HTTP 和 CSV 接口，返回 JSON、日志和副作用状态 |
 | update_plan | expected_revision、steps[{id,title,status}] | 当前 Run 的完整计划及新 revision；status=pending/in_progress/completed/skipped |
 | publish_artifact | path、expected_sha256、display_name、media_type | 固定文件版本为产物，返回 artifact_id 和本服务鉴权下载入口 |
 

@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -13,7 +15,7 @@ name: test-agent
 model: 00000000-0000-4000-8000-000000000001
 skills: []
 tools: [read_file]
-context: {max_input_tokens: 2000, reserved_output_tokens: 100, compression: summary}
+context: {max_input_tokens: 2000, max_tokens: 100, compression: summary}
 limits: {max_steps: 30, timeout_seconds: 300}
 `
 	if _, e := ValidateDocument("agent", "test-agent", Document{Markdown: "hello", ConfigYAML: good}, true); e != nil {
@@ -23,6 +25,45 @@ limits: {max_steps: 30, timeout_seconds: 300}
 		if _, e := ValidateDocument("agent", "test-agent", Document{Markdown: "hello", ConfigYAML: input}, true); e == nil {
 			t.Fatal("invalid configuration accepted")
 		}
+	}
+}
+
+func TestContextMaxTokensDefaultAndRemovedKey(t *testing.T) {
+	base := `schema_version: 1
+name: test-agent
+model: 00000000-0000-4000-8000-000000000001
+skills: []
+tools: [read_file]
+context: {max_input_tokens: 2000%s, compression: summary}
+limits: {max_steps: 30, timeout_seconds: 300}
+`
+	for _, tc := range []struct {
+		name   string
+		suffix string
+		want   int
+	}{
+		{"default", "", DefaultMaxTokens},
+		{"explicit", ", max_tokens: 8000", 8000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := ValidateDocument("agent", "test-agent", Document{Markdown: "hello", ConfigYAML: fmt.Sprintf(base, tc.suffix)}, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Context.MaxTokens != tc.want {
+				t.Fatal("max_tokens", cfg.Context.MaxTokens)
+			}
+		})
+	}
+	if _, err := ValidateDocument("agent", "test-agent", Document{Markdown: "hello", ConfigYAML: fmt.Sprintf(base, ", reserved_output_tokens: 512")}, true); err == nil {
+		t.Fatal("draft YAML accepted the removed field")
+	}
+	var stored ContextConfig
+	if err := json.Unmarshal([]byte(`{"max_input_tokens":2000,"compression":"summary"}`), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.MaxTokens != DefaultMaxTokens {
+		t.Fatal("stored version", stored.MaxTokens)
 	}
 }
 

@@ -214,9 +214,9 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		config.Tools = []string{}
 	}
 	config.Context.MaxInputTokens = 24000
-	config.Context.ReservedOutputTokens = 1024
+	config.Context.MaxTokens = 1024
 	if real {
-		config.Context.ReservedOutputTokens = 512
+		config.Context.MaxTokens = 512
 	}
 	config.Context.Compression = "summary"
 	config.Limits.MaxSteps = 8

@@ -145,7 +145,7 @@ func exerciseCatalog(t *testing.T, blobs storage.BlobStore, prefix string) {
 	config := func(version string) string {
 		c := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Skills: []catalog.SkillRef{{ID: s1.ID, Version: version}, {ID: s2.ID, Version: "v1"}}, Tools: []string{"read_file", "run_code"}}
 		c.Context.MaxInputTokens = 24000
-		c.Context.ReservedOutputTokens = 4000
+		c.Context.MaxTokens = 4000
 		c.Context.Compression = "summary"
 		c.Limits.MaxSteps = 30
 		c.Limits.TimeoutSeconds = 300
