@@ -143,7 +143,7 @@ bin/mass serve --config mass.yaml
 4. 修改 Skill 并发布 v2；旧 Agent v1 继续引用原 Skill v1。
 5. 编辑 Agent，选择 Skill v2 后发布 Agent v2，查看旧内容、版本差异并切换默认版本。
 6. 按任务选择工具。先体验文件任务可选 `read_file`、`write_file`、`publish_artifact`；组合任务再选附件、资源、搜索、计划及所需语言的代码工具。输入 Token 上限须符合实际模型容量；长工具流程可在配置选择中调高，然后发布新版本或创建调试快照。
-7. 进入「会话与运行」，选择 Agent 及发布/调试版本，新建会话。发送“写入 notes.txt，内容为 hello；读取确认后发布成产物”。可观察输出、工具状态，下载产物并展开「Trace 与上下文」。
+7. 在「Agents」列表点击对应 Agent 的对话图标。在消息输入区选择发布版本或调试快照，然后发送“写入 notes.txt，内容为 hello；读取确认后发布成产物”。首条消息创建会话并固定版本，可观察输出和工具状态、下载产物，并在「运行详情」查看 Trace。
 8. 在同一会话发送“读取 notes.txt 的内容”验证跨轮文件延续。每轮停止后保存快照；关闭页面不取消后台任务，取消按钮会等待实际执行停止。
 9. 使用启用了 `read_attachment`、`run_code`、`update_plan`、`publish_artifact` 的 Agent 新建会话，添加 UTF-8 JSON/CSV 附件后发送：“先更新计划，读取附件，用 Python 汇总 amount，保存 summary.json 并发布产物，最后完成计划。”上传后须发送任务才接受附件，页面可查看计划、附件原文、工具结果及代码 I/O Trace。
 

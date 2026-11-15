@@ -28,9 +28,9 @@ try {
   await page.getByLabel('绑定模型').selectOption({ label: '工具模型' }); await page.getByLabel('Skill 版本：rules', { exact: true }).selectOption('v1')
   const checks = page.locator('.tool-options input'); assert.equal(await checks.count(), 16); for (const check of await checks.all()) await check.check()
   await page.getByLabel('输入 Token 上限').fill('100000'); const agentVersion = await publish()
-  await page.locator('.app-sidebar').getByRole('link', { name: '会话与运行', exact: true }).click(); await page.getByLabel('使用 Agent').selectOption({ label: 'tools-assistant' }); await page.getByLabel('定义版本').selectOption(agentVersion.id); await page.getByLabel('会话名称', { exact: true }).fill('十四工具组合'); await page.getByRole('button', { name: '新建会话', exact: true }).click(); await page.getByRole('heading', { name: '十四工具组合', exact: true }).waitFor()
-  const attachmentUpload = page.waitForResponse(r => r.url().endsWith('/attachments') && r.request().method() === 'POST')
-  await page.getByLabel('添加任务附件').setInputFiles({ name: 'records.json', mimeType: 'application/json', buffer: Buffer.from('[{"amount":2},{"amount":3}]') }); assert.equal((await attachmentUpload).status(), 201); await page.getByLabel('移除附件 records.json').waitFor()
+  await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByRole('link', { name: '打开 tools-assistant 的会话', exact: true }).click()
+  await page.getByLabel('Agent 版本').selectOption(agentVersion.id)
+  await page.getByLabel('添加任务附件').setInputFiles({ name: 'records.json', mimeType: 'application/json', buffer: Buffer.from('[{"amount":2},{"amount":3}]') }); await page.getByLabel('移除附件 records.json').waitFor()
   await page.evaluate(() => {
     const Native = window.EventSource; window.__massToolInterrupted = false
     window.EventSource = class extends Native { constructor(url, options) { super(url, options); this.addEventListener('message', e => { if (!window.__massToolInterrupted && JSON.parse(e.data).type === 'TOOL_CALL_ARGS') { window.__massToolInterrupted = true; this.close(); this.dispatchEvent(new Event('error')) } }) } }

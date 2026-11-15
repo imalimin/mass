@@ -95,18 +95,24 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		writeJSON(w, 201, v)
 		return nil
 	})
-	register("GET "+base+"/sessions", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+	listSessions := func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		agent := r.PathValue("agent_id")
+		if agent != "" && !storage.ValidID(agent) {
+			return storage.ErrInvalid
+		}
 		q, n, scope, err := query(r, u)
 		if err != nil {
 			return err
 		}
-		items, err := svc.Repo.RuntimeSessions(r.Context(), u.ID, r.PathValue("space_id"), q)
+		items, err := svc.Repo.RuntimeSessions(r.Context(), u.ID, r.PathValue("space_id"), agent, q)
 		if err != nil {
 			return err
 		}
 		writeJSON(w, 200, identity.Paginate(options.Service, scope, items, n, func(v run.Session) string { return v.ID }))
 		return nil
-	})
+	}
+	register("GET "+base+"/sessions", true, listSessions)
+	register("GET "+base+"/agents/{agent_id}/sessions", true, listSessions)
 	register("GET "+base+"/sessions/{session_id}", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		v, err := svc.Repo.RuntimeSession(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("session_id"))
 		if err != nil {

@@ -24,6 +24,11 @@ textarea{font:inherit;width:100%;min-width:0;padding:12px;border:1px solid #cdd6
 
 .account-settings .account-action{display:block;width:100%;padding:10px;text-align:left;border:0;background:transparent;color:#dce7e3;font-size:12px}.account-settings .account-action:hover{background:#ffffff08}.account-action-divider{height:1px;background:#3b494f;margin:8px 0}.create-space-dialog{width:min(440px,calc(100vw - 36px));max-height:calc(100dvh - 36px);margin:auto;padding:28px;background:#fff;color:#26313a;border:1px solid #dce5df;border-radius:12px;box-shadow:0 20px 80px #14251e30;overflow:auto}.create-space-dialog::backdrop{background:#14202b70}.create-space-dialog h2{margin-top:0}.create-space-dialog input{margin-top:4px}.dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:28px}@media(max-width:700px){.create-space-dialog{padding:24px}}
 
+.agent-entry { display: flex; align-items: stretch; min-width: 0; border: 1px solid #dce5df; border-radius: 7px; }
+.agent-entry .resource-link { flex: 1; min-width: 0; border: 0; }
+.agent-chat-link { display: grid; place-items: center; align-self: center; flex: none; width: 40px; height: 40px; margin: 0 6px; border-radius: 6px; color: #346b5a; }
+.agent-chat-link:hover { background: #e7f2eb; }
+
 /* Skill file workspace */
 .skill-workspace {
   display: grid;

@@ -18,7 +18,7 @@ try {
   await page.getByLabel('定义名称').fill('file-assistant'); await page.getByRole('button', { name: '创建 Agent', exact: true }).click(); const editor = page.locator('[data-editor="AGENTS.md"]'); await editor.locator('.view-lines').click(); await page.keyboard.insertText('# File assistant\nRead and write session files.')
   await page.getByLabel('绑定模型').selectOption({ label: '运行模型' })
   const publishing = page.waitForResponse(r => r.url().endsWith('/versions') && r.request().method() === 'POST'); await page.getByRole('button', { name: '发布版本', exact: true }).click(); assert.equal((await publishing).status(), 201)
-  await page.locator('.app-sidebar').getByRole('link', { name: '会话与运行', exact: true }).click(); await page.getByLabel('使用 Agent').selectOption({ label: 'file-assistant' }); await page.getByLabel('会话名称', { exact: true }).fill('文件连续对话'); await page.getByRole('button', { name: '新建会话', exact: true }).click(); await page.getByRole('heading', { name: '文件连续对话', exact: true }).waitFor()
+
   const space = new URL(page.url()).pathname.split('/')[2], headers = { Origin: server.url, 'Content-Type': 'application/json' }
   const agents = await (await context.request.get(`${server.url}/api/v1/spaces/${space}/agents`)).json(), agent = agents.items.find(a => a.name === 'file-assistant')
   const create = async title => { const response = await context.request.post(`${server.url}/api/v1/spaces/${space}/sessions`, { headers, data: { idempotency_key: crypto.randomUUID(), agent_id: agent.id, title } }); assert.equal(response.status(), 201); return response.json() }

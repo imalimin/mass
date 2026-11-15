@@ -1,7 +1,7 @@
 import { Fragment, lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { spacePath } from '../../app/routes'
+import { agentSessionsPath } from '../../app/routes'
 import { list, request, type Schema } from '../../lib/api'
 import { useRunStream } from './useRunStream'
 
@@ -9,7 +9,8 @@ const Trace = lazy(() => import('../debug/Trace'))
 const SafeMarkdown = lazy(() => import('../debug/SafeMarkdown'))
 type Run = Schema['RuntimeRun']
 type Attachment = Schema['RuntimeAttachment']
-type DraftMessage = { text: string; attachments: Attachment[]; key: string }
+type DraftMessage = { text: string; files: File[]; key: string }
+type SubmittedMessage = { run: Run; text: string; attachments: Attachment[] }
 const statuses: Record<string, string> = { queued: '排队中', running: '运行中', succeeded: '已完成', failed: '失败', cancelled: '已取消' }
 const toolStatuses: Record<string, string> = {
   parameters: '准备中', parameters_complete: '准备中', not_started: '待执行', running: '运行中',
@@ -18,10 +19,16 @@ const toolStatuses: Record<string, string> = {
 const isActive = (status?: string) => status === 'queued' || status === 'running'
 const atBottom = (viewport: HTMLElement) => viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 56
 
-export function Conversation({ space, sessionID }: { space: string; sessionID: string }) {
+export function Conversation({ space, agent, sessionID, onCreated }: {
+  space: string; agent: Schema['DefinitionDraft']; sessionID: string
+  onCreated: (sessionID: string) => void
+}) {
   const [params, setParams] = useSearchParams(), chosenRun = params.get('run') ?? ''
-  const [text, setText] = useState(''), [attachments, setAttachments] = useState<Attachment[]>([])
-  const [accepted, setAccepted] = useState<{ run: Run; draft: DraftMessage }>()
+  const [text, setText] = useState(''), [files, setFiles] = useState<File[]>([])
+  const [accepted, setAccepted] = useState<SubmittedMessage>()
+  const [selectedVersion, setSelectedVersion] = useState<string>()
+  const [createdSession, setCreatedSession] = useState<Schema['RuntimeSession']>()
+  const navigate = useNavigate()
   const [showDetails, setShowDetails] = useState(!!chosenRun)
   const [generation, setGeneration] = useState(0)
   const client = useQueryClient(), base = `/spaces/${space}`, sessionURL = `${base}/sessions/${sessionID}`
@@ -30,16 +37,36 @@ export function Conversation({ space, sessionID }: { space: string; sessionID: s
   const [showJump, setShowJump] = useState(false)
   const olderScroll = useRef<{ top: number; height: number; pageCount: number } | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null), fileInput = useRef<HTMLInputElement>(null)
-  const requestKey = useRef<{ signature: string; key: string } | null>(null)
+  const requestKey = useRef<{ text: string; files: File[]; key: string } | null>(null)
+  const createKey = useRef<{ version: string; key: string } | null>(null)
+  const uploaded = useRef(new WeakMap<File, Attachment>())
 
   const session = useQuery({
     queryKey: [...sessionKey, 'session'],
     queryFn: ({ signal }) => request<Schema['RuntimeSession']>(sessionURL, 'GET', undefined, signal),
+    enabled: !!sessionID,
   })
+  const ownsSession = session.data?.definition_id === agent.id
+  const versions = useQuery({
+    queryKey: ['private', space, 'run-agent-versions', agent.id],
+    queryFn: async ({ signal }) => {
+      const path = `${base}/agents/${agent.id}`
+      const [published, debug] = await Promise.all([
+        list<Schema['DefinitionVersion']>(`${path}/versions`, signal),
+        list<Schema['DefinitionVersion']>(`${path}/debug-snapshots`, signal),
+      ])
+      // The API serializes UTC timestamps. Compare without Z to keep fractional seconds in order.
+      published.sort((a, b) => b.created_at.slice(0, -1).localeCompare(a.created_at.slice(0, -1)) || b.id.localeCompare(a.id))
+      return [...published, ...debug].filter(version => !version.archived)
+    },
+    enabled: !sessionID && !agent.archived,
+  })
+  const latestPublished = versions.data?.find(version => !version.debug)
+  const versionID = createdSession?.version_id ?? selectedVersion ?? params.get('version') ?? latestPublished?.id ?? ''
   const runs = useQuery({
     queryKey: runsKey,
     queryFn: ({ signal }) => list<Run>(`${sessionURL}/runs`, signal),
-    enabled: session.isSuccess,
+    enabled: ownsSession,
     refetchInterval: q => q.state.error ? false : 5000,
   })
   const sorted = [...(runs.data ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))
@@ -47,10 +74,10 @@ export function Conversation({ space, sessionID }: { space: string; sessionID: s
   const current = useQuery({
     queryKey: [...sessionKey, 'run', latest?.id],
     queryFn: ({ signal }) => request<Run>(`${base}/runs/${latest.id}`, 'GET', undefined, signal),
-    enabled: !!latest,
+    enabled: ownsSession && !!latest,
     refetchInterval: q => q.state.error || q.state.data && !isActive(q.state.data.status) ? false : 1500,
   })
-  const stream = useRunStream(space, sessionID, latest?.id ?? '', generation)
+  const stream = useRunStream(space, sessionID, ownsSession ? latest?.id ?? '' : '', generation)
   const currentRun = current.data ?? latest
   const streamStatus = stream.state?.status
   const status = (currentRun && !isActive(currentRun.status)) || (streamStatus === 'queued' && currentRun?.status === 'running')
@@ -62,7 +89,7 @@ export function Conversation({ space, sessionID }: { space: string; sessionID: s
     initialPageParam: '0',
     queryFn: ({ signal, pageParam }) => request<Schema['RuntimeMessages']>(`${sessionURL}/messages?before_sequence=${pageParam}&limit=20`, 'GET', undefined, signal),
     getNextPageParam: page => page.has_more ? page.items[0]?.sequence : undefined,
-    enabled: session.isSuccess,
+    enabled: ownsSession,
   })
 
   // Persisted history catches up when a turn starts and when its stream closes.
@@ -80,29 +107,42 @@ export function Conversation({ space, sessionID }: { space: string; sessionID: s
     if (ended) void client.invalidateQueries({ queryKey: ['private', space, sessionID, 'session'] })
   }, [client, space, sessionID, runID, ended])
 
-  const upload = useMutation({
-    mutationFn: async (file: File) => {
-      if (file.size > 8 * 1024 * 1024) throw new Error('附件不能超过 8 MiB')
-      const bytes = new Uint8Array(await file.arrayBuffer())
-      let binary = ''
-      for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768))
-      const mediaType = file.type || ({ json: 'application/json', csv: 'text/csv', txt: 'text/plain' } as Record<string, string>)[file.name.split('.').at(-1)?.toLowerCase() ?? ''] || 'application/octet-stream'
-      return request<Attachment>(`${sessionURL}/attachments`, 'POST', { name: file.name, media_type: mediaType, content_base64: btoa(binary) })
-    },
-    onSuccess: attachment => setAttachments(items => [...items, attachment]),
-  })
+  const [fileError, setFileError] = useState('')
   const submit = useMutation({
-    mutationFn: (draft: DraftMessage) => request<Run>(`${sessionURL}/runs`, 'POST', {
-      text: draft.text, attachment_ids: draft.attachments.map(a => a.id), idempotency_key: draft.key,
-    }),
-    onSuccess: (run, draft) => {
-      setAccepted({ run, draft })
+    mutationFn: async (draft: DraftMessage) => {
+      let target = session.data ?? createdSession
+      if (!target) {
+        if (createKey.current?.version !== versionID) createKey.current = { version: versionID, key: crypto.randomUUID() }
+        target = await request<Schema['RuntimeSession']>(`${base}/sessions`, 'POST', {
+          agent_id: agent.id, version_id: versionID, idempotency_key: createKey.current.key,
+        })
+        setCreatedSession(target)
+        void client.invalidateQueries({ queryKey: ['private', space, 'sessions', agent.id] })
+      }
+      const attachments: Attachment[] = []
+      const url = `${base}/sessions/${target.id}`
+      for (const file of draft.files) {
+        let attachment = uploaded.current.get(file)
+        if (!attachment) {
+          attachment = await uploadAttachment(url, file)
+          uploaded.current.set(file, attachment)
+        }
+        attachments.push(attachment)
+      }
+      const run = await request<Run>(`${url}/runs`, 'POST', {
+        text: draft.text, attachment_ids: attachments.map(a => a.id), idempotency_key: draft.key,
+      })
+      return { target, run, attachments }
+    },
+    onSuccess: ({ target, run, attachments }, draft) => {
+      setAccepted({ run, text: draft.text, attachments })
       setText('')
-      setAttachments([])
+      setFiles([])
       requestKey.current = null
-      client.setQueryData<Run[]>(runsKey, previous => [run, ...(previous ?? []).filter(r => r.id !== run.id)])
-      client.setQueryData([...sessionKey, 'run', run.id], run)
-      void client.invalidateQueries({ queryKey: runsKey })
+      const key = ['private', space, target.id]
+      client.setQueryData([...key, 'session'], target)
+      client.setQueryData<Run[]>([...key, 'runs'], previous => [run, ...(previous ?? []).filter(r => r.id !== run.id)])
+      client.setQueryData([...key, 'run', run.id], run)
       composer.current?.focus()
     },
   })
@@ -118,13 +158,21 @@ export function Conversation({ space, sessionID }: { space: string; sessionID: s
     onSuccess: () => { void client.invalidateQueries({ queryKey: sessionKey }); void client.invalidateQueries({ queryKey: ['private', space, 'sessions'] }) },
   })
 
-  const canSend = session.isSuccess && runs.isSuccess && !session.data.workspace_error && !busy && !submit.isPending && !upload.isPending && !!text.trim()
+  const validVersion = !!createdSession || versions.data?.some(version => version.id === versionID)
+  const canSend = (sessionID ? ownsSession && runs.isSuccess && !session.data?.workspace_error : !agent.archived && validVersion)
+    && !busy && !submit.isPending && !!text.trim()
   const send = () => {
     if (!canSend) return
-    const signature = JSON.stringify({ text, attachments: attachments.map(a => a.id) })
-    if (requestKey.current?.signature !== signature) requestKey.current = { signature, key: crypto.randomUUID() }
+    if (requestKey.current?.text !== text || requestKey.current.files !== files) requestKey.current = { text, files, key: crypto.randomUUID() }
     jumpToLatest()
-    submit.mutate({ text, attachments, key: requestKey.current.key })
+    submit.mutate(requestKey.current, {
+      onSuccess: ({ target }) => {
+        if (!sessionID) {
+          onCreated(target.id)
+          navigate(agentSessionsPath(space, agent.id, target.id), { replace: true })
+        }
+      },
+    })
   }
   const jumpToLatest = () => {
     follow.current = true
@@ -154,13 +202,13 @@ export function Conversation({ space, sessionID }: { space: string; sessionID: s
     observer.observe(body)
     observer.observe(node)
     return () => observer.disconnect()
-  }, [session.isSuccess])
+  }, [sessionID, ownsSession])
   useLayoutEffect(() => {
     const node = composer.current
     if (!node) return
     node.style.height = 'auto'
     node.style.height = `${node.scrollHeight}px`
-  }, [text, session.isSuccess])
+  }, [text, sessionID, ownsSession])
 
   const history = messages.data?.pages.slice().reverse().flatMap(page => page.items) ?? []
   const live = new Map(stream.state?.messages.map(m => [m.id, m]))
@@ -175,23 +223,24 @@ export function Conversation({ space, sessionID }: { space: string; sessionID: s
   }
   const showAccepted = accepted && !history.some(m => m.source_event_id === accepted.run.user_event_id)
   const acceptedBefore = showAccepted ? history.find(m => m.run_id === accepted.run.id)?.id : undefined
-  const acceptedMessage = showAccepted && <ChatMessage role="user" text={accepted.draft.text} attachments={accepted.draft.attachments} space={space} />
+  const acceptedMessage = showAccepted && <ChatMessage role="user" text={accepted.text} attachments={accepted.attachments} space={space} />
   const pending = submit.isPending ? submit.variables : undefined
   const liveMessage = stream.state?.messages.some(m => m.text && !m.closed)
-  const errors = [runs.error, current.error, messages.error, upload.error, submit.error, cancel.error, workspaceAction.error].filter(Boolean)
+  const errors = [runs.error, current.error, messages.error, versions.error, submit.error, cancel.error, workspaceAction.error].filter(Boolean)
   const openRun = (id: string) => { setParams({ run: id }); setShowDetails(true) }
   const closeDetails = () => {
     setShowDetails(false)
     if (chosenRun) setParams({}, { replace: true })
   }
-  if (session.isPending) return <p className="session-loading" role="status">正在读取会话…</p>
-  if (session.isError) return <p className="session-loading" role="alert">{session.error.message}</p>
+  if (sessionID && session.isPending) return <p className="session-loading" role="status">正在读取会话…</p>
+  if (sessionID && session.isError) return <p className="session-loading" role="alert">{session.error.message}</p>
+  if (sessionID && !ownsSession) return <p className="session-loading" role="alert">此会话不属于当前 Agent。</p>
+  const fixedVersion = session.data?.version_id ?? createdSession?.version_id
   return <section className="conversation-page">
     <header className="conversation-header">
-      <h1>{session.data.title || '会话'}</h1>
+      <h1>{sessionID || agent.name}</h1>
       <div className="conversation-actions">
-        <Link className="text-link" to={`${spacePath(space, 'sessions')}?from=${encodeURIComponent(sessionID)}`}>从文件快照新建</Link>
-        <button type="button" className="secondary" disabled={!latest} onClick={() => setShowDetails(true)}>运行详情</button>
+        {sessionID && <button type="button" className="secondary" disabled={!latest} onClick={() => setShowDetails(true)}>运行详情</button>}
       </div>
     </header>
     <div className="conversation-body" ref={viewport} tabIndex={0} aria-label="对话记录" onScroll={event => {
@@ -205,9 +254,10 @@ export function Conversation({ space, sessionID }: { space: string; sessionID: s
             {messages.isFetchingNextPage ? '正在读取…' : '加载更早的消息'}
           </button>
         </div>}
-        {messages.isPending && <p className="muted" role="status">正在读取消息…</p>}
-        {messages.isSuccess && !history.length && !pending && !showAccepted && !busy && !live.size &&
-          <div className="empty-conversation"><h2>开始对话</h2><p>在下方输入任务，也可以添加文件。</p></div>}
+        {sessionID && messages.isPending && <p className="muted" role="status">正在读取消息…</p>}
+        {(!sessionID || messages.isSuccess) && !history.length && !pending && !showAccepted && !busy && !live.size &&
+          <div className="empty-conversation"><h2>开始对话</h2>{!sessionID && agent.archived ? <p>此 Agent 已归档。</p>
+            : !sessionID && versions.data?.length === 0 ? <p>请先发布 Agent 版本。</p> : null}</div>}
         {history.map(m => {
           const reply = live.get(m.id)
           const body = reply && reply.text.length >= m.content.length ? reply.text : m.content
@@ -236,12 +286,12 @@ export function Conversation({ space, sessionID }: { space: string; sessionID: s
           <RunActivity key={latest.id} state={stream.state} />
           {stream.error && <p role="alert" className="stream-error">{stream.error} <button type="button" className="secondary" onClick={() => setGeneration(x => x + 1)}>重新同步事件</button></p>}
         </>}
-        {pending && <ChatMessage role="user" text={pending.text} attachments={pending.attachments} space={space} pending />}
+        {pending && <ChatMessage role="user" text={pending.text} space={space} pending />}
       </div>
     </div>
     <div className="composer-dock">
       {showJump && <button type="button" className="secondary jump-to-latest" onClick={jumpToLatest}>↓ 回到最新消息</button>}
-      {session.data.workspace_error && <div className="error workspace-notice">
+      {session.data?.workspace_error && <div className="error workspace-notice">
         <p role="alert">工作目录尚未确认持久化，已阻止下一轮运行。</p>
         <div className="actions">
           <button disabled={workspaceAction.isPending} onClick={() => workspaceAction.mutate('workspace-snapshots/retry')}>仅重试保存文件</button>
@@ -249,12 +299,13 @@ export function Conversation({ space, sessionID }: { space: string; sessionID: s
         </div>
         <p>恢复会丢弃当前未保存文件。</p>
       </div>}
+      {fileError && <p role="alert">{fileError}</p>}
       {errors.map((error, i) => <p role="alert" key={i}>{error?.message}</p>)}
       <form className="chat-composer" onSubmit={event => { event.preventDefault(); send() }}>
-        {attachments.length > 0 && <ul className="composer-files">{attachments.map(a => <li key={a.id}>
-          <span title={a.name}>{a.name}</span>
-          <button className="secondary" type="button" disabled={submit.isPending} aria-label={`移除附件 ${a.name}`}
-            onClick={() => setAttachments(items => items.filter(item => item.id !== a.id))}>×</button>
+        {files.length > 0 && <ul className="composer-files">{files.map((file, index) => <li key={index}>
+          <span title={file.name}>{file.name}</span>
+          <button className="secondary" type="button" disabled={submit.isPending} aria-label={`移除附件 ${file.name}`}
+            onClick={() => setFiles(items => items.filter(item => item !== file))}>×</button>
         </li>)}</ul>}
         <textarea ref={composer} aria-label="输入任务" value={text} onChange={event => setText(event.target.value)} readOnly={submit.isPending}
           maxLength={262144} rows={2} placeholder="输入任务，继续对话…"
@@ -265,10 +316,26 @@ export function Conversation({ space, sessionID }: { space: string; sessionID: s
             }
           }} />
         <div className="composer-tools">
-          <input ref={fileInput} type="file" hidden aria-label="添加任务附件" disabled={submit.isPending || upload.isPending || attachments.length >= 16}
-            onChange={event => { const file = event.currentTarget.files?.[0]; if (file) upload.mutate(file); event.currentTarget.value = '' }} />
-          <button type="button" className="secondary attach-button" disabled={submit.isPending || upload.isPending || attachments.length >= 16}
-            onClick={() => fileInput.current?.click()} title="添加附件（每个最多 8 MiB）">{upload.isPending ? '正在上传…' : '+ 附件'}</button>
+          <div className="composer-options">
+            <input ref={fileInput} type="file" hidden aria-label="添加任务附件" disabled={submit.isPending || files.length >= 16}
+              onChange={event => {
+                const file = event.currentTarget.files?.[0]
+                event.currentTarget.value = ''
+                if (!file) return
+                setFileError(file.size > 8 * 1024 * 1024 ? '附件不能超过 8 MiB' : '')
+                if (file.size <= 8 * 1024 * 1024) setFiles(items => [...items, file])
+              }} />
+            <button type="button" className="secondary attach-button" disabled={submit.isPending || files.length >= 16}
+              onClick={() => fileInput.current?.click()} title="添加附件（每个最多 8 MiB）">+ 附件</button>
+            {fixedVersion ? <span className="composer-version" title={fixedVersion}>固定版本 · {fixedVersion.slice(0, 8)}</span>
+              : <select className="composer-version" aria-label="Agent 版本" disabled={submit.isPending || !versions.data?.length}
+                value={validVersion ? versionID : ''} onChange={event => setSelectedVersion(event.target.value)}>
+                <option value="" disabled>选择 Agent 版本</option>
+                {versions.data?.map(version => <option key={version.id} value={version.id}>
+                  {version.debug ? `调试快照 ${version.id.slice(0, 8)}` : version.label}
+                </option>)}
+              </select>}
+          </div>
           {busy && latest
             ? <button type="button" className="stop-button secondary" aria-label="取消运行" disabled={cancel.isPending || stopRequested} onClick={() => cancel.mutate(latest.id)}>
               <span className="stop-icon" aria-hidden="true" />{stopRequested || cancel.isPending ? '正在停止' : '停止'}
@@ -278,9 +345,18 @@ export function Conversation({ space, sessionID }: { space: string; sessionID: s
       </form>
       <p className="composer-hint">Enter 发送 · Shift + Enter 换行</p>
     </div>
-    {showDetails && <RunDetails space={space} session={session.data} runs={sorted} current={currentRun}
+    {showDetails && session.data && <RunDetails space={space} session={session.data} runs={sorted} current={currentRun}
       chosenRun={chosenRun} onSelect={id => setParams({ run: id })} onClose={closeDetails} />}
   </section>
+}
+
+async function uploadAttachment(sessionURL: string, file: File) {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768))
+  const types: Record<string, string> = { json: 'application/json', csv: 'text/csv', txt: 'text/plain' }
+  const mediaType = file.type || types[file.name.split('.').at(-1)?.toLowerCase() ?? ''] || 'application/octet-stream'
+  return request<Attachment>(`${sessionURL}/attachments`, 'POST', { name: file.name, media_type: mediaType, content_base64: btoa(binary) })
 }
 
 function ChatMessage({ role, text, live, attachments, space, contentID, pending }: {

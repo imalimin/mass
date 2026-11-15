@@ -20,7 +20,8 @@ try {
   await page.getByLabel('绑定模型').selectOption({ label: '测试模型' }); for (const check of await page.locator('.tool-options input').all()) await check.uncheck()
   await page.getByLabel('输入 Token 上限').fill('8000')
   const response = page.waitForResponse(r => r.url().endsWith('/versions') && r.request().method() === 'POST'); await page.getByRole('button', { name: '发布版本', exact: true }).click(); const version = await (await response).json()
-  await page.locator('.app-sidebar').getByRole('link', { name: '会话与运行', exact: true }).click(); await page.getByLabel('使用 Agent').selectOption({ label: 'context-assistant' }); await page.getByLabel('定义版本').selectOption(version.id); await page.getByLabel('会话名称', { exact: true }).fill('阶段摘要'); await page.getByRole('button', { name: '新建会话', exact: true }).click(); await page.getByRole('heading', { name: '阶段摘要', exact: true }).waitFor()
+  await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByRole('link', { name: '打开 context-assistant 的会话', exact: true }).click()
+  await page.getByLabel('Agent 版本').selectOption(version.id)
   const send = async text => {
     await page.getByLabel('输入任务', { exact: true }).fill(text)
     const response = page.waitForResponse(r => /\/sessions\/[^/]+\/runs$/.test(r.url()) && r.request().method() === 'POST')
@@ -45,7 +46,7 @@ try {
   await page.getByText('Trace 与上下文', { exact: true }).click(); await page.getByText('context.projected', { exact: false }).first().click(); await page.getByRole('button', { name: '检查上下文来源', exact: true }).click()
   await expect(page.getByRole('region', { name: '上下文来源检查' })).toContainText('Epoch 2')
   await page.setViewportSize({ width: 390, height: 844 }); await page.getByRole('region', { name: '上下文来源检查' }).scrollIntoViewIfNeeded(); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await mkdir('.cache', { recursive: true }); await page.screenshot({ path: '.cache/d06-inspection-mobile.png' }); await page.setViewportSize({ width: 1440, height: 1100 });
-  const calls = server.modelCalls(); await page.reload(); await page.getByRole('heading', { name: '阶段摘要', exact: true }).waitFor(); assert.equal(server.modelCalls(), calls)
+  const calls = server.modelCalls(); await page.reload(); await page.getByRole('heading', { name: run.session_id, exact: true }).waitFor(); assert.equal(server.modelCalls(), calls)
   await mkdir('.cache', { recursive: true }); await page.screenshot({ path: '.cache/d06-desktop.png', fullPage: true }); await page.setViewportSize({ width: 390, height: 844 }); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await page.screenshot({ path: '.cache/d06-mobile.png' })
   assert.deepEqual(errors, []); console.log('D06 browser passed: actual Eino HTTP serialization, one summary reused across turns, stable wire prefixes, source inspection, no summary chat pollution, reload without calls, mobile layout.')
 } catch (e) { await mkdir('.cache', { recursive: true }); await page?.screenshot({ path: '.cache/d06-failure.png', fullPage: true }); throw e }

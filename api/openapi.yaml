@@ -2728,6 +2728,39 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/agents/{agent_id}/sessions:
+    get:
+      operationId: listAgentSessions
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: agent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Sessions created with this Agent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSessionPage'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/sessions/{session_id}:
     get:
       operationId: getSession

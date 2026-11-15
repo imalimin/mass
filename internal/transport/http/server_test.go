@@ -51,6 +51,7 @@ func TestRoutingBoundaries(t *testing.T) {
 		{"GET", "/spaces/example", 200, "text/html"},
 		{"GET", "/spaces/example/members", 200, "text/html"}, {"GET", "/spaces/example/models", 200, "text/html"}, {"GET", "/spaces/example/credentials", 200, "text/html"},
 		{"GET", "/spaces/example/agents", 200, "text/html"}, {"GET", "/spaces/example/agents/definition", 200, "text/html"},
+		{"GET", "/spaces/example/agents/definition/sessions", 200, "text/html"}, {"GET", "/spaces/example/agents/definition/sessions/session", 200, "text/html"},
 		{"GET", "/spaces/example/skills/definition", 200, "text/html"}, {"GET", "/spaces/example/sessions/session?run=run", 200, "text/html"},
 		{"HEAD", "/spaces/example/sessions/session", 200, "text/html"}, {"GET", "/spaces/example/unknown", 404, "application/json"},
 		{"GET", "/spaces/example/agents/id/missing.js", 404, "application/json"}, {"POST", "/spaces/example/members", 405, "application/json"},

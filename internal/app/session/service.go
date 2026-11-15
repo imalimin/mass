@@ -26,7 +26,7 @@ type Repository interface {
 	FindRuntimeRequest(context.Context, string, string, string, string, string) (string, string, bool, error)
 	AcceptRuntimeRequest(context.Context, string, string, string, string, string, journal.Batch) (string, string, error)
 	RuntimeSession(context.Context, string, string, string) (run.Session, error)
-	RuntimeSessions(context.Context, string, string, identity.Query) ([]run.Session, error)
+	RuntimeSessions(context.Context, string, string, string, identity.Query) ([]run.Session, error)
 	RuntimeRun(context.Context, string, string, string) (run.View, error)
 	RuntimeMessages(context.Context, string, string, string, int64, int) ([]run.MessageView, error)
 	CancelRuntimeRun(context.Context, string, string, string) (run.View, error)
@@ -136,7 +136,11 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 	defRef := Ref(o, "definition")
 	refs = append(refs, defRef)
 	id = uuid.NewString()
-	event := journal.New(actor, "session.created", "", journal.SessionData{SourceSnapshotID: in.SourceSnapshotID, DefinitionRef: &defRef, DefinitionID: in.AgentID, VersionID: version.ID, Title: in.Title}, refs...)
+	title := in.Title
+	if title == "" {
+		title = id
+	}
+	event := journal.New(actor, "session.created", "", journal.SessionData{SourceSnapshotID: in.SourceSnapshotID, DefinitionRef: &defRef, DefinitionID: in.AgentID, VersionID: version.ID, Title: title}, refs...)
 	batch, err := journal.Prepare(actor, journal.Request{SpaceID: space, SessionID: id, AppendKey: uuid.NewString(), Events: []journal.Proposed{event}})
 	if err != nil {
 		return run.Session{}, err

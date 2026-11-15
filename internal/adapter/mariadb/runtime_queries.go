@@ -75,10 +75,16 @@ func (s *Store) RuntimeSession(ctx context.Context, actor, space, id string) (v 
 	})
 	return
 }
-func (s *Store) RuntimeSessions(ctx context.Context, actor, space string, q identity.Query) (items []run.Session, err error) {
+func (s *Store) RuntimeSessions(ctx context.Context, actor, space, agent string, q identity.Query) (items []run.Session, err error) {
 	items = []run.Session{}
 	err = s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
-		rows, e := tx.QueryContext(ctx, "SELECT "+sessionColumns+" FROM sessions s JOIN content_objects o ON o.space_id=s.space_id AND o.id=s.definition_ref WHERE s.space_id=? AND s.id>? ORDER BY s.id LIMIT ?", space, q.After, q.Limit)
+		query := "SELECT " + sessionColumns + " FROM sessions s JOIN content_objects o ON o.space_id=s.space_id AND o.id=s.definition_ref WHERE s.space_id=? AND s.id>?"
+		args := []any{space, q.After}
+		if agent != "" {
+			query += " AND s.definition_id=?"
+			args = append(args, agent)
+		}
+		rows, e := tx.QueryContext(ctx, query+" ORDER BY s.id LIMIT ?", append(args, q.Limit)...)
 		if e != nil {
 			return e
 		}

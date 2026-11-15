@@ -18,11 +18,12 @@ try {
   await page.getByLabel('定义名称').fill('file-assistant'); await page.getByRole('button', { name: '创建 Agent', exact: true }).click(); const editor = page.locator('[data-editor="AGENTS.md"]'); await editor.locator('.view-lines').click(); await page.keyboard.insertText('# File assistant\nRead and write session files.')
   await page.getByLabel('绑定模型').selectOption({ label: '运行模型' })
   const snapshotResponse = page.waitForResponse(r => r.url().endsWith('/debug-snapshots') && r.request().method() === 'POST'); await page.getByRole('button', { name: '创建调试快照', exact: true }).click(); const snapshot = await (await snapshotResponse).json()
-  const sessionResponse = page.waitForResponse(r => r.url().endsWith('/sessions') && r.request().method() === 'POST'); await page.getByRole('button', { name: '使用此版本开始调试', exact: true }).click(); const session = await (await sessionResponse).json(); assert.equal(session.version_id, snapshot.id)
-  await page.getByRole('heading', { name: '调试 · file-assistant', exact: true }).waitFor()
+  await page.getByRole('link', { name: '使用此版本开始调试', exact: true }).click()
+  await expect(page.getByLabel('Agent 版本')).toHaveValue(snapshot.id)
+  const agentID = snapshot.definition_id, spaceID = new URL(page.url()).pathname.split('/')[2]
   // Edit the mutable draft in a separate tab while the debug Session stays pinned.
-  const draft = await (await context.request.get(`${server.url}/api/v1/spaces/${session.space_id}/agents/${session.definition_id}/draft`)).json()
-  const updated = await context.request.put(`${server.url}/api/v1/spaces/${session.space_id}/agents/${session.definition_id}/draft`, { headers: { Origin: server.url }, data: { expected_revision: draft.revision, document: { ...draft.document, markdown: '# Changed draft must not enter this Session' } } }); assert.equal(updated.status(), 200)
+  const draft = await (await context.request.get(`${server.url}/api/v1/spaces/${spaceID}/agents/${agentID}/draft`)).json()
+  const updated = await context.request.put(`${server.url}/api/v1/spaces/${spaceID}/agents/${agentID}/draft`, { headers: { Origin: server.url }, data: { expected_revision: draft.revision, document: { ...draft.document, markdown: '# Changed draft must not enter this Session' } } }); assert.equal(updated.status(), 200)
   // Force a mid-message transport close, not a page reload or a Run replay.
   await page.evaluate(() => {
     const Native = window.EventSource; let interrupted = false
@@ -30,7 +31,10 @@ try {
   })
   const subscriptions = []; page.on('request', r => { if (r.url().includes('/events?after=')) subscriptions.push(r.url()) })
   await page.getByLabel('输入任务', { exact: true }).fill('write, read and publish')
+  const sessionResponse = page.waitForResponse(r => r.url().endsWith('/sessions') && r.request().method() === 'POST')
   const accepted = page.waitForResponse(r => /\/sessions\/[^/]+\/runs$/.test(r.url()) && r.request().method() === 'POST'); await page.getByRole('button', { name: '发送任务', exact: true }).click(); const run = await (await accepted).json()
+  const session = await (await sessionResponse).json(); assert.equal(session.version_id, snapshot.id)
+  await expect(page.getByRole('heading', { name: session.id, exact: true })).toBeVisible()
   await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 30000 }); await page.getByText('已完成写入、读取和发布 notes.txt', { exact: true }).waitFor()
   await expect(page.locator('.chat-history .assistant')).toHaveCount(1)
   assert.ok(subscriptions.some(url => !url.endsWith('after=0')), 'no resumed UI cursor')
@@ -43,6 +47,7 @@ try {
   await mkdir('.cache', { recursive: true }); await page.getByText('Trace 与上下文', { exact: true }).scrollIntoViewIfNeeded(); await page.screenshot({ path: '.cache/d08-desktop.png', fullPage: true }); await page.setViewportSize({ width: 390, height: 844 }); await inspection.scrollIntoViewIfNeeded(); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await page.screenshot({ path: '.cache/d08-mobile.png' })
   const calls = server.modelCalls(); await page.reload(); await page.getByText('已完成写入、读取和发布 notes.txt', { exact: true }).waitFor(); assert.equal(server.modelCalls(), calls)
   // A new space must unmount the old private transcript and all subscriptions.
+  await page.getByRole('link', { name: '← Agents', exact: true }).click()
   await page.getByRole('button', { name: '账号设置', exact: true }).click(); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await page.getByLabel('新空间名称').fill('other-space'); await page.getByRole('button', { name: '创建空间', exact: true }).click(); await expect(page.getByRole('heading', { level: 1 })).toHaveText('空间概览'); await expect(page.getByText('已完成写入、读取和发布 notes.txt', { exact: true })).toHaveCount(0)
   const oldCount = subscriptions.length; await page.waitForTimeout(1200); assert.equal(subscriptions.length, oldCount)
   // Watch a running shared Session as Bob, then revoke access while SSE is open.

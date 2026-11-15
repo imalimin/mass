@@ -48,10 +48,13 @@ try {
   const skill = await publish()
   await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByLabel('定义名称').fill('delivery-agent'); await page.getByRole('button', { name: '创建 Agent', exact: true }).click(); await edit('AGENTS.md', '# Delivery agent\nRead and write session files.')
   await page.getByLabel('绑定模型').selectOption({ label: '恢复模型' }); await page.getByLabel('Skill 版本：retained-skill', { exact: true }).selectOption('v1'); const agent = await publish(); assert.equal(agent.bundle.bindings[0].version_id, skill.id)
-  await page.locator('.app-sidebar').getByRole('link', { name: '会话与运行', exact: true }).click(); await page.getByLabel('使用 Agent').selectOption({ label: 'delivery-agent' }); await page.getByLabel('会话名称', { exact: true }).fill('恢复会话'); await page.getByRole('button', { name: '新建会话', exact: true }).click(); await page.getByRole('heading', { name: '恢复会话', exact: true }).waitFor()
-  const space = new URL(page.url()).pathname.split('/')[2], session = new URL(page.url()).pathname.split('/')[4], headers = { Origin: server.url, 'Content-Type': 'application/json' }, base = `${server.url}/api/v1/spaces/${space}`
+  await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByRole('link', { name: '打开 delivery-agent 的会话', exact: true }).click()
+  const firstAccepted = page.waitForResponse(r => /\/sessions\/[^/]+\/runs$/.test(r.url()) && r.request().method() === 'POST')
+  await page.getByLabel('输入任务', { exact: true }).fill('write, read and publish'); await page.getByRole('button', { name: '发送任务', exact: true }).click()
+  const first = await (await firstAccepted).json(); await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 15000 })
+  const space = first.space_id, session = first.session_id, headers = { Origin: server.url, 'Content-Type': 'application/json' }, base = `${server.url}/api/v1/spaces/${space}`
   const send = async text => { const r = await context.request.post(`${base}/sessions/${session}/runs`, { headers, data: { idempotency_key: randomUUID(), text } }); assert.equal(r.status(), 202); const run = await r.json(); for (let i=0;i<600;i++) { const v = await (await context.request.get(`${base}/runs/${run.id}`)).json(); if (v.status === 'succeeded') return v; if (['failed','cancelled'].includes(v.status)) throw Error(`Run failed: ${JSON.stringify(v)}`); await new Promise(r => setTimeout(r,50)) }; throw Error('run timed out') }
-  const first = await send('write, read and publish'); await page.goto(`${server.url}/spaces?space=${space}&session=${session}&run=${first.id}`); await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 15000 }); await page.getByText('Trace 与上下文', { exact: true }).click(); await page.getByText('model.attempt.started', { exact: false }).first().waitFor()
+  await page.goto(`${server.url}/spaces?space=${space}&session=${session}&run=${first.id}`); await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 15000 }); await page.getByText('Trace 与上下文', { exact: true }).click(); await page.getByText('model.attempt.started', { exact: false }).first().waitFor()
   const artifact = (await (await context.request.get(`${base}/runs/${first.id}/artifacts`)).json()).items[0]
   assert.equal(await (await context.request.get(server.url+artifact.download_url)).text(), 'hello workspace')
   for (let i = 0; ; i++) {
@@ -99,7 +102,7 @@ try {
   assert.deepEqual((await (await context.request.get(`${base}/runs/${first.id}/ui-snapshot`)).json()).state, history.state)
   assert.equal(await (await context.request.get(server.url+artifact.download_url)).text(),'hello workspace')
   const restoredVersion=await context.request.get(`${base}/agents/${agent.definition_id}/versions/${agent.id}`); assert.equal(restoredVersion.status(),200)
-  await page.reload(); await page.getByRole('heading',{name:'恢复会话',exact:true}).waitFor(); await page.getByText('已完成写入、读取和发布 notes.txt',{exact:true}).waitFor(); assert.equal(server.modelCalls(),calls)
+  await page.reload(); await page.getByRole('heading',{name:session,exact:true}).waitFor(); await page.getByText('已完成写入、读取和发布 notes.txt',{exact:true}).waitFor(); assert.equal(server.modelCalls(),calls)
   // A fresh Run must decrypt the restored credential and read the snapshot with
   // both the original temporary workspace and original TOS objects removed.
   const second = await send('second read after backup restore'); await page.goto(`${server.url}/spaces?space=${space}&session=${session}&run=${second.id}`); await page.getByText('已读取已有文件：hello workspace',{exact:true}).waitFor()
