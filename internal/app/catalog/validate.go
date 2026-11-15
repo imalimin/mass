@@ -18,6 +18,9 @@ import (
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 var versionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 var hashPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+const maxSkillEntries = 100
+
 var Tools = []string{"list_files", "glob_files", "search_files", "read_file", "write_file", "edit_file", "move_file", "delete_file", "list_skill_resources", "read_skill_resource", "read_attachment", run.PythonTool, run.JavaScriptTool, run.GoTool, run.CommandTool, "update_plan", "publish_artifact"}
 
 func ValidName(s string) bool { return namePattern.MatchString(s) }
@@ -25,7 +28,7 @@ func ValidLabel(s string) bool {
 	return versionPattern.MatchString(s) && !strings.EqualFold(s, "latest")
 }
 func ValidateDocument(kind, name string, doc Document, publish bool) (*Config, error) {
-	if !ValidName(name) || (kind != "agent" && kind != "skill") || !utf8.ValidString(doc.Markdown) || !utf8.ValidString(doc.ConfigYAML) || len(doc.Markdown) > MaxDocument || len(doc.ConfigYAML) > 64<<10 || len(doc.Assets) > 100 {
+	if !ValidName(name) || (kind != "agent" && kind != "skill") || !utf8.ValidString(doc.Markdown) || !utf8.ValidString(doc.ConfigYAML) || len(doc.Markdown) > MaxDocument || len(doc.ConfigYAML) > 64<<10 || len(doc.Assets) > maxSkillEntries {
 		return nil, ErrConfig
 	}
 	if kind == "agent" && doc.Assets != nil {
@@ -40,7 +43,7 @@ func ValidateDocument(kind, name string, doc Document, publish bool) (*Config, e
 		seen[key] = true
 	}
 	// Only user-created directories are stored. Their ancestors are implied.
-	if len(doc.Directories) > 100 || kind != "skill" && len(doc.Directories) > 0 {
+	if len(doc.Directories) > maxSkillEntries || kind != "skill" && len(doc.Directories) > 0 {
 		return nil, ErrConfig
 	}
 	explicit := map[string]bool{}

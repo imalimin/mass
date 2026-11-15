@@ -36,19 +36,34 @@ const parseConfig = (value: string) => {
 export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind }) {
   const { definitionId: selected = '' } = useParams(), navigate = useNavigate()
   const [name, setName] = useState('')
+  const importInput = useRef<HTMLInputElement>(null)
   const client = useQueryClient(), base = `/spaces/${space.id}/${kind}s`
   const query = useQuery({ queryKey: ['private', space.id, kind, 'list'], queryFn: ({ signal }) => list<Schema['Definition']>(base, signal), refetchInterval: q => q.state.error ? false : 5000 })
   const refresh = () => { void client.invalidateQueries({ queryKey: ['private', space.id] }) }
   const select = (id: string) => navigate(`${base}/${id}`)
   const create = useMutation({ mutationFn: () => request<Draft>(base, 'POST', { name }), onSuccess: d => { select(d.id); setName(''); refresh() } })
+  const importSkill = useMutation({
+    mutationFn: (file: File) => request<Draft>(`${base}/import?${new URLSearchParams({ filename: file.name })}`, 'POST', new Blob([file], { type: 'application/zip' })),
+    onSuccess: d => { select(d.id); refresh() },
+  })
   return <section className="panel catalog">{selected ? <><Link className="text-link back-link" to={base}>← 返回 {kind === 'skill' ? 'Skills' : 'Agents'} 列表</Link><DefinitionEditor key={`${kind}-${selected}`} space={space.id} kind={kind} id={selected} onCopied={select} refresh={refresh} /></> : <>
     <h2>{kind === 'skill' ? 'Skill 方法库' : 'Agent 定义'}</h2><p className="muted">保存草稿后发布独立版本。Agent 始终绑定指定的 Skill 版本。</p>
     <form className="inline-form" onSubmit={e => { e.preventDefault(); create.mutate() }}>
       <label>定义名称<input value={name} onChange={e => setName(e.target.value)} pattern={String.raw`[a-z][a-z0-9_\-]{0,63}`} aria-describedby="definition-name-hint" placeholder="例如 report_writer" required /></label>
-      <button disabled={create.isPending}>创建 {kind === 'skill' ? 'Skill' : 'Agent'}</button>
+      <button disabled={create.isPending || importSkill.isPending}>创建 {kind === 'skill' ? 'Skill' : 'Agent'}</button>
+      {kind === 'skill' && <>
+        <input ref={importInput} type="file" accept=".zip" aria-label="Skill ZIP 文件" hidden onChange={e => {
+          const file = e.currentTarget.files?.[0]
+          e.currentTarget.value = ''
+          if (file) importSkill.mutate(file)
+        }} />
+        <button type="button" className="secondary" disabled={create.isPending || importSkill.isPending} onClick={() => importInput.current?.click()}>
+          {importSkill.isPending ? '正在导入…' : '导入 Skill ZIP'}
+        </button>
+      </>}
     </form>
     <small id="definition-name-hint">以小写英文字母开头，最多 64 个字符，可使用小写英文字母、数字、连字符（-）和下划线（_）。</small>
-    {[query.error, create.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}
+    {[query.error, create.error, importSkill.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}
     <div className="definition-list">{query.data?.map(d => kind === 'agent' ? <div className="agent-entry" key={d.id}>
       <Link className="resource-link" to={`${base}/${d.id}`}>{d.name}{d.archived ? '（已归档）' : ''}</Link>
       <Link className="agent-chat-link" to={agentSessionsPath(space.id, d.id)} aria-label={`打开 ${d.name} 的会话`} title="会话与运行">

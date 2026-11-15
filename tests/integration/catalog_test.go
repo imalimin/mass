@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -127,6 +128,67 @@ func exerciseCatalog(t *testing.T, blobs storage.BlobStore, prefix string) {
 	publish := func(d catalog.Draft, label string) catalog.Version {
 		return jsonValue[catalog.Version](t, api("POST", path(d)+"/versions", map[string]any{"expected_revision": d.Revision, "label": label}, 201))
 	}
+	t.Run("import Skill ZIP", func(t *testing.T) {
+		zipBody := func(entries ...[2]string) []byte {
+			t.Helper()
+			var buf bytes.Buffer
+			z := zip.NewWriter(&buf)
+			for _, entry := range entries {
+				w, err := z.Create(entry[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := io.WriteString(w, entry[1]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := z.Close(); err != nil {
+				t.Fatal(err)
+			}
+			return buf.Bytes()
+		}
+		importZIP := func(data []byte, status int) *httptest.ResponseRecorder {
+			t.Helper()
+			route := root + "/skills/import?filename=Example+Skill.zip"
+			r := httptest.NewRequest("POST", "http://mass.test/api/v1"+route, bytes.NewReader(data))
+			r.Header.Set("Origin", "http://mass.test")
+			r.Header.Set("Content-Type", "application/zip")
+			r.Header.Set("Cookie", "mass_session="+token)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, r)
+			if w.Code != status {
+				t.Fatalf("import: want %d got %d %s", status, w.Code, w.Body.String())
+			}
+			validate("POST", route, w)
+			return w
+		}
+		missing := importZIP(zipBody([2]string{"wrapped/SKILL.md", "# Nested only"}), 400)
+		if got := jsonValue[map[string]string](t, missing)["code"]; got != "skill_document_missing" {
+			t.Fatalf("missing root document error = %q", got)
+		}
+		importZIP(zipBody([2]string{"SKILL.md", "# Valid document"}, [2]string{"../outside.txt", "invalid path"}), 400)
+		items, err := svc.Repo.CatalogList(ctx, u.ID, space.ID, "skill", identity.Query{Limit: 10})
+		if err != nil || len(items) != 0 {
+			t.Fatalf("rejected imports created a Skill: %v, %v", items, err)
+		}
+		const filename = "scripts/nested/task.py"
+		const script = "print('hello')\n"
+		input := zipBody([2]string{"./", ""}, [2]string{"./SKILL.md", "# Imported Skill"}, [2]string{"./" + filename, script}, [2]string{"./assets/empty/", ""})
+		imported := jsonValue[catalog.Draft](t, importZIP(input, 201))
+		if imported.Name != "example-skill" || imported.Revision != 1 {
+			t.Fatalf("unexpected imported draft: %+v", imported)
+		}
+		draft := jsonValue[catalog.Draft](t, api("GET", path(imported)+"/draft", nil, 200))
+		doc := draft.Document
+		if doc.Markdown != "# Imported Skill" || len(doc.Directories) != 1 || doc.Directories[0] != "assets/empty" || len(doc.Assets) != 1 || doc.Assets[0].Path != filename {
+			t.Fatalf("imported directory structure or Markdown changed: %+v", doc)
+		}
+		payload := api("GET", root+"/payloads/"+doc.Assets[0].ObjectID+"?path="+url.QueryEscape(filename), nil, 200)
+		if payload.Body.String() != script {
+			t.Fatal("imported resource bytes changed")
+		}
+		importZIP(input, 409)
+	})
 	s1 := create("skill", "extract")
 	s2 := create("skill", "report")
 	s1 = save(s1, "# Extract v1", "")

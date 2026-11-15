@@ -23,11 +23,23 @@ func decodeCatalog(w http.ResponseWriter, r *http.Request, v any, limit int64) e
 	}
 	return nil
 }
-func registerCatalog(register func(string, bool, endpoint), options IdentityOptions, query func(*http.Request, identity.User) (identity.Query, int, string, error)) {
+func registerCatalog(register func(string, bool, endpoint), registerMedia func(string, bool, string, endpoint), options IdentityOptions, query func(*http.Request, identity.User) (identity.Query, int, string, error)) {
 	svc := options.Catalog
 	if svc == nil {
 		return
 	}
+	registerMedia("POST /api/v1/spaces/{space_id}/skills/import", true, "application/zip", func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		space := r.PathValue("space_id")
+		if err := options.Service.CheckAccess(r.Context(), u.ID, space); err != nil {
+			return err
+		}
+		draft, err := svc.ImportSkill(r.Context(), u.ID, space, r.URL.Query().Get("filename"), r.Body)
+		if err != nil {
+			return err
+		}
+		writeJSON(w, 201, draft)
+		return nil
+	})
 	for _, kind := range []string{"agent", "skill"} {
 		base := "/api/v1/spaces/{space_id}/" + kind + "s"
 		register("GET "+base, true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {

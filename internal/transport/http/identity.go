@@ -89,6 +89,7 @@ func apiError(w http.ResponseWriter, err error, logger *slog.Logger) {
 		message string
 	}{
 		{catalog.ErrDraft, 409, "Draft changed; compare and reload before saving"}, {catalog.ErrVersion, 409, "Version label already published"}, {catalog.ErrReferenced, 409, "Version is referenced"}, {catalog.ErrConfig, 400, "Invalid definition or operation"},
+		{catalog.ErrSkillDocumentMissing, 400, "SKILL.md is required at the ZIP root"},
 		{run.ErrState, 409, "Run state conflict"}, {run.ErrCancelled, 409, "Run cancelled"}, {run.ErrBudget, 400, "Run budget exceeded"}, {run.ErrOverflow, 400, "Context capacity exceeded"}, {run.ErrUnavailable, 503, "Runtime unavailable"}, {run.ErrTool, 400, "Tool not available in this stage"}, {run.ErrProtocol, 502, "Model response incomplete or invalid"}, {run.ErrCursor, 400, "Invalid stream cursor"},
 		{storage.ErrConflict, 409, "Storage fact conflict"}, {storage.ErrSchema, 400, "Unsupported event schema"}, {storage.ErrInvalid, 400, "Invalid storage request"}, {storage.ErrIntegrity, 503, "Content unavailable"}, {storage.ErrWorkspace, 409, "Workspace unavailable"}, {storage.ErrActive, 409, "Session has an active run"},
 		{identity.ErrUnauthenticated, 401, "Please sign in"}, {identity.ErrForbidden, 403, "Access denied"}, {identity.ErrNotFound, 404, "Resource not found"}, {identity.ErrConflict, 409, "Resource changed or already exists"}, {identity.ErrInvalid, 400, "Invalid request"}, {identity.ErrCapability, 400, "Unsupported model capability or endpoint"},
@@ -118,7 +119,7 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 	cookie := func(w http.ResponseWriter, value string, expiry time.Time, maxAge int) {
 		http.SetCookie(w, &http.Cookie{Name: "mass_session", Value: value, Path: "/", HttpOnly: true, Secure: options.Secure, SameSite: http.SameSiteLaxMode, Expires: expiry, MaxAge: maxAge})
 	}
-	register := func(pattern string, auth bool, fn endpoint) {
+	registerMedia := func(pattern string, auth bool, contentType string, fn endpoint) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
 			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -130,8 +131,12 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 					return
 				}
 				media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-				if err != nil || media != "application/json" {
-					writeError(w, 415, "unsupported_media_type", "JSON content type is required")
+				if err != nil || media != contentType {
+					message := "Content-Type must be " + contentType
+					if contentType == "application/json" {
+						message = "JSON content type is required"
+					}
+					writeError(w, 415, "unsupported_media_type", message)
 					return
 				}
 			}
@@ -148,6 +153,9 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 				apiError(w, err, logger)
 			}
 		})
+	}
+	register := func(pattern string, auth bool, fn endpoint) {
+		registerMedia(pattern, auth, "application/json", fn)
 	}
 	register("POST /api/v1/auth/login", false, func(w http.ResponseWriter, r *http.Request, _ identity.User) error {
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
@@ -220,7 +228,7 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 		q, err := svc.Query(scope, r.URL.Query().Get("cursor"), limit)
 		return q, limit, scope, err
 	}
-	registerCatalog(register, options, query)
+	registerCatalog(register, registerMedia, options, query)
 	registerRuntime(mux, register, options, query, token, logger)
 	register("GET /api/v1/spaces", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		q, n, scope, err := query(r, u)

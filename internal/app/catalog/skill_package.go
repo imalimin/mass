@@ -82,6 +82,25 @@ func (s *Service) packSkill(ctx context.Context, actor, space string, d Draft, r
 		}
 	}
 
+	id := uuid.NewString()
+	if replacement != nil {
+		id = replacement.ObjectID
+	}
+	return s.writeSkillPackage(ctx, actor, space, d, revision, id, func(asset Asset) ([]byte, error) {
+		if replacement != nil && asset.Path == replacement.Path {
+			return replacementBytes, nil
+		}
+		key := asset
+		key.Path = ""
+		path, ok := previousPaths[key]
+		if !asset.Package || !ok {
+			return nil, identity.ErrNotFound
+		}
+		return resource.ReadSkillEntry(previous, path, MaxResource)
+	})
+}
+
+func (s *Service) writeSkillPackage(ctx context.Context, actor, space string, d Draft, revision int64, id string, readAsset func(Asset) ([]byte, error)) (Draft, error) {
 	f, err := os.CreateTemp("", "mass-skill-package-*")
 	if err != nil {
 		return d, err
@@ -102,21 +121,7 @@ func (s *Service) packSkill(ctx context.Context, actor, space string, d Draft, r
 	b.Document.Markdown = ""
 	b.Document.Assets = make([]Asset, len(d.Document.Assets))
 	for i, asset := range d.Document.Assets {
-		var data []byte
-		switch {
-		case replacement != nil && asset.Path == replacement.Path:
-			data = replacementBytes
-		case asset.Package:
-			key := asset
-			key.Path = ""
-			path, ok := previousPaths[key]
-			if !ok {
-				return d, identity.ErrNotFound
-			}
-			data, err = resource.ReadSkillEntry(previous, path, MaxResource)
-		default:
-			return d, identity.ErrNotFound
-		}
+		data, err := readAsset(asset)
 		if err != nil {
 			return d, err
 		}
@@ -151,10 +156,6 @@ func (s *Service) packSkill(ctx context.Context, actor, space string, d Draft, r
 	}
 	if _, err = f.Seek(0, io.SeekStart); err != nil {
 		return d, err
-	}
-	id := uuid.NewString()
-	if replacement != nil {
-		id = replacement.ObjectID
 	}
 	o, err := s.Content.PutAt(ctx, actor, space, id, resource.SkillPackageKind, "application/zip",
 		s.Content.CatalogObjectKey(space, "skill", d.ID, "packages/"+id+".zip"), f)

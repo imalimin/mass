@@ -1795,6 +1795,80 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/DefinitionNameInput'
+  /api/v1/spaces/{space_id}/skills/import:
+    post:
+      operationId: importSkill
+      summary: Import a ZIP archive as a Skill draft.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: filename
+          in: query
+          description: Original ZIP filename used to derive the Skill name.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        description: ZIP archive containing SKILL.md at its root.
+        content:
+          application/zip:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: Imported Skill draft.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DefinitionDraft'
+        '400':
+          description: Invalid archive or SKILL.md missing at the archive root.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Access denied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Space not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: A Skill with the derived name already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: The request must use the application/zip content type.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Content storage unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/skills/{id}/copy:
     post:
       operationId: catalog21
