@@ -8,15 +8,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"testing"
+
 	"github.com/google/uuid"
 	"github.com/imalimin/mass/internal/adapter/workspace"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/resource"
 	"github.com/imalimin/mass/tests/fakes"
-	"os"
-	"path/filepath"
-	"testing"
 )
 
 type objects map[string]storage.Object
@@ -59,7 +61,7 @@ func (signer) OpenPage(scope, token string) (string, error) {
 func fileFixture(t *testing.T) (*resource.FileService, run.Snapshot, string) {
 	t.Helper()
 	root := t.TempDir()
-	limits := storage.Limits{MaxFileBytes: 1 << 20, MaxTotalBytes: 8 << 20, MaxEntries: 100}
+	limits := storage.Limits{MaxArchiveFileBytes: 1 << 20, MaxTotalBytes: 8 << 20}
 	w, err := workspace.New(root, limits)
 	if err != nil {
 		t.Fatal(err)
@@ -79,6 +81,41 @@ func toolData(t *testing.T, r run.ToolResult) map[string]any {
 	return data
 }
 func digest(v string) string { sum := sha256.Sum256([]byte(v)); return hex.EncodeToString(sum[:]) }
+
+func TestPublishArtifactUsesExpectedDigestWithoutObjectLimit(t *testing.T) {
+	ctx := context.Background()
+	f, s, root := fileFixture(t)
+	f.Content.MaxBytes = 4
+	f.ReadBudget = func(int64) error { return run.ErrOverflow }
+	const contents = "artifact larger than the content limit"
+	if err := os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "export.txt"), []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	input := resource.PublishInput{Path: "export.txt", DisplayName: "export.txt", MediaType: "text/plain", ExpectedSHA256: digest("another version")}
+	if _, _, err := f.Publish(ctx, s, uuid.NewString(), input); !errors.Is(err, storage.ErrConflict) {
+		t.Fatalf("expected stale digest to be rejected, got %v", err)
+	}
+	if len(f.Content.Repo.(objects)) != 0 || len(f.Content.Blobs.(*fakes.Blobs).Data) != 0 {
+		t.Fatal("digest mismatch reached object storage")
+	}
+	input.ExpectedSHA256 = digest(contents)
+	artifact, result, err := f.Publish(ctx, s, uuid.NewString(), input)
+	if err != nil || result.Status != "completed" {
+		t.Fatalf("publish failed: %v, %+v", err, result)
+	}
+	object, file, err := f.Content.Read(ctx, s.ActorID, s.SpaceID, artifact.ObjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(file)
+	if err != nil || string(raw) != contents || object.SHA256 != input.ExpectedSHA256 {
+		t.Fatalf("published bytes or digest differ: %v", err)
+	}
+}
 
 func TestMkdirReportsConfirmedEffectsWhenInterrupted(t *testing.T) {
 	f, s, root := fileFixture(t)
@@ -195,11 +232,6 @@ func TestBoundedReadAndStableQueryPages(t *testing.T) {
 	matches, err := f.Query(ctx, s, "search_files", resource.PageInput{Pattern: "^alpha", Mode: "regex", PathGlob: "*.txt"})
 	if err != nil || len(toolData(t, matches)["items"].([]any)) != 2 {
 		t.Fatal(err, string(matches.Data))
-	}
-	f.Limits.MaxEntries = 2
-	limited, err := f.Query(ctx, s, "list_files", resource.PageInput{})
-	if err != nil || limited.Complete {
-		t.Fatal("scan limit hidden", err)
 	}
 	f.Check = func(context.Context, run.Snapshot) error { return run.ErrPermission }
 	if _, err = f.Query(ctx, s, "glob_files", resource.PageInput{Pattern: "**", Cursor: cursor}); !errors.Is(err, run.ErrPermission) {

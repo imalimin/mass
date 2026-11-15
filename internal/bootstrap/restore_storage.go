@@ -104,7 +104,8 @@ func RestoreStorage(ctx context.Context, source, target Config, expectedDatabase
 		if err := lease.Check(ctx); err != nil {
 			return o, err
 		}
-		if !storage.ValidShortID(o.SpaceID) || !storage.ValidID(o.ID) || o.Size < 0 || o.Size > target.Storage.MaxObjectBytes {
+		if !storage.ValidShortID(o.SpaceID) || !storage.ValidID(o.ID) || o.Size < 0 ||
+			(storage.UsesContentObjectLimit(o.Kind) && o.Size > storage.MaxContentObjectBytes) {
 			return o, storage.ErrIntegrity
 		}
 		if strings.HasPrefix(o.Key, toPrefix+o.SpaceID+"/") && o.URI == to.URI(o.Key) {

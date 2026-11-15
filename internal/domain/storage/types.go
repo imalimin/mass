@@ -8,7 +8,6 @@ import (
 	"io"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -75,6 +74,7 @@ type Manifest struct {
 	State         json.RawMessage `json:"runtime_state,omitempty"`
 	FormatVersion int             `json:"format_version"`
 	Entries       []Entry         `json:"entries"`
+	LocalFiles    []string        `json:"local_files,omitempty"`
 }
 type Snapshot struct {
 	ID             string `json:"id"`
@@ -102,9 +102,13 @@ func (r ContextReader) Read(p []byte) (int, error) {
 	return r.Reader.Read(p)
 }
 
+const MaxContentObjectBytes = 256 << 20
+
+func UsesContentObjectLimit(kind string) bool {
+	return kind != "workspace.archive" && kind != "artifact"
+}
+
 type Limits struct {
-	MaxFileBytes  int64
-	MaxTotalBytes int64
-	MaxEntries    int
-	Timeout       time.Duration
+	MaxArchiveFileBytes int64
+	MaxTotalBytes       int64
 }

@@ -25,12 +25,12 @@ func (c *coordinator) CheckRun(context.Context, run.Snapshot) error {
 
 type workspaces struct{}
 
-func (workspaces) Ensure(context.Context, run.Snapshot) error { return nil }
+func (workspaces) Ensure(context.Context, run.Snapshot) ([]string, error) { return nil, nil }
 
 type finisher struct{ finished chan run.Outcome }
 
-func (f finisher) Finish(_ context.Context, _ run.Snapshot, outcome run.Outcome, _ bool) error {
-	f.finished <- outcome
+func (f finisher) Finish(_ context.Context, _ run.Snapshot, plan run.CleanupPlan) error {
+	f.finished <- plan.Outcome
 	return nil
 }
 
@@ -49,7 +49,7 @@ func TestCancellationWaitsForActualExecutionExit(t *testing.T) {
 	coordinator := &coordinator{}
 	finished := make(chan run.Outcome, 1)
 	released := atomic.Int32{}
-	s := &Supervisor{Guard: guard{}, Coordinator: coordinator, Workspaces: workspaces{}, Finisher: finisher{finished: finished}, CleanupTimeout: time.Second, NewRunner: func(context.Context, run.Snapshot, time.Time) (Runner, error) { return runner, nil }}
+	s := &Supervisor{Guard: guard{}, Coordinator: coordinator, Workspaces: workspaces{}, Finisher: finisher{finished: finished}, CleanupTimeout: time.Second, NewRunner: func(context.Context, run.Snapshot, time.Time, []string) (Runner, error) { return runner, nil }}
 	snapshot := run.Snapshot{ID: "run", Definition: run.Definition{TimeoutSeconds: 60}}
 	if !s.Start(context.Background(), run.View{Snapshot: snapshot}, func() { released.Add(1) }) {
 		t.Fatal("handoff refused")
@@ -90,7 +90,7 @@ func (panicRunner) Execute(context.Context, run.Snapshot) (run.Outcome, error) {
 func TestPanicStillFinishesOnce(t *testing.T) {
 	finished := make(chan run.Outcome, 1)
 	released := atomic.Int32{}
-	s := &Supervisor{Guard: guard{}, Coordinator: &coordinator{}, Workspaces: workspaces{}, Finisher: finisher{finished: finished}, CleanupTimeout: time.Second, NewRunner: func(context.Context, run.Snapshot, time.Time) (Runner, error) { return panicRunner{}, nil }}
+	s := &Supervisor{Guard: guard{}, Coordinator: &coordinator{}, Workspaces: workspaces{}, Finisher: finisher{finished: finished}, CleanupTimeout: time.Second, NewRunner: func(context.Context, run.Snapshot, time.Time, []string) (Runner, error) { return panicRunner{}, nil }}
 	s.Start(context.Background(), run.View{Snapshot: run.Snapshot{ID: "panic", Definition: run.Definition{TimeoutSeconds: 1}}}, func() { released.Add(1) })
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

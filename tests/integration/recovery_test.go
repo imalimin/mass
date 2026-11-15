@@ -238,7 +238,7 @@ func TestTOSRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err = workspace.New(cfg.Runtime.WorkspaceTempRoot, storage.Limits{MaxFileBytes: 1 << 20, MaxTotalBytes: 8 << 20, MaxEntries: 1000})
+	manager, err = workspace.New(cfg.Runtime.WorkspaceTempRoot, storage.Limits{MaxArchiveFileBytes: 1 << 20, MaxTotalBytes: 8 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}

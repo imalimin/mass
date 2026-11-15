@@ -64,6 +64,7 @@ func (r *runtimeLifecycle) Close(ctx context.Context) error {
 
 type runtimeStore interface {
 	httptransport.RuntimeRepository
+	RunBaseSnapshot(context.Context, run.Snapshot) (storage.Snapshot, error)
 	journal.Repository
 	agui.Repository
 }
@@ -157,16 +158,18 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		policy.MaxLogBytes = 65536
 	}
 	codeEngine := codevm.New(c.Tools.Code.MaxConcurrent, filepath.Join(traceRoot, ".go-wasi"))
-	supervisorService.NewRunner = func(ctx context.Context, s run.Snapshot, started time.Time) (supervisor.Runner, error) {
+	supervisorService.NewRunner = func(ctx context.Context, s run.Snapshot, started time.Time, missingLocalFiles []string) (supervisor.Runner, error) {
 		budget := control.New(s, started)
 		runJournal, runContent := journalService, content
 		if sessions != nil {
 			runJournal, runContent = sessions.RunServices(s, content)
 		}
-		contextPlanner := &planner.Planner{Journal: runJournal, Content: runContent, Projector: &projector.Projector{Content: runContent, ToolResult: recorder.ToolResult}, Tools: registryService}
+		contextPlanner := &planner.Planner{Journal: runJournal, Content: runContent, Projector: &projector.Projector{
+			Content: runContent, ToolResult: recorder.ToolResult, MissingLocalFiles: missingLocalFiles,
+		}, Tools: registryService}
 		gateway := &modelgateway.Gateway{Journal: runJournal, Content: runContent, Transport: transport, Credentials: auth, Control: budget, Trace: recorder, Delta: store.LiveUI.Delta}
 		contextPlanner.Model = gateway
-		fileService := &resource.FileService{Workspaces: workspaces, Content: runContent, Cursors: auth, MaxBytes: min(c.Storage.MaxFileBytes, 1<<20), Limits: storage.Limits{MaxFileBytes: c.Storage.MaxFileBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes, MaxEntries: c.Storage.MaxEntries}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
+		fileService := &resource.FileService{Workspaces: workspaces, Content: runContent, Cursors: auth, MaxBytes: 1 << 20, Limits: storage.Limits{MaxArchiveFileBytes: c.Storage.MaxObjectBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
 		fileService.EnableRunPagination()
 		code := &resource.CodeService{Engine: codeEngine, Files: fileService, Network: &resource.Network{}}
 		commands := &resource.CommandService{Workspaces: workspaces, Execute: command.Execute}
@@ -193,17 +196,13 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 			cancel()
 			return nil, nil, err
 		}
-		if err = workspaces.With(ctx, s.SpaceID, s.SessionID, func(dir resource.WorkspaceDir) error { return dir.Clear() }); err != nil {
-			cancel()
-			return nil, nil, err
-		}
 		plan := run.CleanupPlan{Outcome: run.Outcome{Status: "failed", Error: "interrupted"}, At: time.Now().UTC().Truncate(time.Microsecond), WorkspaceReady: false}
 		if err = scope(s).SavePlan(ctx, plan); err != nil {
 			cancel()
 			return nil, nil, err
 		}
 		cleanup, stop := context.WithTimeout(ctx, c.Runtime.SnapshotTimeout)
-		err = finisher.Finish(cleanup, s, plan.Outcome, false)
+		err = finisher.Finish(cleanup, s, plan)
 		stop()
 		if err != nil {
 			cancel()

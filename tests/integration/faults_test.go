@@ -3,6 +3,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -231,7 +233,7 @@ func newFaultRigWithTimeout(t *testing.T, timeoutSeconds int) *faultRig {
 		t.Fatal(err)
 	}
 	r.version = version.ID
-	r.manager, err = workspace.New(t.TempDir(), storage.Limits{MaxFileBytes: 1 << 20, MaxTotalBytes: 8 << 20, MaxEntries: 1000})
+	r.manager, err = workspace.New(t.TempDir(), storage.Limits{MaxArchiveFileBytes: 2 << 20, MaxTotalBytes: 8 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,9 +253,9 @@ func (r *faultRig) start() {
 	c.LLM.MaxAttempts = 2
 	c.Runtime.MaxConcurrentRuns = 1
 	c.Runtime.SnapshotTimeout = 2 * time.Second
-	c.Storage.MaxFileBytes = 1 << 20
+	c.Storage.MaxObjectBytes = 2 << 20
 	c.Storage.MaxWorkspaceBytes = 8 << 20
-	c.Storage.MaxEntries = 1000
+
 	runtime, lifecycle, err := bootstrap.StartRuntime(ctx, c, r.db.Store, r.auth, &catalog.Service{Repo: r.db.Store, Content: r.content}, r.content, r.manager, snapshots, "D09-test", slog.New(slog.NewTextHandler(io.Discard, nil)), r.model)
 	if err != nil {
 		r.t.Fatal(err)
@@ -289,6 +291,115 @@ func (r *faultRig) wait(id string) run.View {
 	}
 	r.t.Fatal("terminal timeout")
 	return run.View{}
+}
+
+func TestWorkspaceLocalFilesAcrossHosts(t *testing.T) {
+	r := newFaultRigWithTimeout(t, 10)
+	r.content.MaxBytes = 2 << 20
+	ctx := context.Background()
+	session := r.session()
+	j := &journal.Journal{Repo: r.db.Store}
+	const large = ".local.bin"
+	runTask := func(text string, wantMissing []string) run.View {
+		t.Helper()
+		view := r.wait(r.submit(session, text).ID)
+		if view.Status != "succeeded" {
+			t.Fatalf("run failed: %+v", view)
+		}
+		events, err := resource.RunHistory(ctx, j, r.actor, r.space, session.ID, view.ID, "context.projected")
+		if err != nil || len(events) != 1 {
+			t.Fatalf("first model projection missing: %v, got %d", err, len(events))
+		}
+		var event journal.ProjectionData
+		if err := journal.Decode(events[0].Data, &event); err != nil {
+			t.Fatal(err)
+		}
+		var prepared run.Prepared
+		if err := resource.ReadJSON(ctx, r.content, r.actor, r.space, event.ContentID, 4<<20, &prepared); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(prepared.Spec.MissingLocalFiles, wantMissing) {
+			t.Fatalf("missing paths in model projection: got %v, want %v", prepared.Spec.MissingLocalFiles, wantMissing)
+		}
+		warned := slices.ContainsFunc(prepared.Messages, func(message run.Message) bool {
+			return strings.HasPrefix(message.Content, "[MASS workspace:") && strings.Contains(message.Content, large)
+		})
+		if warned != (len(wantMissing) > 0) {
+			t.Fatalf("unexpected missing-file notice: %+v", prepared.Messages)
+		}
+		return view
+	}
+	runTask("Create the workspace", nil)
+	largeContents := bytes.Repeat([]byte("x"), 2<<20+1)
+	if err := r.manager.With(ctx, r.space, session.ID, func(dir resource.WorkspaceDir) error {
+		if err := dir.Root().WriteFile(large, largeContents, 0600); err != nil {
+			return err
+		}
+		for _, name := range []string{"first.bin", "second.bin"} {
+			chunk := make([]byte, 1536<<10)
+			if _, err := rand.Read(chunk); err != nil {
+				return err
+			}
+			if err := dir.Root().WriteFile(name, chunk, 0600); err != nil {
+				return err
+			}
+		}
+		return dir.Root().WriteFile(".small", []byte("portable"), 0600)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	saved := runTask("Save the workspace", nil)
+	snapshot, err := r.db.Store.Snapshot(ctx, r.actor, r.space, saved.WorkspaceSnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := r.content.Object(ctx, r.actor, r.space, snapshot.ObjectID)
+	if err != nil || object.Size <= 2<<20 {
+		t.Fatalf("expected a committed archive above the per-file threshold: %d bytes, %v", object.Size, err)
+	}
+
+	if err := r.close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r.start()
+	runTask("Check after the service restart", nil)
+	if err := r.runtime.Workspaces.RestoreIdle(ctx, r.actor, r.space, session.ID, r.runtime.Snapshots); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.manager.With(ctx, r.space, session.ID, func(dir resource.WorkspaceDir) error {
+		contents, err := dir.Root().ReadFile(large)
+		if err != nil || !bytes.Equal(contents, largeContents) {
+			t.Fatalf("same-host restore lost local bytes: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := workspace.New(t.TempDir(), storage.Limits{MaxArchiveFileBytes: 2 << 20, MaxTotalBytes: 8 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.manager = manager
+	r.start()
+	runTask("Check the replacement host", []string{large})
+	runTask("Continue on the replacement host", []string{large})
+	if err := r.manager.With(ctx, r.space, session.ID, func(dir resource.WorkspaceDir) error {
+		contents, err := dir.Root().ReadFile(".small")
+		if err != nil || string(contents) != "portable" {
+			t.Fatalf("replacement host lost archived bytes: %v", err)
+		}
+		return dir.Root().WriteFile(large, []byte("small replacement"), 0600)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runTask("Check the replacement file", nil)
 }
 func (r *faultRig) entered() {
 	r.t.Helper()
@@ -588,7 +699,7 @@ func TestFaultHistoryRetentionAndCorruptContent(t *testing.T) {
 		t.Fatal("snapshot expired", err)
 	}
 	r.runtime.Workspaces.Forget(r.space, s.ID)
-	if err = r.manager.With(ctx, r.space, s.ID, func(d resource.WorkspaceDir) error { return d.Clear() }); err != nil {
+	if err = r.manager.With(ctx, r.space, s.ID, func(d resource.WorkspaceDir) error { return d.Clear(ctx, nil) }); err != nil {
 		t.Fatal(err)
 	}
 	if err = r.runtime.Snapshots.Restore(ctx, r.actor, r.space, s.ID); err != nil {

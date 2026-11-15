@@ -13,7 +13,7 @@ import (
 )
 
 func TestWriteCASBoundariesAndQuotas(t *testing.T) {
-	limits := storage.Limits{MaxFileBytes: 16, MaxTotalBytes: 20, MaxEntries: 3}
+	limits := storage.Limits{MaxArchiveFileBytes: 16, MaxTotalBytes: 20}
 	manager, err := workspace.New(t.TempDir(), limits)
 	if err != nil {
 		t.Fatal(err)
@@ -43,8 +43,8 @@ func TestWriteCASBoundariesAndQuotas(t *testing.T) {
 	if err := write("dir/b.txt", "12345", "missing"); err != nil {
 		t.Fatal(err)
 	}
-	if !errors.Is(write("extra.txt", "", "missing"), run.ErrOverflow) {
-		t.Fatal("entry quota exceeded")
+	if err := write("extra.txt", "", "missing"); err != nil {
+		t.Fatal("empty file rejected at the byte limit", err)
 	}
 	if err := manager.With(ctx, snapshot.SpaceID, snapshot.SessionID, func(dir resource.WorkspaceDir) error { return dir.Root().Symlink(t.TempDir(), "link") }); err != nil {
 		t.Fatal(err)

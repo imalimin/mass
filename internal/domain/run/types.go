@@ -148,6 +148,7 @@ type Reply struct {
 	ResponseEventID string            `json:"response_event_id"`
 }
 type ProjectionSpec struct {
+	MissingLocalFiles      []string          `json:"missing_local_files,omitempty"`
 	AuditRanges            []ContextRange    `json:"audit_ranges,omitempty"`
 	EffectiveConfigEventID string            `json:"effective_config_event_id,omitempty"`
 	Omissions              []ContextOmission `json:"omissions,omitempty"`
@@ -251,7 +252,8 @@ func CheckTransition(status string, cancelled bool, event, target string, hasSna
 }
 
 type CleanupPlan struct {
-	Outcome        Outcome   `json:"outcome"`
-	At             time.Time `json:"at"`
-	WorkspaceReady bool      `json:"workspace_ready"`
+	Outcome           Outcome   `json:"outcome"`
+	At                time.Time `json:"at"`
+	WorkspaceReady    bool      `json:"workspace_ready"`
+	MissingLocalFiles []string  `json:"missing_local_files,omitempty"`
 }

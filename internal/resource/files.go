@@ -1,7 +1,6 @@
 package resource
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -86,11 +85,8 @@ func (f *FileService) checkWrite(ctx context.Context, root *os.Root, target stri
 			return storage.ErrWorkspace
 		}
 		entries[folded] = name
-		if len(entries) > f.Limits.MaxEntries {
-			return run.ErrOverflow
-		}
-		if info.Mode().IsRegular() && name != target {
-			if info.Size() > f.Limits.MaxFileBytes || info.Size() > f.Limits.MaxTotalBytes-total {
+		if info.Mode().IsRegular() && name != target && info.Size() <= f.Limits.MaxArchiveFileBytes {
+			if info.Size() > f.Limits.MaxTotalBytes-total {
 				return run.ErrOverflow
 			}
 			total += info.Size()
@@ -100,7 +96,7 @@ func (f *FileService) checkWrite(ctx context.Context, root *os.Root, target stri
 	if err != nil {
 		return err
 	}
-	if size > f.Limits.MaxTotalBytes-total {
+	if size <= f.Limits.MaxArchiveFileBytes && size > f.Limits.MaxTotalBytes-total {
 		return run.ErrOverflow
 	}
 	parts := strings.Split(target, "/")
@@ -110,10 +106,6 @@ func (f *FileService) checkWrite(ctx context.Context, root *os.Root, target stri
 		if old := entries[key]; old != "" && old != name {
 			return storage.ErrConflict
 		}
-		entries[key] = name
-	}
-	if len(entries) > f.Limits.MaxEntries {
-		return run.ErrOverflow
 	}
 	return nil
 }
@@ -138,23 +130,32 @@ func checkParents(root *os.Root, name string) error {
 	return nil
 }
 func hashBytes(b []byte) string { sum := sha256.Sum256(b); return hex.EncodeToString(sum[:]) }
+func openWorkspaceFile(dir WorkspaceDir, p string) (*os.File, fs.FileInfo, error) {
+	if err := checkParents(dir.Root(), p); err != nil {
+		return nil, nil, err
+	}
+	file, err := dir.Root().Open(p)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		file.Close()
+		return nil, nil, storage.ErrWorkspace
+	}
+	return file, info, nil
+}
+
 func (f *FileService) read(ctx context.Context, dir WorkspaceDir, p string) ([]byte, error) {
 	if !filePath(p) {
 		return nil, storage.ErrInvalid
 	}
-	if err := checkParents(dir.Root(), p); err != nil {
-		return nil, err
-	}
-	file, err := dir.Root().Open(p)
+	file, info, err := openWorkspaceFile(dir, p)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		return nil, storage.ErrWorkspace
-	}
-	if info.Size() > f.Limits.MaxFileBytes {
+	if info.Size() > storage.MaxContentObjectBytes {
 		return nil, run.ErrOverflow
 	}
 	if f.ReadBudget != nil {
@@ -275,14 +276,13 @@ func (f *FileService) Publish(ctx context.Context, s run.Snapshot, callID string
 		if err := f.Check(ctx, s); err != nil {
 			return err
 		}
-		raw, err := f.read(ctx, dir, in.Path)
+		file, _, err := openWorkspaceFile(dir, in.Path)
 		if err != nil {
 			return err
 		}
-		if hashBytes(raw) != in.ExpectedSHA256 {
-			return storage.ErrConflict
-		}
-		o, err := f.Content.Put(ctx, s.ActorID, s.SpaceID, uuid.NewString(), "artifact", "application/octet-stream", bytes.NewReader(raw))
+		defer file.Close()
+		id := uuid.NewString()
+		o, err := f.Content.putAt(ctx, s.ActorID, s.SpaceID, id, "artifact", "application/octet-stream", f.Content.objectKey(s.SpaceID, id), file, in.ExpectedSHA256)
 		if err != nil {
 			return err
 		}

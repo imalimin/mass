@@ -44,8 +44,11 @@ func (f *File) Close() error {
 var kindPattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,63}$`)
 
 func (c *ContentStore) Put(ctx context.Context, actor, space, id, kind, media string, source io.Reader) (storage.Object, error) {
-	key := strings.TrimSuffix(c.Prefix, "/") + "/" + space + "/objects/" + id
-	return c.PutAt(ctx, actor, space, id, kind, media, key, source)
+	return c.PutAt(ctx, actor, space, id, kind, media, c.objectKey(space, id), source)
+}
+
+func (c *ContentStore) objectKey(space, id string) string {
+	return strings.TrimSuffix(c.Prefix, "/") + "/" + space + "/objects/" + id
 }
 
 func (c *ContentStore) CatalogObjectKey(space, kind, definition, filename string) string {
@@ -53,7 +56,12 @@ func (c *ContentStore) CatalogObjectKey(space, kind, definition, filename string
 }
 
 func (c *ContentStore) PutAt(ctx context.Context, actor, space, id, kind, media, key string, source io.Reader) (storage.Object, error) {
-	if !storage.ValidShortID(space) || !storage.ValidID(id) || !kindPattern.MatchString(kind) || c.MaxBytes < 1 {
+	return c.putAt(ctx, actor, space, id, kind, media, key, source, "")
+}
+
+func (c *ContentStore) putAt(ctx context.Context, actor, space, id, kind, media, key string, source io.Reader, expectedArtifactSHA256 string) (storage.Object, error) {
+	bounded := storage.UsesContentObjectLimit(kind)
+	if !storage.ValidShortID(space) || !storage.ValidID(id) || !kindPattern.MatchString(kind) || (bounded && c.MaxBytes < 1) {
 		return storage.Object{}, storage.ErrInvalid
 	}
 	if _, _, err := mime.ParseMediaType(media); err != nil || len(media) > 128 {
@@ -78,14 +86,22 @@ func (c *ContentStore) PutAt(ctx context.Context, actor, space, id, kind, media,
 	defer os.Remove(file.Name())
 	defer file.Close()
 	hash := sha256.New()
-	n, err := io.Copy(io.MultiWriter(file, hash), io.LimitReader(storage.ContextReader{Context: ctx, Reader: source}, c.MaxBytes+1))
+	var reader io.Reader = storage.ContextReader{Context: ctx, Reader: source}
+	if bounded {
+		reader = io.LimitReader(reader, c.MaxBytes+1)
+	}
+	n, err := io.Copy(io.MultiWriter(file, hash), reader)
 	if err != nil {
 		return storage.Object{}, err
 	}
-	if n > c.MaxBytes {
+	if bounded && n > c.MaxBytes {
 		return storage.Object{}, storage.ErrInvalid
 	}
-	object := storage.Object{SpaceID: space, ID: id, Kind: kind, MediaType: media, Size: n, SHA256: hex.EncodeToString(hash.Sum(nil)), Key: key, URI: c.Blobs.URI(key), State: "uploading"}
+	digest := hex.EncodeToString(hash.Sum(nil))
+	if expectedArtifactSHA256 != "" && expectedArtifactSHA256 != digest {
+		return storage.Object{}, storage.ErrConflict
+	}
+	object := storage.Object{SpaceID: space, ID: id, Kind: kind, MediaType: media, Size: n, SHA256: digest, Key: key, URI: c.Blobs.URI(key), State: "uploading"}
 	object, err = c.Repo.BeginObject(ctx, actor, object)
 	if err != nil {
 		return object, err
@@ -142,7 +158,7 @@ func inlineKind(kind string) bool {
 }
 
 func (c *ContentStore) verify(ctx context.Context, o storage.Object) (*File, error) {
-	if o.Size < 0 || o.Size > c.MaxBytes {
+	if o.Size < 0 || (storage.UsesContentObjectLimit(o.Kind) && o.Size > c.MaxBytes) {
 		return nil, storage.ErrIntegrity
 	}
 	reader, err := c.Blobs.Open(ctx, o.Key, o.VersionID)

@@ -73,7 +73,7 @@ func TestModelTimeoutConfiguration(t *testing.T) {
 	}
 }
 
-func TestD02ConfigurationDefaults(t *testing.T) {
+func TestStorageConfigurationDefaults(t *testing.T) {
 	data, err := os.ReadFile("../../configs/mass.example.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -86,10 +86,13 @@ func TestD02ConfigurationDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Storage.MaxObjectBytes != 256<<20 || config.Storage.MaxWorkspaceBytes != 128<<20 || config.Storage.MaxFileBytes != 32<<20 || config.Storage.MaxEntries != 10000 {
-		t.Fatal("incompatible legacy defaults")
+	if config.Storage.MaxObjectBytes != 2<<20 || config.Storage.MaxWorkspaceBytes != 128<<20 {
+		t.Fatal("unexpected snapshot limits")
 	}
-	if err = validateServiceConfig([]byte(strings.Replace(string(data), "max_object_bytes: 268435456", "max_object_bytes: -1", 1)), fixtureEnv); err == nil {
+	if err = validateServiceConfig([]byte(strings.Replace(string(data), "max_object_bytes: 2097152", "max_object_bytes: -1", 1)), fixtureEnv); err == nil {
 		t.Fatal("negative storage limit accepted")
+	}
+	if err = validateServiceConfig([]byte(strings.Replace(string(data), "max_workspace_bytes: 134217728", "max_workspace_bytes: 536870912", 1)), fixtureEnv); err != nil {
+		t.Fatal("workspace budget was capped by the content object limit:", err)
 	}
 }

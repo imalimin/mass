@@ -135,7 +135,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if err = db.CheckVersion(ctx, 15); err != nil {
 		t.Fatal(err)
 	}
-	limits := storage.Limits{MaxFileBytes: 1 << 20, MaxTotalBytes: 8 << 20, MaxEntries: 1000}
+	limits := storage.Limits{MaxArchiveFileBytes: 1 << 20, MaxTotalBytes: 8 << 20}
 	manager, err := workspace.New(t.TempDir(), limits)
 	if err != nil {
 		t.Fatal(err)
@@ -394,9 +394,9 @@ return input.(float64) + float64(len(rows))`}
 	c := bootstrap.Config{}
 	c.Runtime.MaxConcurrentRuns = 2
 	c.Runtime.SnapshotTimeout = 60 * time.Second
-	c.Storage.MaxFileBytes = limits.MaxFileBytes
+	c.Storage.MaxObjectBytes = limits.MaxArchiveFileBytes
 	c.Storage.MaxWorkspaceBytes = limits.MaxTotalBytes
-	c.Storage.MaxEntries = limits.MaxEntries
+
 	c.Tools.Code.Timeout = 60 * time.Second
 	c.Tools.Code.MaxFileOperations = 12
 	c.Tools.Code.MaxNetworkRequests = 2

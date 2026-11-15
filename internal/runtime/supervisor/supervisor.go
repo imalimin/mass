@@ -20,20 +20,20 @@ type Coordinator interface {
 	CheckRun(context.Context, run.Snapshot) error
 }
 type Workspaces interface {
-	Ensure(context.Context, run.Snapshot) error
+	Ensure(context.Context, run.Snapshot) ([]string, error)
 }
 
 const checkTimeout = 3 * time.Second
 
 type Finisher interface {
-	Finish(context.Context, run.Snapshot, run.Outcome, bool) error
+	Finish(context.Context, run.Snapshot, run.CleanupPlan) error
 }
 type Supervisor struct {
 	Guard          Guard
 	Coordinator    Coordinator
 	Workspaces     Workspaces
 	Finisher       Finisher
-	NewRunner      func(context.Context, run.Snapshot, time.Time) (Runner, error)
+	NewRunner      func(context.Context, run.Snapshot, time.Time, []string) (Runner, error)
 	CleanupTimeout time.Duration
 	mu             sync.Mutex
 	active         map[string]context.CancelCauseFunc
@@ -128,6 +128,7 @@ func (s *Supervisor) run(parent context.Context, v run.View) {
 	snapshot := v.Snapshot
 	outcome := run.Outcome{Status: "failed", Error: "interrupted"}
 	workspaceReady := false
+	var missingLocalFiles []string
 	runTimeout := time.Duration(snapshot.Definition.TimeoutSeconds) * time.Second
 	runStarted := time.Now()
 	ctx, stop := context.WithTimeout(parent, runTimeout)
@@ -141,7 +142,8 @@ func (s *Supervisor) run(parent context.Context, v run.View) {
 		}
 		cleanup, cancel := context.WithTimeout(context.Background(), s.CleanupTimeout)
 		defer cancel()
-		if err := s.Finisher.Finish(cleanup, snapshot, outcome, workspaceReady); err != nil && s.Fault != nil {
+		plan := run.CleanupPlan{Outcome: outcome, WorkspaceReady: workspaceReady, MissingLocalFiles: missingLocalFiles}
+		if err := s.Finisher.Finish(cleanup, snapshot, plan); err != nil && s.Fault != nil {
 			s.Fault(err)
 		}
 	}()
@@ -158,7 +160,7 @@ func (s *Supervisor) run(parent context.Context, v run.View) {
 		detail = failureDetail("start_check", err, probeErr, started, failedAt, checkTimeout)
 	}
 	if err == nil && authorized.Err() == nil {
-		err = s.Workspaces.Ensure(authorized, snapshot)
+		missingLocalFiles, err = s.Workspaces.Ensure(authorized, snapshot)
 		if err == nil {
 			workspaceReady = true
 			started = time.Now()
@@ -166,7 +168,7 @@ func (s *Supervisor) run(parent context.Context, v run.View) {
 				started = *v.StartedAt
 			}
 			var runner Runner
-			if runner, err = s.NewRunner(authorized, snapshot, started); err == nil {
+			if runner, err = s.NewRunner(authorized, snapshot, started, missingLocalFiles); err == nil {
 				outcome, err = runner.Execute(authorized, snapshot)
 			}
 		}

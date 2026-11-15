@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -46,7 +47,7 @@ func (f *archiveFile) Close() error {
 	return errors.Join(err, os.Remove(name))
 }
 func New(base string, limits storage.Limits) (*Manager, error) {
-	if !filepath.IsAbs(base) || limits.MaxFileBytes < 1 || limits.MaxTotalBytes < limits.MaxFileBytes || limits.MaxEntries < 1 {
+	if !filepath.IsAbs(base) || limits.MaxArchiveFileBytes < 1 || limits.MaxTotalBytes < limits.MaxArchiveFileBytes {
 		return nil, storage.ErrInvalid
 	}
 	if err := os.MkdirAll(base, 0700); err != nil {
@@ -115,7 +116,7 @@ func (d *directory) Root() *os.Root { return d.root }
 func validPath(p string) bool {
 	return p != "" && len(p) <= 1024 && utf8.ValidString(p) && fs.ValidPath(p) && p != "." && path.Clean(p) == p && !strings.ContainsAny(p, "\\:\x00") && !strings.HasPrefix(p, "/")
 }
-func (d *directory) Pack(ctx context.Context) (io.ReadCloser, storage.Manifest, error) {
+func (d *directory) Pack(ctx context.Context, missingLocalFiles []string) (io.ReadCloser, storage.Manifest, error) {
 	manifest := storage.Manifest{FormatVersion: 1, Entries: []storage.Entry{}}
 	file, err := os.CreateTemp("", "mass-archive-*")
 	if err != nil {
@@ -131,7 +132,7 @@ func (d *directory) Pack(ctx context.Context) (io.ReadCloser, storage.Manifest, 
 	gz := gzip.NewWriter(file)
 	tw := tar.NewWriter(gz)
 	var total int64
-	seenNames := map[string]bool{}
+	directories := map[string]bool{}
 	err = fs.WalkDir(d.root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -142,11 +143,8 @@ func (d *directory) Pack(ctx context.Context) (io.ReadCloser, storage.Manifest, 
 		if name == "." {
 			return nil
 		}
-		if seenNames[strings.ToLower(name)] {
-			return storage.ErrWorkspace
-		}
-		seenNames[strings.ToLower(name)] = true
-		if !validPath(name) || len(manifest.Entries) >= d.manager.limits.MaxEntries {
+		folded := strings.ToLower(name)
+		if _, exists := directories[folded]; exists || !validPath(name) {
 			return storage.ErrWorkspace
 		}
 		info, err := d.root.Lstat(name)
@@ -156,10 +154,15 @@ func (d *directory) Pack(ctx context.Context) (io.ReadCloser, storage.Manifest, 
 		if !info.IsDir() && !info.Mode().IsRegular() {
 			return storage.ErrWorkspace
 		}
+		directories[folded] = info.IsDir()
 		record := storage.Entry{Path: name, Type: "directory"}
 		header := &tar.Header{Name: name, Mode: 0700, Typeflag: tar.TypeDir, Format: tar.FormatPAX}
 		if info.Mode().IsRegular() {
-			if info.Size() > d.manager.limits.MaxFileBytes || info.Size() > d.manager.limits.MaxTotalBytes-total {
+			if info.Size() > d.manager.limits.MaxArchiveFileBytes {
+				manifest.LocalFiles = append(manifest.LocalFiles, name)
+				return nil
+			}
+			if info.Size() > d.manager.limits.MaxTotalBytes-total {
 				return storage.ErrWorkspace
 			}
 			record.Type = "file"
@@ -205,22 +208,40 @@ func (d *directory) Pack(ctx context.Context) (io.ReadCloser, storage.Manifest, 
 	if err != nil {
 		return nil, manifest, err
 	}
+	for _, name := range missingLocalFiles {
+		folded := strings.ToLower(name)
+		if _, present := directories[folded]; !present && !hasFileParent(folded, directories) {
+			manifest.LocalFiles = append(manifest.LocalFiles, name)
+		}
+	}
+	sort.Strings(manifest.LocalFiles)
 	if _, err = file.Seek(0, 0); err != nil {
 		return nil, manifest, err
 	}
 	ok = true
 	return out, manifest, nil
 }
+
+func hasFileParent(name string, directories map[string]bool) bool {
+	for parent := path.Dir(name); parent != "."; parent = path.Dir(parent) {
+		if directory, present := directories[parent]; present && !directory {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *directory) Restore(ctx context.Context, source io.Reader, manifest storage.Manifest) error {
-	if manifest.FormatVersion != 1 || len(manifest.Entries) > d.manager.limits.MaxEntries {
+	if manifest.FormatVersion != 1 {
 		return storage.ErrWorkspace
 	}
 	expected := map[string]storage.Entry{}
-	folded := map[string]bool{}
+	folded := map[string]storage.Entry{}
+	directories := map[string]bool{}
 	var total int64
 	for _, entry := range manifest.Entries {
 		lower := strings.ToLower(entry.Path)
-		if !validPath(entry.Path) || folded[lower] || entry.Size < 0 || entry.Size > d.manager.limits.MaxFileBytes || entry.Size > d.manager.limits.MaxTotalBytes-total {
+		if _, exists := folded[lower]; !validPath(entry.Path) || exists || entry.Size < 0 || entry.Size > d.manager.limits.MaxTotalBytes-total {
 			return storage.ErrWorkspace
 		}
 		if entry.Type != "file" && entry.Type != "directory" {
@@ -236,7 +257,8 @@ func (d *directory) Restore(ctx context.Context, source io.Reader, manifest stor
 			}
 		}
 		total += entry.Size
-		folded[lower] = true
+		folded[lower] = entry
+		directories[lower] = entry.Type == "directory"
 		expected[entry.Path] = entry
 	}
 	// Require explicit parent entries: no hidden extra directories in the copy.
@@ -249,12 +271,35 @@ func (d *directory) Restore(ctx context.Context, source io.Reader, manifest stor
 			}
 		}
 	}
-	entries, err := fs.ReadDir(d.root.FS(), ".")
+	localFiles := map[string]bool{}
+	for _, name := range manifest.LocalFiles {
+		lower := strings.ToLower(name)
+		if _, exists := directories[lower]; !validPath(name) || exists {
+			return storage.ErrWorkspace
+		}
+		directories[lower] = false
+		localFiles[name] = true
+	}
+	for name := range localFiles {
+		if hasFileParent(strings.ToLower(name), directories) {
+			return storage.ErrWorkspace
+		}
+	}
+	kept, err := d.retained(ctx, localFiles)
 	if err != nil {
 		return err
 	}
-	if len(entries) != 0 {
-		return storage.ErrWorkspace
+	for name, directory := range kept {
+		if entry, exists := folded[strings.ToLower(name)]; exists &&
+			(entry.Path != name || !directory || entry.Type != "directory") {
+			return storage.ErrConflict
+		}
+	}
+	if source == nil {
+		if len(expected) != 0 {
+			return storage.ErrWorkspace
+		}
+		return d.prune(ctx, kept)
 	}
 	staging := "restore_" + uuid.NewString()
 	if err = d.manager.root.Mkdir(staging, 0700); err != nil {
@@ -272,7 +317,7 @@ func (d *directory) Restore(ctx context.Context, source io.Reader, manifest stor
 	}
 	defer gz.Close()
 	// Limit decompression including archive padding and extended headers.
-	maxExpanded := d.manager.limits.MaxTotalBytes + int64(d.manager.limits.MaxEntries)*4096 + 10240
+	maxExpanded := total + int64(len(expected))*4096 + 10240
 	expanded := &io.LimitedReader{R: storage.ContextReader{Context: ctx, Reader: gz}, N: maxExpanded + 1}
 	tr := tar.NewReader(expanded)
 	seen := map[string]bool{}
@@ -334,34 +379,87 @@ func (d *directory) Restore(ctx context.Context, source io.Reader, manifest stor
 	if len(seen) != len(expected) {
 		return storage.ErrIntegrity
 	}
-	if err = ctx.Err(); err != nil {
+	if err = d.prune(ctx, kept); err != nil {
 		return err
 	}
-	if err = d.root.Close(); err != nil {
-		return err
-	}
-	if err = d.manager.root.Remove(d.name); err != nil {
-		return err
-	}
-	if err = d.manager.root.Rename(staging, d.name); err != nil {
-		return err
-	}
-	d.root, err = d.manager.root.OpenRoot(d.name)
-	return err
+	// Walk directories before their children so retained parent directories can
+	// receive restored siblings without moving their local files.
+	return fs.WalkDir(target.FS(), ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if name == "." || kept[name] {
+			return nil
+		}
+		if entry.IsDir() {
+			return d.root.Mkdir(name, 0700)
+		}
+		return d.manager.root.Rename(path.Join(staging, name), path.Join(d.name, name))
+	})
 }
 
-// Clear discards only a newly restored, not-yet-confirmed copy under its lease.
-func (d *directory) Clear() error {
-	entries, err := fs.ReadDir(d.root.FS(), ".")
+// Clear discards the snapshot-managed portion of a workspace under its lease.
+func (d *directory) Clear(ctx context.Context, localFiles []string) error {
+	paths := make(map[string]bool, len(localFiles))
+	for _, name := range localFiles {
+		paths[name] = true
+	}
+	kept, err := d.retained(ctx, paths)
 	if err != nil {
 		return err
 	}
-	for _, entry := range entries {
-		if err = d.root.RemoveAll(entry.Name()); err != nil {
+	return d.prune(ctx, kept)
+}
+
+func (d *directory) retained(ctx context.Context, localFiles map[string]bool) (map[string]bool, error) {
+	kept := map[string]bool{}
+	err := fs.WalkDir(d.root.FS(), ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
 			return err
 		}
-	}
-	return nil
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.root.Lstat(name)
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() && (info.Size() > d.manager.limits.MaxArchiveFileBytes || localFiles[name]) {
+			kept[name] = false
+			for parent := path.Dir(name); parent != "." && !kept[parent]; parent = path.Dir(parent) {
+				kept[parent] = true
+			}
+		}
+		return nil
+	})
+	return kept, err
+}
+
+func (d *directory) prune(ctx context.Context, kept map[string]bool) error {
+	return fs.WalkDir(d.root.FS(), ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, keep := kept[name]; name == "." || keep {
+			return nil
+		}
+		if err := d.root.RemoveAll(name); err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return fs.SkipDir
+		}
+		return nil
+	})
 }
 
 func (m *Manager) Exists(space, session string) bool {

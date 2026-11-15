@@ -4,9 +4,17 @@ import (
 	"context"
 	"database/sql"
 
+	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
 )
+
+func (s *Store) RunBaseSnapshot(ctx context.Context, snapshot run.Snapshot) (storage.Snapshot, error) {
+	if snapshot.BaseSnapshotID == "" {
+		return storage.Snapshot{}, nil
+	}
+	return s.Snapshot(ctx, snapshot.ActorID, snapshot.SpaceID, snapshot.BaseSnapshotID)
+}
 
 const snapshotColumns = "id,space_id,session_id,source_run_id,COALESCE(base_snapshot_id,''),object_id,manifest_ref,tos_uri,archive_sha256,format_version"
 

@@ -278,6 +278,22 @@ func (r *Runtime) Snapshot(ctx context.Context, actor, space, id string) (storag
 	return r.lookupSnapshot(ctx, space, id)
 }
 
+func (r *Runtime) RunBaseSnapshot(ctx context.Context, run run.Snapshot) (storage.Snapshot, error) {
+	if run.BaseSnapshotID == "" {
+		return storage.Snapshot{}, nil
+	}
+	session, err := r.memberSession(ctx, run.ActorID, run.SpaceID, run.SessionID)
+	if err != nil {
+		return storage.Snapshot{}, err
+	}
+	snapshot, found := session.snapshots[run.BaseSnapshotID]
+	session.Unlock()
+	if found {
+		return snapshot, nil
+	}
+	return r.lookupSnapshot(ctx, run.SpaceID, run.BaseSnapshotID)
+}
+
 func (r *Runtime) lookupSnapshot(ctx context.Context, space, id string) (storage.Snapshot, error) {
 	ids, err := r.sessionIDs(ctx, space)
 	if err != nil {

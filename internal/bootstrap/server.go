@@ -50,7 +50,7 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 		return err
 	}
 	defer blobs.Client.Close()
-	workspaces, err := workspace.New(c.Runtime.WorkspaceTempRoot, storage.Limits{MaxFileBytes: c.Storage.MaxFileBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes, MaxEntries: c.Storage.MaxEntries})
+	workspaces, err := workspace.New(c.Runtime.WorkspaceTempRoot, storage.Limits{MaxArchiveFileBytes: c.Storage.MaxObjectBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes})
 	if err != nil {
 		return err
 	}
@@ -58,7 +58,7 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 	objects := &archive.Objects{Authorize: store.CheckAccess}
 	sessions := &archive.Runtime{DB: store, Objects: objects, Log: &sessionlog.Store{
 		Root: filepath.Join(workspaces.LocalPath(), ".sessions"), Prefix: c.TOS.Prefix, Blobs: blobs}}
-	content := &resource.ContentStore{Repo: objects, Blobs: blobs, Prefix: c.TOS.Prefix, MaxBytes: c.Storage.MaxObjectBytes, Inline: sessions}
+	content := &resource.ContentStore{Repo: objects, Blobs: blobs, Prefix: c.TOS.Prefix, MaxBytes: storage.MaxContentObjectBytes, Inline: sessions}
 	catalogStore := &archive.Catalog{Blobs: blobs, Prefix: c.TOS.Prefix, Objects: objects, Content: content, Model: store.Model, Audit: store.Audit}
 	sessions.CatalogObject = catalogStore.Lookup
 	objects.Lookups = []archive.ObjectLookup{catalogStore.Lookup, sessions.Lookup}

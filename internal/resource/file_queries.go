@@ -66,7 +66,7 @@ func (f *FileService) Query(ctx context.Context, s run.Snapshot, kind string, in
 				}
 			}
 			names := []string{}
-			maxEntries := min(f.Limits.MaxEntries, 10000)
+			const maxEntries = 10000
 			var walk func(string) error
 			walk = func(directory string) error {
 				file, err := dir.Root().Open(directory)

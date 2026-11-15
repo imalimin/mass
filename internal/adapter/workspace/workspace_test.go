@@ -7,10 +7,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -41,7 +44,7 @@ func archive(t *testing.T, headers []*tar.Header, contents []string) []byte {
 	return b.Bytes()
 }
 func TestRestoreRejectsUnsafeOrIncompleteArchives(t *testing.T) {
-	limits := storage.Limits{MaxFileBytes: 16, MaxTotalBytes: 32, MaxEntries: 10}
+	limits := storage.Limits{MaxArchiveFileBytes: 16, MaxTotalBytes: 32}
 	m, err := New(t.TempDir(), limits)
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +114,7 @@ func TestRestoreRejectsUnsafeOrIncompleteArchives(t *testing.T) {
 }
 func TestPackBoundariesAndLockCancellation(t *testing.T) {
 	base := t.TempDir()
-	m, err := New(base, storage.Limits{MaxFileBytes: 16, MaxTotalBytes: 32, MaxEntries: 10})
+	m, err := New(base, storage.Limits{MaxArchiveFileBytes: 16, MaxTotalBytes: 32})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,24 +124,27 @@ func TestPackBoundariesAndLockCancellation(t *testing.T) {
 		if err := dir.Root().Symlink("/etc/passwd", "link"); err != nil {
 			return err
 		}
-		if f, _, err := dir.Pack(context.Background()); err == nil {
+		if f, _, err := dir.Pack(context.Background(), nil); err == nil {
 			f.Close()
 			t.Fatal("symlink packed")
 		}
 		dir.Root().Remove("link")
-		f, err := dir.Root().OpenFile("large", os.O_CREATE|os.O_WRONLY, 0600)
-		if err != nil {
-			return err
+		for _, name := range []string{"first", "second", "third"} {
+			if err := dir.Root().WriteFile(name, make([]byte, 16), 0600); err != nil {
+				return err
+			}
 		}
-		f.Write(bytes.Repeat([]byte("a"), 17))
-		f.Close()
-		if f, _, err := dir.Pack(context.Background()); err == nil {
+		if f, _, err := dir.Pack(context.Background(), nil); err == nil {
 			f.Close()
-			t.Fatal("oversize packed")
+			t.Fatal("archive exceeded the workspace byte limit")
 		}
-		dir.Root().Remove("large")
+		for _, name := range []string{"first", "second", "third"} {
+			if err := dir.Root().Remove(name); err != nil {
+				return err
+			}
+		}
 		dir.Root().Mkdir("empty", 0700)
-		packed, manifest, err := dir.Pack(context.Background())
+		packed, manifest, err := dir.Pack(context.Background(), nil)
 		if err != nil {
 			return err
 		}
@@ -162,5 +168,100 @@ func TestPackBoundariesAndLockCancellation(t *testing.T) {
 	os.Symlink(filepath.Join(base, space+"_"+session), filepath.Join(base, space+"_"+linked))
 	if err = m.With(context.Background(), space, linked, func(resource.WorkspaceDir) error { return nil }); err == nil {
 		t.Fatal("session symlink accepted")
+	}
+}
+
+func TestPackAndRestoreHostLocalFiles(t *testing.T) {
+	ctx := context.Background()
+	const threshold = 2 << 20
+	limits := storage.Limits{MaxArchiveFileBytes: threshold, MaxTotalBytes: 2 * threshold}
+	origin, err := New(t.TempDir(), limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer origin.Close()
+	destination, err := New(t.TempDir(), limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	space, session := storage.NewShortID(), storage.NewShortID()
+	random := rand.NewChaCha8([32]byte{1})
+	contents := make([]byte, threshold+1)
+	random.Read(contents)
+	var raw []byte
+	var manifest storage.Manifest
+	if err := origin.With(ctx, space, session, func(dir resource.WorkspaceDir) error {
+		root := dir.Root()
+		if err := root.Mkdir(".data", 0700); err != nil {
+			return err
+		}
+		for name, size := range map[string]int{".data/large": threshold + 1, ".data/equal": threshold, ".small": threshold - 1} {
+			if err := root.WriteFile(name, contents[:size], 0600); err != nil {
+				return err
+			}
+			random.Read(contents)
+		}
+		archive, packed, err := dir.Pack(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer archive.Close()
+		manifest = packed
+		raw, err = io.ReadAll(archive)
+		if err != nil {
+			return err
+		}
+		if !slices.Equal(manifest.LocalFiles, []string{".data/large"}) || len(manifest.Entries) != 3 || len(raw) <= threshold {
+			t.Fatalf("unexpected packed files or archive size: %+v, %d", manifest, len(raw))
+		}
+		before, err := root.ReadFile(".data/large")
+		if err != nil {
+			return err
+		}
+		if err := root.WriteFile(".data/equal", []byte("unsaved"), 0600); err != nil {
+			return err
+		}
+		if err := dir.Restore(ctx, bytes.NewReader(raw), manifest); err != nil {
+			return err
+		}
+		after, err := root.ReadFile(".data/large")
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("same-host restore changed local file: %v", err)
+		}
+		if info, err := root.Stat(".data/equal"); err != nil || info.Size() != threshold {
+			t.Fatalf("same-host restore did not restore archived sibling: %v", err)
+		}
+		if err := root.WriteFile(".data/equal", before, 0600); err != nil {
+			return err
+		}
+		if err := dir.Restore(ctx, bytes.NewReader(raw), manifest); !errors.Is(err, storage.ErrConflict) {
+			t.Fatalf("restore overwrote a new large file: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := destination.With(ctx, space, session, func(dir resource.WorkspaceDir) error {
+		if err := dir.Restore(ctx, bytes.NewReader(raw), manifest); err != nil {
+			return err
+		}
+		if _, err := dir.Root().Lstat(".data/large"); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("new host received the local-only file: %v", err)
+		}
+		if info, err := dir.Root().Stat(".small"); err != nil || info.Size() != threshold-1 {
+			t.Fatalf("new host did not receive the small hidden file: %v", err)
+		}
+		archive, packed, err := dir.Pack(ctx, manifest.LocalFiles)
+		if err != nil {
+			return err
+		}
+		defer archive.Close()
+		if !slices.Equal(packed.LocalFiles, manifest.LocalFiles) {
+			t.Fatalf("missing path lost after another save: %v", packed.LocalFiles)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

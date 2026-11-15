@@ -35,7 +35,7 @@ func stableID(runID, label string) string {
 func SaveForRun(s run.Snapshot, at time.Time, finish *journal.Proposed) SaveRequest {
 	return SaveRequest{SpaceID: s.SpaceID, SessionID: s.SessionID, RunID: s.ID, SnapshotID: stableID(s.ID, "snapshot"), ArchiveID: stableID(s.ID, "archive"), ManifestID: stableID(s.ID, "manifest"), EventID: stableID(s.ID, "snapshot.event"), AppendKey: stableID(s.ID, "finish.batch"), OccurredAt: at, Finish: finish}
 }
-func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, outcome run.Outcome, workspaceReady bool) error {
+func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, plan run.CleanupPlan) error {
 	repo := f.Scope(s)
 	j := &journal.Journal{Repo: repo}
 	current, oldPlan, err := repo.State(ctx)
@@ -45,9 +45,11 @@ func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, outcome run.Outco
 	if run.Terminal(current.Status) {
 		return nil
 	}
-	plan := run.CleanupPlan{Outcome: outcome, At: time.Now().UTC().Truncate(time.Microsecond), WorkspaceReady: workspaceReady}
 	if oldPlan != nil {
 		plan = *oldPlan
+	}
+	if plan.At.IsZero() {
+		plan.At = time.Now().UTC().Truncate(time.Microsecond)
 	}
 	if current.CancelRequested {
 		plan.Outcome = run.Outcome{Status: "cancelled", Error: "run_cancelled"}
@@ -110,6 +112,7 @@ func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, outcome run.Outco
 	finish.OccurredAt = plan.At
 	finish.Actor.Kind = "system"
 	request := SaveForRun(s, plan.At, &finish)
+	request.MissingLocalFiles = plan.MissingLocalFiles
 	content := *f.Content
 	content.Repo = repo
 	if inline, ok := repo.(InlineContent); ok {
@@ -163,8 +166,9 @@ func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, outcome run.Outco
 	_, saveErr := AppendRun(ctx, j, s, failure, finish)
 	return saveErr
 }
-func (f *Finisher) Retry(ctx context.Context, actor string, s run.Snapshot, at time.Time, snapshots *SnapshotStore) (storage.Snapshot, error) {
-	request := SaveForRun(s, at, nil)
+func (f *Finisher) Retry(ctx context.Context, actor string, s run.Snapshot, plan run.CleanupPlan, snapshots *SnapshotStore) (storage.Snapshot, error) {
+	request := SaveForRun(s, plan.At, nil)
 	request.AppendKey = stableID(s.ID, "snapshot.retry")
+	request.MissingLocalFiles = plan.MissingLocalFiles
 	return snapshots.Save(ctx, actor, request)
 }

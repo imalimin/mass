@@ -2,21 +2,23 @@ package resource
 
 import (
 	"context"
-	"io"
+	"errors"
+	"io/fs"
 	"sync"
+	"syscall"
 
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
 )
 
-type SessionReader interface {
-	RuntimeSession(context.Context, string, string, string) (run.Session, error)
-}
 type workspaceExistence interface{ Exists(string, string) bool }
+type runBaseSnapshotReader interface {
+	RunBaseSnapshot(context.Context, run.Snapshot) (storage.Snapshot, error)
+}
 type RunWorkspaces struct {
 	Workspaces Workspaces
-	Repo       SessionReader
+	Repo       runBaseSnapshotReader
 	Content    *ContentStore
 	Journal    *journal.Journal
 	mu         sync.Mutex
@@ -48,73 +50,52 @@ func (w *RunWorkspaces) Mark(space, session string) {
 	}
 	w.ready[w.key(space, session)] = true
 }
-func (w *RunWorkspaces) Ensure(ctx context.Context, s run.Snapshot) error {
-	if w.Available(s.SpaceID, s.SessionID) {
-		return nil
-	}
-	session, err := w.Repo.RuntimeSession(ctx, s.ActorID, s.SpaceID, s.SessionID)
+func (w *RunWorkspaces) Ensure(ctx context.Context, s run.Snapshot) ([]string, error) {
+	ready := w.Available(s.SpaceID, s.SessionID)
+	snapshot, err := w.Repo.RunBaseSnapshot(ctx, s)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	manifest, err := readWorkspaceManifest(ctx, w.Content, s.ActorID, s.SpaceID, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	if ready && len(manifest.LocalFiles) == 0 {
+		return nil, nil
+	}
+	var missing []string
 	err = w.Workspaces.With(ctx, s.SpaceID, s.SessionID, func(dir WorkspaceDir) error {
-		if err := dir.Clear(); err != nil {
-			return err
+		if !ready {
+			if err := restoreWorkspace(ctx, w.Content, s.ActorID, s.SpaceID, dir, snapshot, manifest); err != nil {
+				return err
+			}
+			e := journal.New(s.ActorID, "workspace.restored", s.ID, journal.RestoreData{SnapshotID: snapshot.ID, Reason: "service_start_or_directory_missing"})
+			if _, err := AppendRun(ctx, w.Journal, s, e); err != nil {
+				return errors.Join(err, dir.Clear(ctx, manifest.LocalFiles))
+			}
 		}
-		manifest := storage.Manifest{FormatVersion: 1, Entries: []storage.Entry{}}
-		var reader io.Reader
-		var closers []io.Closer
-		defer func() {
-			for _, c := range closers {
-				c.Close()
-			}
-		}()
-		if session.LatestSnapshotID != "" {
-			// Snapshot metadata is already authorized by the owning session pointer.
-			repo, ok := w.Repo.(SnapshotRepository)
-			if !ok {
-				return storage.ErrWorkspace
-			}
-			snapshot, err := repo.Snapshot(ctx, s.ActorID, s.SpaceID, session.LatestSnapshotID)
-			if err != nil {
+		for _, name := range manifest.LocalFiles {
+			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err = ReadJSON(ctx, w.Content, s.ActorID, s.SpaceID, snapshot.ManifestRef, 4<<20, &manifest); err != nil {
+			info, err := dir.Root().Lstat(name)
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+				missing = append(missing, name)
+			} else if err != nil {
 				return err
+			} else if !info.Mode().IsRegular() {
+				missing = append(missing, name)
 			}
-			_, file, err := w.Content.Read(ctx, s.ActorID, s.SpaceID, snapshot.ObjectID)
-			if err != nil {
-				return err
-			}
-			closers = append(closers, file)
-			reader = file
-		} else {
-			archive, _, err := dir.Pack(ctx)
-			if err != nil {
-				return err
-			}
-			closers = append(closers, archive)
-			reader = archive
-		}
-		if err := dir.Restore(ctx, reader, manifest); err != nil {
-			return err
-		}
-		e := journal.New(s.ActorID, "workspace.restored", s.ID, journal.RestoreData{SnapshotID: session.LatestSnapshotID, Reason: "service_start_or_directory_missing"})
-		if _, err := AppendRun(ctx, w.Journal, s, e); err != nil {
-			dir.Clear()
-			return err
 		}
 		return nil
 	})
 	if err == nil {
 		w.Mark(s.SpaceID, s.SessionID)
 	}
-	return err
+	return missing, err
 }
 func (w *RunWorkspaces) RestoreIdle(ctx context.Context, actor, space, session string, snapshots *SnapshotStore) error {
 	w.Forget(space, session)
-	if err := w.Workspaces.With(ctx, space, session, func(dir WorkspaceDir) error { return dir.Clear() }); err != nil {
-		return err
-	}
 	if err := snapshots.Restore(ctx, actor, space, session); err != nil {
 		return err
 	}

@@ -17,7 +17,7 @@
 
 前端采用 React + TypeScript + Vite，源码和 package.json/package-lock.json 全部在 `frontend/`。构建生成 `frontend/dist`，构建脚本复制到后端嵌入目录，通过 Go embed 编入二进制。Node.js 仅用于构建、测试或文件构建监听；默认开发流程也由 Go 统一提供页面，不要求另开 Vite HTTP 服务。
 
-版本资源、附件、产物及完整 Trace 原始载荷持久保存到 TOS，元数据及状态进入 MariaDB。每个 Session 在服务宿主机拥有真实临时工作目录，跨 Run 连续使用；每个已执行 Run 结束时打包上传 TOS，并将不可变快照 URI、摘要和来源入库。临时目录不是持久化权威来源，缺失或重启时从已提交快照恢复；无快照的新会话创建空目录。详见 T11。
+版本资源、附件、产物及完整 Trace 原始载荷持久保存到 TOS，元数据及状态进入 MariaDB。每个 Session 在服务宿主机拥有真实临时工作目录，跨 Run 连续使用；每个已执行 Run 结束时将符合单文件大小阈值的文件打包上传 TOS，并将不可变快照 URI、摘要和来源入库。超过阈值的文件留在宿主，快照只记录其相对路径。工作区缺失或进程重启时从已提交快照恢复归档文件。详见 T11。
 
 MVP 不增加 Redis、独立消息队列、向量数据库或独立认证服务。Eino 以 Go 库方式嵌入 MASS，并不等同于具体模型供应商或模型托管服务。
 
@@ -134,7 +134,7 @@ secrets:
   master_key_env: "MASS_MASTER_KEY"
 runtime:
   max_concurrent_runs: 4 # 示例值，部署时配置
-  workspace_temp_root: "/tmp/mass-workspaces" # 服务专用临时根；不是持久存储
+  workspace_temp_root: "/tmp/mass-workspaces" # 会话工作区根。如需跨宿主重启保留本地大文件，使用同一个持久卷。
   snapshot_timeout: "60s" # 收尾上限；不是数据保留期限
 tools:
   code:
@@ -323,7 +323,7 @@ Run 固定模型 ID 和非秘密执行参数。每次实际调用重新检查当
 
 终态为 succeeded/failed/cancelled；queued/running 属于活跃状态。run.cancel.requested 表示收到取消，不代表停止；queued 可在同事务追加 run.finished 并释放占用，running 等实际停止后终结。
 
-对于实际开始执行的 Run，Supervisor 等待执行停止后保存完整工作目录快照（包括失败/取消后的已发生变更），再将 workspace.snapshot.created、快照 URI/索引、Session 最新快照指针、run.finished、最终回复引用、usage、状态及占用删除同事务提交。上传与 SQL 不构成共同事务；快照失败处理见 T11.4，不能返回成功。排队取消且未使用目录的 Run 不产生新快照。最终回复引用 model.response.completed，不另造一份同内容原始消息。部分输出保留在日志，但不作为成功回复。失败运行的历史参与规则见 T07；取消或失败不能抹去已确认副作用。
+对于实际开始执行的 Run，Supervisor 等待执行停止后保存工作目录快照（包括失败/取消后的已发生变更），再将 workspace.snapshot.created、快照 URI/索引、Session 最新快照指针、run.finished、最终回复引用、usage、状态及占用删除同事务提交。上传与 SQL 不构成共同事务；快照失败处理见 T11.4，不能返回成功。排队取消且未使用目录的 Run 不产生新快照。最终回复引用 model.response.completed，不另造一份同内容原始消息。部分输出保留在日志，但不作为成功回复。失败运行的历史参与规则见 T07；取消或失败不能抹去已确认副作用。
 
 同一 Session 的下一 Run 复用当前目录；目录丢失或服务重启时恢复 latest_workspace_snapshot_id。新 Session 可传 source_workspace_snapshot_id，服务仅解析当前主体可访问的同空间快照，记录来源后恢复到独立目录；不接受任意 URI，不复制旧会话对话，也不改变新会话选择的 Agent 定义。恢复事实追加 workspace.restored，快照错误时拒绝开始执行，不把恢复失败当空目录。
 
@@ -366,7 +366,7 @@ COMMIT;
 
 Run context 派生自服务执行生命周期，不使用提交请求的 context。取消先写 MariaDB，再通知执行器；queued 取消与占用释放同事务，running 直到实际停止才释放占用。断开浏览器不会自动取消。
 
-确认旧进程退出后，重启将遗留 running 标记为 interrupted 失败，保存未完成调用并释放占用；queued 继续调度。会话文件从 MariaDB 指向的最近已提交 TOS 快照恢复到新临时目录，不信任遗留脏目录，也不自动重做未知副作用。中断 Run 尚未保存的文件修改可能丢失，恢复结果明确注明快照来源与中断原因；无已提交快照只可恢复创建时的空目录或指定起始快照。
+确认旧进程退出后，重启将遗留 running 标记为 interrupted 失败，保存未完成调用并释放占用；queued 继续调度。归档文件从最近已提交的 TOS 快照恢复，现有宿主本地文件保留。未知副作用不会自动重做。中断 Run 尚未保存的文件修改可能丢失，恢复结果明确注明快照来源与中断原因；无已提交快照只可恢复创建时的空目录或指定起始快照。
 
 停机先停止接单和认领，有界等待或取消已有执行，刷写 Trace；无法停止的工具由进程退出终止，重启时标记中断，而不是提前报告成功取消。
 
@@ -873,7 +873,7 @@ Python 和 Go 的实例没有宿主文件系统、环境变量和原生网络权
 
 `update_plan` 操作当前 Run 的计划，初始 expected_revision=0。每次提交完整有界步骤清单，步骤 ID 唯一、最多一个 in_progress；既有 ID 保持语义，调整清单记录新 revision。标题和状态是任务数据，不能变成系统指令。Journal 同事务追加 plan.updated 与 tool.execution.completed、更新 run_plans；工具结果返回完整新计划，前端可以独立展示。计划不触发新 Run、不自动派发工具，也不以步骤全部 completed 代替 Run 成功；它是 Agent 报告的进度，不是独立验收结论。
 
-`publish_artifact` 在会话目录锁内校验 expected_sha256，复制当前文件为不可变内容并上传 TOS；确认 ready 后，在同一事务追加 artifact.published 与 tool.execution.completed、建立 artifact 记录和保留引用。产物保存 object_id/hash、来源 Session/path/sha256、名称与媒体类型；不只保存可变路径或临时 URL。返回本服务 `/api/v1/spaces/{space_id}/artifacts/{id}/download`，下载仍检查当前成员权限；媒体类型验证并按附件下载，不把生成内容作为服务页面执行。源文件后续修改、移动、删除不改变已交付内容。重复 operation 返回同一产物，不重复登记；新的显式发布可以产生新的产物版本。
+`publish_artifact` 在会话目录锁内流式暂存文件并计算 SHA-256，与 expected_sha256 一致后上传为不可变内容。发布大小由上游业务控制。确认 ready 后，在同一事务追加 artifact.published 与 tool.execution.completed、建立 artifact 记录和保留引用。产物保存 object_id/hash、来源 Session/path/sha256、名称与媒体类型；不只保存可变路径或临时 URL。返回本服务 `/api/v1/spaces/{space_id}/artifacts/{id}/download`，下载仍检查当前成员权限；媒体类型验证并按附件下载，不把生成内容作为服务页面执行。源文件后续修改、移动、删除不改变已交付内容。重复 operation 返回同一产物，不重复登记；新的显式发布可以产生新的产物版本。
 
 计划和产物专用事件服务于审计及界面视图，不重复加入 LLM 对话；模型读取对应 tool 结果一次。摘要保留任务所需的计划状态、产物 ID 和来源，仍只基于固定日志边界，不从 run_plans/artifacts 当前视图反向组装上下文。
 
@@ -881,7 +881,7 @@ Python 和 Go 的实例没有宿主文件系统、环境变量和原生网络权
 
 D05 延续三个 v1 工具的兼容参数，新增 range、分页及其余十一种 v1 工具；Run 中已保存的 Schema/描述保持固定。结果 Schema 与实现/策略版本一起写入新 Run；旧 Run 缺少新增字段仍能查询和恢复。新增迁移 00006_tools，既有迁移不改写。
 
-文件读取完整校验摘要并保存不可变来源，返回上限 64 KiB 的 UTF-8 或 base64 范围；JSON/CSV 附件先在 8 MiB 内完整验证，再通过 record_offset/record_limit 续读结构化记录；text 的 range 保持字节/行语义，二者不混用。列表/搜索首次有界扫描后保存 tool.query 对象，游标签名绑定主体、空间、Session、查询与位置，后续页读取同一对象；扫描上限显式给出 complete=false。查询至多扫描 min(storage.max_entries, 10000) 个条目和 8 MiB 文件，保存至多 1000 项；正则至多 512 字节，行至多 64 KiB、片段至多 1024 字节，每页 1—100 项，完整查询对象至多 4 MiB。文件工具写入上限延续 1 MiB，目录采用已有 storage 限额；编辑以原始文本唯一、不重叠区间为准。
+文件读取完整校验摘要并保存不可变来源，返回上限 64 KiB 的 UTF-8 或 base64 范围；JSON/CSV 附件先在 8 MiB 内完整验证，再通过 record_offset/record_limit 续读结构化记录；text 的 range 保持字节/行语义，二者不混用。列表/搜索首次有界扫描后保存 tool.query 对象，游标签名绑定主体、空间、Session、查询与位置，后续页读取同一对象；扫描上限显式给出 complete=false。查询至多扫描 10000 个条目和 8 MiB 文件，保存至多 1000 项；正则至多 512 字节，行至多 64 KiB、片段至多 1024 字节，每页 1—100 项，完整查询对象至多 4 MiB。文件工具每次写入上限为 1 MiB，工作区总量按可入包文件计算；编辑以原始文本唯一、不重叠区间为准。
 
 skill_binding_id 使用固定绑定的 SkillVersion ID，资源从该不可变版本清单解析；Run 事件不重复内联完整资源清单，读取时依据 session.created 的准确版本引用和摘要取得，避免大清单突破事件容量。附件上传先保存本 Session 元数据，再由 user.message.accepted 的准确清单与对象引用接受；上传成功本身不授予模型读取权。附件被接受后，原始字节可从历史消息下载，工具仅支持 UTF-8 text/JSON/CSV，并记录解析版本。
 
@@ -1135,7 +1135,7 @@ UI 在读取时根据业务记录重新投影。Schema 14 删除通用会话事�
 | --- | --- |
 | AGENTS.md、SKILL.md、模板、版本 assets | 不可变 TOS 对象 + MariaDB 发布版本清单 |
 | 用户附件、工具产物 | TOS 对象 + 授权元数据 |
-| 会话工作目录 | 本地临时目录连续使用；每个 Run 收尾生成 TOS 全量 tar.gz 快照，MariaDB 保存 URI/摘要/清单引用及来源 |
+| 会话工作目录 | 本地临时目录连续使用；每个 Run 收尾为符合阈值的文件生成 TOS tar.gz 快照，MariaDB 保存 URI/摘要/清单引用及来源 |
 | 结构化模型回复、工具完整大结果 | TOS 对象 + Trace 引用 |
 | 运行、会话、空间和权限 | MariaDB；不依赖本地文件 |
 | 用户原文、摘要、投影消息/Manifest、结构化模型响应 | TOS 不可变对象 + 事件/投影引用 |
@@ -1176,18 +1176,18 @@ GetObjectV2 成功后必须关闭返回结果的 Content（io.ReadCloser），�
 
 resource 管理 SessionWorkspace 与 SnapshotStore，adapter/workspace 用 os/path/filepath、archive/tar、compress/gzip 实现本地操作；adapter/tos 负责对象上传。临时根通过统一配置指定，Session 目录路径由服务生成，不接受模型/用户指定宿主根。工作目录在 Session 存续期间跨 Run 复用，不在每轮结束后删除重建。
 
-最小元数据约定：workspace_snapshots 保存 id、space_id、session_id、source_run_id、base_snapshot_id、object_id、tos_uri、archive_sha256、manifest_ref、format_version、created_at；URI 使用稳定 `tos://bucket/key`，不保存临时签名下载 URL。Manifest 包含规范相对路径、类型（文件/目录）、文件大小及 SHA-256，保存空目录，不保存可执行权限或链接。sessions.latest_workspace_snapshot_id 指向最后确认快照；初始来源快照也通过 session.created 固定记录，Session 字段为派生指针。Run 记录开始时的 base 和结束时的 workspace_snapshot_id。
+workspace_snapshots 保存 id、space_id、session_id、source_run_id、base_snapshot_id、object_id、tos_uri、archive_sha256、manifest_ref、format_version、created_at；URI 使用稳定 `tos://bucket/key`，不保存临时签名下载 URL。Manifest 保存归档条目的规范相对路径、类型、文件大小及 SHA-256，以及宿主本地文件的相对路径。目录条目包含空目录。sessions.latest_workspace_snapshot_id 指向最后确认快照；初始来源快照也通过 session.created 固定记录，Session 字段为派生指针。Run 记录开始时的 base 和结束时的 workspace_snapshot_id。
 
-快照提交按以下顺序执行，MVP 只做全量归档，不引入 Git、增量快照或跨快照去重服务：
+每个快照独立归档符合阈值的所有文件，并按以下顺序提交。
 
-1. Supervisor 等待所有执行/I/O 退出，仍持有会话占用，锁定目录，生成 Manifest 和 tar.gz；检查文件数、单文件/目录总字节和收尾超时。
+1. Supervisor 等待所有执行/I/O 退出，仍持有会话占用，锁定目录，生成 Manifest 和 tar.gz；超过单文件阈值的文件留在宿主。检查入包文件未压缩总字节数与收尾超时。
 2. 分配唯一对象 ID，记录上传意图；上传 TOS 不覆盖旧 key。确认内容可读、大小及摘要后标 ready；不在 SQL 事务中等待上传。
 3. 一个 Journal 事务追加 workspace.snapshot.created，写入快照 URI/索引、最新指针和 run.finished/usage，释放占用。终态返回快照 ID；只有此步成功才代表目录持久化完成。
 4. SQL 提交结果未知时先按稳定快照 ID/append_key 核实，不能再次执行 Agent；上传成功而无引用的对象不可见，首版不自动回收。
 
-publish_artifact 和 Trace 原文仍在调用期间单独上传，不等待目录收尾；每次已读内容已保存到日志引用的不可变对象。快照正文不用于模型消息拼装；发生回退时仅按 T07 投影 workspace.restored 的状态说明。ContextProjector 不扫描当前工作目录，即使文件被修改也能重建先前 input。
+publish_artifact 和 Trace 原文仍在调用期间单独上传，不等待目录收尾；每次已读内容已保存到日志引用的不可变对象。每个 Run 开始时检查基准快照记录的宿主本地文件。缺失路径进入本轮模型输入和上下文投影，并随下一份快照保留。回放使用投影保存的结果。异常回退仍按 T07 投影 workspace.restored 的状态说明。
 
-恢复先鉴权解析快照 ID、检查 TOS 对象和摘要，解压到新建空临时目录；验证全部清单后才绑定 Session 并追加 workspace.restored。逐条拒绝绝对路径、..、重复路径、链接、设备文件及越界项，限制解压大小、文件数和时长，禁止归档覆盖目录外文件；失败删除未绑定的临时副本，不提供部分恢复目录。原 Session 恢复最新快照；新 Session 可显式选择同空间可访问快照并独立复制，不自动继承原对话或执行状态。
+恢复先鉴权解析快照 ID、检查 TOS 对象和摘要，解压到新建空临时目录；验证全部清单后，在会话锁内应用归档内容并追加 workspace.restored。宿主本地文件原地保留，路径冲突时恢复失败。逐条拒绝绝对路径、..、重复路径、链接、设备文件及越界项，并限制解压大小和时长。原 Session 恢复最新快照；新 Session 可显式选择同空间可访问快照并独立复制，不自动继承原对话或执行状态。
 
 ### T11.4 失败、保留与恢复边界
 
@@ -1195,11 +1195,11 @@ publish_artifact 和 Trace 原文仍在调用期间单独上传，不等待目�
 
 实际执行停止且失败终态事务成功后可释放占用，但 workspace_error 未消除前拒绝新 Run。临时目录仍在时，授权成员可通过 `POST /sessions/{id}/workspace-snapshots/retry` 重试打包上传：占用同一会话锁，只保存当前目录及快照事实、清除错误，不重跑代码、不改写旧 Run 终态；追加事件绑定 source_run_id，终态后的事件仅供 Trace/快照查询，不再续写已关闭的 AG-UI 流。若提交结果未知，先核实原快照 ID，不能并发再保存。数据库无法保存终态时沿用 Supervisor 的故障处理，不能假报结束。
 
-临时目录丢失或进程重启后，只恢复最近已提交快照，明确展示来源及中断/未保存变更可能丢失；恢复成功后清除 workspace_error，不尝试重放工具。没有 Run 完成快照时，恢复 session.created 固定的初始来源快照；初始来源也为空才恢复空目录。workspace.restored 记录实际 snapshot_id、恢复原因和涉及的未完成/未保存 Run，异常回退同时向界面及后续模型投影说明状态（T07）。TOS 不可用或摘要不符时停止恢复并报错，不能静默降级为空目录。系统收尾权限仅能写已发生事实及已有目录快照，不能继续模型/工具执行或向失权用户提供下载。
+临时目录丢失或进程重启后，从最近已提交快照恢复归档文件，明确展示来源及中断/未保存变更可能丢失；恢复成功后清除 workspace_error，不尝试重放工具。没有 Run 完成快照时，恢复 session.created 固定的初始来源快照；初始来源也为空时从空快照开始，本地大文件仍保留。workspace.restored 记录实际 snapshot_id、恢复原因和涉及的未完成/未保存 Run，异常回退同时向界面及后续模型投影说明状态（T07）。TOS 不可用或摘要不符时停止恢复并报错，不能静默降级为空目录。系统收尾权限仅能写已发生事实及已有目录快照，不能继续模型/工具执行或向失权用户提供下载。
 
-版本、日志、投影、AG-UI 历史、目录快照和产物持续保留；不增加数据 TTL、过期标记、保留时长配置、自动 GC 或生产对象生命周期删除策略。临时归档/失败解压副本随操作结束清理，已完整保存且无活跃任务的会话目录可在服务退出时清理，这是临时资源释放，不删除远端历史。认证会话有效期和供应商自身缓存有效期是既有协议约束，不属于业务历史过期方案；MVP 不因此增加后台清理系统。
+版本、日志、投影、AG-UI 历史、目录快照和产物持续保留；不增加数据 TTL、过期标记、保留时长配置、自动 GC 或生产对象生命周期删除策略。临时归档/失败解压副本随操作结束清理，宿主本地文件随工作区目录保留。需要跨宿主重启保留时，应使用宿主持久卷。认证会话有效期和供应商自身缓存有效期是既有协议约束，不属于业务历史过期方案；MVP 不因此增加后台清理系统。
 
-读取私有 Bucket 由 Go 服务鉴权代理，浏览器不获得存储凭证；恢复需要 MariaDB 备份、完整 TOS 对象和解密材料。删除原主机临时目录后仍可读取版本、Trace、产物并恢复最后确认的会话文件；不承诺恢复未保存的进程内状态。
+读取私有 Bucket 由 Go 服务鉴权代理，浏览器不获得存储凭证；恢复需要 MariaDB 备份、完整 TOS 对象和解密材料。删除原主机临时目录后仍可读取版本、Trace、产物并恢复最后确认的归档文件；不承诺恢复未保存的进程内状态。
 
 ### T11.5 D01 已实现的对象与目录边界
 
@@ -1207,15 +1207,15 @@ ContentStore 将输入流写到权限受限的临时文件，边写边计数和�
 
 生产只使用 TOS 适配器；tests/fakes 是测试专用内存替身。对象元数据、事件引用和快照均使用带 space_id 的联合外键。下载必须同时满足当前授权、ready 和已提交的业务记录引用；未引用的成功上传不会因猜到 UUID 而可见。主数据没有自动 TTL、删除或 GC。新增 ready 探针使用 MariaDB schema 校验和 TOS HeadBucket，单次最多 3 秒、缓存 5 秒；HeadBucket 证明连接/桶级授权，对象读写/不可变性必须由独立真实 smoke 验收，不夸大探针结果。
 
-storage 配置是向后兼容的可选段：max_object_bytes 默认 256 MiB（配置上限 1 GiB）、max_file_bytes 32 MiB、max_workspace_bytes 128 MiB、max_entries 10000；文件/目录上限不超过对象上限，Manifest 上限 4 MiB。SnapshotStore 使用已有 runtime.snapshot_timeout；临时根沿用 workspace_temp_root。生成的 Session 目录名只含经过规范 UUID 校验的 space/session ID，使用 os.Root 与可取消的 Session 目录锁。快照要求调用者先停止所有工作目录写入；D04 Supervisor 统一持有占用并使用相同目录入口。
+`storage.max_object_bytes` 默认 2 MiB，单位为字节，文件大小严格超过阈值时留在宿主。`storage.max_workspace_bytes` 默认 128 MiB，限制归档文件未压缩大小之和。快照压缩包与主动发布的产物可超过内容存储的通用 256 MiB 上限。Manifest 上限为 4 MiB。SnapshotStore 使用已有 runtime.snapshot_timeout；临时根沿用 workspace_temp_root。生成的 Session 目录名只含经过规范 UUID 校验的 space/session ID，使用 os.Root 与可取消的 Session 目录锁。快照要求调用者先停止所有工作目录写入；D04 Supervisor 统一持有占用并使用相同目录入口。
 
-全量 tar.gz 的 Manifest 包含文件/空目录、规范相对路径、大小和 SHA-256；不保留执行权限、软/硬链接或设备项。恢复先验证格式、数量、总解压量、单文件容量、父目录清单、重复路径和大小写冲突，再解压到未绑定的临时目录；逐文件核验摘要并读完 gzip 校验尾部，全部成功才替换空目标目录。已有非空目录不自动覆盖；恢复失败删除 staging，恢复日志提交失败清理本次新副本。路径与文件接口是应用隔离，不声称对宿主所有者提供 OS 沙箱。
+恢复先验证格式、总解压量、父目录清单、重复路径及大小写冲突，再解压到暂存目录。逐文件核验摘要并读完 gzip 校验尾部后才替换工作区中的归档内容。恢复日志提交失败时清理本次恢复的归档内容，保留宿主本地文件。路径与文件接口是应用隔离，不声称对宿主所有者提供 OS 沙箱。
 
 SnapshotStore.Save 接收稳定的快照/归档/Manifest/事件 ID、append_key 和发生时间，可将 run.finished 一同提交。未知提交先按已提交事件核实，成功重试返回原快照，不重新打包已变化的目录；若无提交则用原对象 ID 核实内容。SnapshotBase 防止旧 Run 的重试覆盖较新 Run 或其他活跃占用。Restore 只读取目标 Session 的已提交最新指针，初始 source_snapshot_id 由 session.created 固定；跨 Session 只复制文件，不复制源日志。D04 已补齐终结失败记录、系统收尾权限与后台恢复协调，见 T05.1/T11.6。
 
 ### T11.6 D04 文件工具与快照操作
 
-resource.FileService 通过 Session 目录锁和 os.Root 提供 read_file/write_file/publish_artifact 三个 v1 工具。路径必须是合法相对路径，拒绝软链接及非普通文件；本阶段单文件至多 1 MiB UTF-8，写前检查目录总字节/条目上限。写操作要求 missing 或当前 SHA-256，使用同目录临时文件、Sync/rename 后记录实际效果。publish_artifact 校验摘要，将准确字节保存为独立不可变对象，产物登记与工具结果同事务提交；下载验证完整字节后以 attachment 提供并持续复核权限。未实现工具在提交阶段拒绝。
+resource.FileService 通过 Session 目录锁和 os.Root 提供 read_file/write_file/publish_artifact 三个 v1 工具。路径必须是合法相对路径，拒绝软链接及非普通文件；write_file 每次接受至多 1 MiB UTF-8，写前检查入包文件的预计总字节数。写操作要求 missing 或当前 SHA-256，使用同目录临时文件、Sync/rename 后记录实际效果。publish_artifact 校验摘要，将准确字节保存为独立不可变对象，产物登记与工具结果同事务提交；下载验证完整字节后以 attachment 提供并持续复核权限。未实现工具在提交阶段拒绝。
 
 下一轮优先复用当前完整目录，目录丢失或服务重启则从提交快照恢复。恢复失败不能以空目录继续。快照失败状态阻止新 Run，`POST /sessions/{id}/workspace-snapshots/retry` 只重试保存，不改旧 Run 终态、不重跑动作；`POST /sessions/{id}/workspace/restore` 显式丢弃未保存目录后恢复已提交状态。两者都要求无活跃 Run，数据库维护锁防止与新提交竞态；新 Session 的 source_snapshot_id 仅复制文件到独立目录。
 
@@ -1401,7 +1401,7 @@ mass/
     └── engineering.md
 ```
 
-不建立持久化的 `data/blobs` 或前端独立服务配置；允许通过 workspace_temp_root 创建会话临时工作目录。持久资源仍只使用 MariaDB/TOS，本地目录可由快照重建。
+不建立持久化的 `data/blobs` 或前端独立服务配置；允许通过 workspace_temp_root 创建会话临时工作目录。归档文件可由 MariaDB/TOS 的快照重建。宿主本地文件的内容由工作区所在的存储卷保留。
 
 D00 已固定工具链、MariaDB 目标版本、Go/前端依赖和首个 Ark 组件。D01/D04 已接入实际 TOS/模型、部署批准端点、保守计数器和快照容量上限；精确 tokenizer、模型缓存及完整工具策略待后续阶段收敛。已指定的单服务、MariaDB、TOS、Eino、frontend、简单登录及 AG-UI over SSE 不再作为待选方案。AG-UI Go/TS SDK 精确版本与兼容子集见 api/events/agui-profile.json；验证证据见工程开发文档。
 

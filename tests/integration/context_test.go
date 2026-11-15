@@ -104,7 +104,7 @@ func TestContextStages(t *testing.T) {
 		}
 		return []*schema.Message{{Role: schema.Assistant, Content: text, ResponseMeta: &schema.ResponseMeta{FinishReason: "stop", Usage: &schema.TokenUsage{PromptTokens: 100, CompletionTokens: 20}}}}, nil
 	}}
-	limits := storage.Limits{MaxFileBytes: 1 << 20, MaxTotalBytes: 8 << 20, MaxEntries: 1000}
+	limits := storage.Limits{MaxArchiveFileBytes: 1 << 20, MaxTotalBytes: 8 << 20}
 	manager, err := workspace.New(t.TempDir(), limits)
 	if err != nil {
 		t.Fatal(err)
@@ -115,9 +115,9 @@ func TestContextStages(t *testing.T) {
 	cfg := bootstrap.Config{}
 	cfg.Runtime.MaxConcurrentRuns = 1
 	cfg.Runtime.SnapshotTimeout = 10 * time.Second
-	cfg.Storage.MaxFileBytes = limits.MaxFileBytes
+	cfg.Storage.MaxObjectBytes = limits.MaxArchiveFileBytes
 	cfg.Storage.MaxWorkspaceBytes = limits.MaxTotalBytes
-	cfg.Storage.MaxEntries = limits.MaxEntries
+
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	runtime, lifecycle, err := bootstrap.StartRuntime(ctx, cfg, db.Store, auth, catalogue, content, manager, snapshots, "test", logger, &einoadapter.ModelTransport{Fake: fake})
 	if err != nil {

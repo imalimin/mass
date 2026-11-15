@@ -474,7 +474,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if err != nil {
 			return err
 		}
-		snapshot, err := runtime.Finisher.Retry(r.Context(), u.ID, last.Snapshot, plan.At, runtime.Snapshots)
+		snapshot, err := runtime.Finisher.Retry(r.Context(), u.ID, last.Snapshot, plan, runtime.Snapshots)
 		if err != nil {
 			return err
 		}

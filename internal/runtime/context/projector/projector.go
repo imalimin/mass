@@ -20,13 +20,15 @@ const Policy = "stage-summary-v1"
 const ExcerptBytes = 4096
 
 type Projector struct {
-	Content    *resource.ContentStore
-	Cache      Cache
-	ToolResult func(runID, callID string) json.RawMessage
+	Content           *resource.ContentStore
+	Cache             Cache
+	ToolResult        func(runID, callID string) json.RawMessage
+	MissingLocalFiles []string
 }
 
 func (p *Projector) Project(ctx context.Context, s run.Snapshot, events []journal.Event, through int64, tools []run.ToolSpec, ranges ...[]run.ContextRange) (run.Prepared, error) {
 	spec := run.ProjectionSpec{Purpose: "task", Through: through, Counter: Counter, Renderer: Renderer, Parser: 1, Policy: Policy, Epoch: 1, PrefixChangeReason: "initial"}
+	spec.MissingLocalFiles = p.MissingLocalFiles
 	if len(ranges) > 0 {
 		spec.AuditRanges = ranges[0]
 	} else {
@@ -251,7 +253,17 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 				list, _ := json.Marshal(d.Attachments)
 				text += "\n[MASS accepted attachments; use read_attachment by ID: " + string(list) + "]"
 			}
-			add([]run.Message{{Role: "user", Content: text}}, []journal.Event{e}, "accepted_user")
+			messages := []run.Message{}
+			if e.EventID == s.UserEventID && len(spec.MissingLocalFiles) > 0 {
+				list, _ := json.Marshal(spec.MissingLocalFiles)
+				paths := string(list)
+				if len(paths) > ExcerptBytes {
+					paths = prefix(paths, ExcerptBytes) + "…"
+				}
+				notice := fmt.Sprintf("[MASS workspace: %d host-local file(s) unavailable. Relative paths: %s]", len(spec.MissingLocalFiles), paths)
+				messages = append(messages, run.Message{Role: "user", Content: notice})
+			}
+			add(append(messages, run.Message{Role: "user", Content: text}), []journal.Event{e}, "accepted_user")
 		case "model.response.completed":
 			var d journal.ResponseData
 			journal.Decode(e.Data, &d)

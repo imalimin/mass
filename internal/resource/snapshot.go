@@ -18,9 +18,9 @@ import (
 
 type WorkspaceDir interface {
 	Root() *os.Root
-	Pack(context.Context) (io.ReadCloser, storage.Manifest, error)
+	Pack(context.Context, []string) (io.ReadCloser, storage.Manifest, error)
 	Restore(context.Context, io.Reader, storage.Manifest) error
-	Clear() error
+	Clear(context.Context, []string) error
 }
 type Workspaces interface {
 	With(context.Context, string, string, func(WorkspaceDir) error) error
@@ -45,7 +45,10 @@ type SaveRequest struct {
 	SpaceID, SessionID, RunID, SnapshotID, ArchiveID, ManifestID, EventID, AppendKey string
 	OccurredAt                                                                       time.Time
 	Finish                                                                           *journal.Proposed
+	MissingLocalFiles                                                                []string
 }
+
+const maxWorkspaceManifestBytes = 4 << 20
 
 func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (v storage.Snapshot, err error) {
 	if !storage.ValidShortID(r.SpaceID) || !storage.ValidShortID(r.SessionID) {
@@ -80,7 +83,7 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 		if e != nil {
 			return e
 		}
-		archive, manifest, e := dir.Pack(ctx)
+		archive, manifest, e := dir.Pack(ctx, r.MissingLocalFiles)
 		if e != nil {
 			return e
 		}
@@ -114,6 +117,13 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 				manifest.State, _ = json.Marshal(map[string]any{"run_id": r.RunID, "through_sequence": through, "plan": plan, "artifacts": artifacts})
 			}
 		}
+		raw, e := json.Marshal(manifest)
+		if e != nil {
+			return e
+		}
+		if len(raw) > maxWorkspaceManifestBytes {
+			return storage.ErrWorkspace
+		}
 		var a storage.Object
 		if s.Content.Inline != nil {
 			key := path.Join(s.Content.Prefix, r.SpaceID, "sessions", r.SessionID, "workspace", r.SnapshotID+".tar.gz")
@@ -123,13 +133,6 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 		}
 		if e != nil {
 			return e
-		}
-		raw, e := json.Marshal(manifest)
-		if e != nil {
-			return e
-		}
-		if len(raw) > 4<<20 {
-			return storage.ErrWorkspace
 		}
 		m, e := s.Content.Put(ctx, actor, r.SpaceID, r.ManifestID, "workspace.manifest", "application/json", bytes.NewReader(raw))
 		if e != nil {
@@ -181,56 +184,54 @@ func (s *SnapshotStore) Restore(ctx context.Context, actor, space, session strin
 		if err != nil {
 			return err
 		}
-		manifest := storage.Manifest{FormatVersion: 1, Entries: []storage.Entry{}}
-		var reader io.Reader = bytes.NewReader(nil)
+		var snapshot storage.Snapshot
 		if id != "" {
-			v, err := s.Repo.Snapshot(ctx, actor, space, id)
+			snapshot, err = s.Repo.Snapshot(ctx, actor, space, id)
 			if err != nil {
 				return err
 			}
-			_, mf, err := s.Content.Read(ctx, actor, space, v.ManifestRef)
-			if err != nil {
-				return err
-			}
-			defer mf.Close()
-			// Manifest has its own bounded parse, independent of the archive size limit.
-			raw, err := io.ReadAll(io.LimitReader(mf, 4<<20+1))
-			if err != nil || len(raw) > 4<<20 {
-				return storage.ErrIntegrity
-			}
-			if err = journal.Decode(raw, &manifest); err != nil {
-				return err
-			}
-			object, f, err := s.Content.Read(ctx, actor, space, v.ObjectID)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-			if object.SHA256 != v.SHA256 {
-				return storage.ErrIntegrity
-			}
-			reader = f
 		}
-		if id == "" { // Pack an empty directory through the same archive contract.
-			f, m, err := dir.Pack(ctx)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-			if len(m.Entries) > 0 {
-				return storage.ErrWorkspace
-			}
-			reader = f
+		manifest, err := readWorkspaceManifest(ctx, s.Content, actor, space, snapshot)
+		if err != nil {
+			return err
 		}
-		if err = dir.Restore(ctx, reader, manifest); err != nil {
+		if err = restoreWorkspace(ctx, s.Content, actor, space, dir, snapshot, manifest); err != nil {
 			return err
 		}
 		raw, _ := json.Marshal(journal.RestoreData{SnapshotID: id, Reason: "explicit_restore"})
 		eventID := uuid.NewString()
 		_, err = s.Journal.Append(ctx, actor, journal.Request{SpaceID: space, SessionID: session, AppendKey: eventID, Events: []journal.Proposed{{EventID: eventID, Type: "workspace.restored", SchemaVersion: 1, Actor: journal.Actor{Kind: "user", ID: actor}, OccurredAt: time.Now(), Data: raw}}})
 		if err != nil {
-			return errors.Join(err, dir.Clear())
+			return errors.Join(err, dir.Clear(ctx, manifest.LocalFiles))
 		}
 		return nil
 	})
+}
+
+func readWorkspaceManifest(ctx context.Context, content *ContentStore, actor, space string, snapshot storage.Snapshot) (storage.Manifest, error) {
+	if snapshot.ID == "" {
+		return storage.Manifest{FormatVersion: 1}, nil
+	}
+	raw, err := ReadBytes(ctx, content, actor, space, snapshot.ManifestRef, maxWorkspaceManifestBytes)
+	if err != nil {
+		return storage.Manifest{}, err
+	}
+	var manifest storage.Manifest
+	err = journal.Decode(raw, &manifest)
+	return manifest, err
+}
+
+func restoreWorkspace(ctx context.Context, content *ContentStore, actor, space string, dir WorkspaceDir, snapshot storage.Snapshot, manifest storage.Manifest) error {
+	if snapshot.ID == "" {
+		return dir.Restore(ctx, nil, manifest)
+	}
+	object, archive, err := content.Read(ctx, actor, space, snapshot.ObjectID)
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	if object.SHA256 != snapshot.SHA256 {
+		return storage.ErrIntegrity
+	}
+	return dir.Restore(ctx, archive, manifest)
 }

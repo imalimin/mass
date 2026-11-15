@@ -244,7 +244,7 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		t.Fatal("upgrade changed published definition", e)
 	}
 	root := t.TempDir()
-	limits := storage.Limits{MaxFileBytes: 1 << 20, MaxTotalBytes: 8 << 20, MaxEntries: 1000}
+	limits := storage.Limits{MaxArchiveFileBytes: 1 << 20, MaxTotalBytes: 8 << 20}
 	manager, err := workspace.New(root, limits)
 	if err != nil {
 		t.Fatal(err)
@@ -255,9 +255,9 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 	c := bootstrap.Config{}
 	c.Runtime.MaxConcurrentRuns = 2
 	c.Runtime.SnapshotTimeout = 30 * time.Second
-	c.Storage.MaxFileBytes = 1 << 20
+	c.Storage.MaxObjectBytes = 1 << 20
 	c.Storage.MaxWorkspaceBytes = limits.MaxTotalBytes
-	c.Storage.MaxEntries = limits.MaxEntries
+
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	runtime, lifecycle, err := bootstrap.StartRuntime(ctx, c, db.Store, auth, catalogue, content, manager, snapshots, "test-build", logger, transportModel)
 	if err != nil {
@@ -637,7 +637,7 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		if e != nil {
 			t.Fatal(e)
 		}
-		snapshot, e := runtime.Finisher.Retry(ctx, actor.ID, failed.Snapshot, plan.At, snapshots)
+		snapshot, e := runtime.Finisher.Retry(ctx, actor.ID, failed.Snapshot, plan, snapshots)
 		if e != nil || snapshot.ID == "" {
 			t.Fatal("snapshot-only retry", e)
 		}
@@ -748,7 +748,7 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		if _, e = db.Admin.DB.Exec("DROP TRIGGER reject_finish"); e != nil {
 			t.Fatal(e)
 		}
-		if e = runtime.Finisher.Finish(ctx, stuck.Snapshot, run.Outcome{Status: "failed", Error: "interrupted"}, true); e != nil {
+		if e = runtime.Finisher.Finish(ctx, stuck.Snapshot, run.CleanupPlan{Outcome: run.Outcome{Status: "failed", Error: "interrupted"}, WorkspaceReady: true}); e != nil {
 			t.Fatal("retry fixed cleanup plan", e)
 		}
 		wait(stuck.ID)

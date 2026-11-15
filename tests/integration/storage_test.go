@@ -378,7 +378,7 @@ func exerciseStorage(t *testing.T, blobs storage.BlobStore, prefix string) {
 		t.Fatal("cross-space ref accepted")
 	}
 	root := t.TempDir()
-	workspaces, err := workspace.New(root, storage.Limits{MaxFileBytes: 1 << 18, MaxTotalBytes: 1 << 19, MaxEntries: 100})
+	workspaces, err := workspace.New(root, storage.Limits{MaxArchiveFileBytes: 1 << 18, MaxTotalBytes: 1 << 19})
 	if err != nil {
 		t.Fatal(err)
 	}
