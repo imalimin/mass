@@ -18,6 +18,7 @@ const toolStatuses: Record<string, string> = {
 }
 const isActive = (status?: string) => status === 'queued' || status === 'running'
 const atBottom = (viewport: HTMLElement) => viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 56
+const newRequestKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
 
 export function Conversation({ space, agent, sessionID, onCreated }: {
   space: string; agent: Schema['DefinitionDraft']; sessionID: string
@@ -112,7 +113,7 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
     mutationFn: async (draft: DraftMessage) => {
       let target = session.data ?? createdSession
       if (!target) {
-        if (createKey.current?.version !== versionID) createKey.current = { version: versionID, key: crypto.randomUUID() }
+        if (createKey.current?.version !== versionID) createKey.current = { version: versionID, key: newRequestKey() }
         target = await request<Schema['RuntimeSession']>(`${base}/sessions`, 'POST', {
           agent_id: agent.id, version_id: versionID, idempotency_key: createKey.current.key,
         })
@@ -163,7 +164,7 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
     && !busy && !submit.isPending && !!text.trim()
   const send = () => {
     if (!canSend) return
-    if (requestKey.current?.text !== text || requestKey.current.files !== files) requestKey.current = { text, files, key: crypto.randomUUID() }
+    if (requestKey.current?.text !== text || requestKey.current.files !== files) requestKey.current = { text, files, key: newRequestKey() }
     jumpToLatest()
     submit.mutate(requestKey.current, {
       onSuccess: ({ target }) => {

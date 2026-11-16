@@ -86,12 +86,34 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Handler: httptransport.NewHandler(ui.Assets(), version, logger, httptransport.IdentityOptions{Service: service, Origin: strings.TrimSuffix(c.HTTP.PublicURL, "/"), Secure: c.Auth.CookieSecure, Storage: storageOptions, Catalog: catalogue, Runtime: runtimeOptions}), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
-	result := make(chan error, 1)
-	go func() { result <- server.Serve(listener) }()
-	logger.Info("MASS listening", "address", listener.Addr().String(), "stage", "D08")
+	defer listener.Close()
+	listeners := []net.Listener{listener}
+	identityOptions := httptransport.IdentityOptions{
+		Service: service, Origin: strings.TrimSuffix(c.HTTP.PublicURL, "/"), Secure: c.Auth.CookieSecure,
+		Storage: storageOptions, Catalog: catalogue, Runtime: runtimeOptions,
+	}
+	if c.lanLoopback != "" {
+		loopback, err := net.Listen("tcp", c.lanLoopback)
+		if err != nil {
+			return err
+		}
+		defer loopback.Close()
+		listeners = append(listeners, loopback)
+		identityOptions.LoopbackOrigin = httpOrigin(c.lanLoopback)
+	}
+	server := &http.Server{Handler: httptransport.NewHandler(ui.Assets(), version, logger, identityOptions), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
+	result := make(chan error, len(listeners))
+	for _, listener := range listeners {
+		go func() { result <- server.Serve(listener) }()
+	}
+	logAttrs := []any{"address", listener.Addr().String(), "public_url", c.HTTP.PublicURL, "stage", "D08"}
+	if identityOptions.LoopbackOrigin != "" {
+		logAttrs = append(logAttrs, "local_url", identityOptions.LoopbackOrigin)
+	}
+	logger.Info("MASS listening", logAttrs...)
 	select {
 	case err := <-result:
+		_ = server.Close()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
@@ -99,13 +121,16 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 	case <-ctx.Done():
 		shutdown, cancel := context.WithTimeout(context.Background(), c.HTTP.ShutdownTimeout)
 		defer cancel()
-		if err := server.Shutdown(shutdown); err != nil {
+		err := server.Shutdown(shutdown)
+		if err != nil {
 			_ = server.Close()
-			<-result
-			return err
 		}
-		err := <-result
-		if !errors.Is(err, http.ErrServerClosed) {
+		for range listeners {
+			if serveErr := <-result; err == nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				err = serveErr
+			}
+		}
+		if err != nil {
 			return err
 		}
 		logger.Info("MASS stopped")

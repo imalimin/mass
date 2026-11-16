@@ -73,6 +73,14 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) error {
 	var username, passwordEnv *string
 	var actor, space, memberName, user *string
 	var sourceConfig, expectedDatabase *string
+	var lan *bool
+	var lanIP *string
+	var port *int
+	if args[0] == "serve" {
+		lan = flags.Bool("lan", false, "serve HTTP on a private LAN address")
+		lanIP = flags.String("lan-ip", "", "local private IP address to use with --lan")
+		port = flags.Int("port", 8080, "TCP port to use with --lan")
+	}
 	if args[0] == "restore-storage" {
 		sourceConfig = flags.String("source-config", "", "original configuration for retained source TOS objects")
 		expectedDatabase = flags.String("expect-database", "", "exact isolated restored database name")
@@ -96,9 +104,21 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) error {
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
+	if lan != nil && !*lan {
+		hasLANOptions := false
+		flags.Visit(func(f *flag.Flag) { hasLANOptions = hasLANOptions || f.Name == "lan-ip" || f.Name == "port" })
+		if hasLANOptions {
+			return errors.New("--lan-ip and --port require --lan")
+		}
+	}
 	c, err := bootstrap.LoadConfig(*configPath)
 	if err != nil {
 		return err
+	}
+	if lan != nil && *lan {
+		if err := c.EnableLAN(*lanIP, *port); err != nil {
+			return err
+		}
 	}
 	databaseCommand := args[0] == "migrate" || args[0] == "user-create" || member
 	if !databaseCommand {

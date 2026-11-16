@@ -20,6 +20,8 @@ import (
 // Config is the single deployment configuration tree. Secrets are resolved only
 // from named environment variables and must never be serialized to clients.
 type Config struct {
+	lanLoopback string
+
 	HTTP struct {
 		Listen          string        `yaml:"listen"`
 		PublicURL       string        `yaml:"public_url"`
@@ -147,7 +149,7 @@ func (c Config) ValidateService(getenv func(string) string) error {
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return errors.New("http.public_url must be an HTTP(S) origin")
 	}
-	if !c.Auth.CookieSecure && u.Hostname() != "localhost" && !isLoopback(u.Hostname()) {
+	if c.lanLoopback == "" && !c.Auth.CookieSecure && u.Hostname() != "localhost" && !isLoopback(u.Hostname()) {
 		return errors.New("insecure cookies require a loopback public_url")
 	}
 	if c.Auth.CookieSecure && u.Scheme != "https" {

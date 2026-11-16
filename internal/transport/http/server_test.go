@@ -7,11 +7,41 @@ import (
 	"github.com/imalimin/mass/internal/domain/run"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"testing/fstest"
 )
+
+func TestLANWritesRequireListenerOrigin(t *testing.T) {
+	const lanOrigin = "http://192.168.1.20:8080"
+	const loopbackOrigin = "http://127.0.0.1:8080"
+	handler := NewHandler(fstest.MapFS{"index.html": {Data: []byte("MASS")}}, "test", slog.New(slog.NewTextHandler(io.Discard, nil)), IdentityOptions{
+		Origin: lanOrigin, LoopbackOrigin: loopbackOrigin,
+	})
+	for _, tc := range []struct {
+		address, origin string
+		status          int
+	}{
+		{"127.0.0.1", loopbackOrigin, http.StatusUnsupportedMediaType},
+		{"192.168.1.20", lanOrigin, http.StatusUnsupportedMediaType},
+		{"127.0.0.1", lanOrigin, http.StatusForbidden},
+		{"192.168.1.20", loopbackOrigin, http.StatusForbidden},
+	} {
+		r := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+		r = r.WithContext(context.WithValue(r.Context(), http.LocalAddrContextKey, &net.TCPAddr{IP: net.ParseIP(tc.address), Port: 8080}))
+		r.Header.Set("Origin", tc.origin)
+		// An accepted Origin reaches the media-type check before authentication.
+		r.Header.Set("Content-Type", "text/plain")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != tc.status {
+			t.Errorf("address %s with Origin %s: got %d, want %d", tc.address, tc.origin, w.Code, tc.status)
+		}
+	}
+}
 
 func TestReadinessTracksRuntimeFaultWithoutStorageCache(t *testing.T) {
 	fault := false

@@ -185,6 +185,18 @@ unset MASS_INITIAL_PASSWORD
 - `serve` 不自动迁移；数据库版本不匹配会拒绝启动。首次启动也必须先执行迁移。
 - 对外部署：将 `http.listen` 设为部署所需的监听地址，`http.public_url` 设为浏览器实际使用的 HTTPS origin，设置 `auth.cookie_secure: true`，由 HTTPS 反向代理转发到 Go 服务。写请求会校验 Origin，地址和端口需与配置一致。
 
+### 局域网直连
+
+```sh
+bin/mass serve --lan --port 8080 --config mass.yaml
+```
+
+`--lan` 在启动时选择本机启用网卡上的私有 IP，优先使用 IPv4，并在 `MASS listening` 日志的 `public_url` 中打印地址。在其他设备上用这个地址打开 MASS。多网卡环境可用 `--lan-ip 192.168.1.20` 指定本机已配置的私有 IP。端口默认 8080。IP 变化后重启即可重新选择地址。
+
+同一进程也监听 `127.0.0.1` 的同一端口。本机可以继续从回环地址登录，启动日志会显示 `local_url`。
+
+该模式在本次启动中派生监听地址、访问地址和 Cookie 设置。写请求继续校验浏览器 Origin。局域网模式使用明文 HTTP，密码和会话 Cookie 会以明文传输，适合可信局域网。
+
 ## 建设文档
 
 | 顺序 | 文档 | 内容边界 |

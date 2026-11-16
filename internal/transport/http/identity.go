@@ -24,12 +24,13 @@ import (
 
 type endpoint func(http.ResponseWriter, *http.Request, identity.User) error
 type IdentityOptions struct {
-	Catalog *catalog.Service
-	Runtime *RuntimeOptions
-	Storage *StorageOptions
-	Service *identity.Service
-	Origin  string
-	Secure  bool
+	Catalog        *catalog.Service
+	Runtime        *RuntimeOptions
+	Storage        *StorageOptions
+	Service        *identity.Service
+	Origin         string
+	LoopbackOrigin string
+	Secure         bool
 }
 type loginBucket struct {
 	start time.Time
@@ -126,7 +127,13 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 			defer cancel()
 			r = r.WithContext(ctx)
 			if r.Method != "GET" && r.Method != "HEAD" {
-				if r.Header.Get("Origin") != options.Origin || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+				origin := options.Origin
+				if options.LoopbackOrigin != "" {
+					if local, ok := ctx.Value(http.LocalAddrContextKey).(*net.TCPAddr); ok && local.IP.IsLoopback() {
+						origin = options.LoopbackOrigin
+					}
+				}
+				if r.Header.Get("Origin") != origin || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 					apiError(w, identity.ErrForbidden, logger)
 					return
 				}
