@@ -151,17 +151,20 @@ func (d *directory) Pack(ctx context.Context, missingLocalFiles []string) (io.Re
 		if err != nil {
 			return err
 		}
+		directories[folded] = info.IsDir()
+		if d.manager.limits.IsHostLocal(info) {
+			manifest.LocalFiles = append(manifest.LocalFiles, name)
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
 		if !info.IsDir() && !info.Mode().IsRegular() {
 			return storage.ErrWorkspace
 		}
-		directories[folded] = info.IsDir()
 		record := storage.Entry{Path: name, Type: "directory"}
 		header := &tar.Header{Name: name, Mode: 0700, Typeflag: tar.TypeDir, Format: tar.FormatPAX}
 		if info.Mode().IsRegular() {
-			if info.Size() > d.manager.limits.MaxArchiveFileBytes {
-				manifest.LocalFiles = append(manifest.LocalFiles, name)
-				return nil
-			}
 			if info.Size() > d.manager.limits.MaxTotalBytes-total {
 				return storage.ErrWorkspace
 			}
@@ -423,14 +426,14 @@ func (d *directory) retained(ctx context.Context, localFiles map[string]bool) (m
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !entry.Type().IsRegular() {
+		if !entry.Type().IsRegular() && entry.Type()&fs.ModeSymlink == 0 {
 			return nil
 		}
 		info, err := d.root.Lstat(name)
 		if err != nil {
 			return err
 		}
-		if info.Mode().IsRegular() && (info.Size() > d.manager.limits.MaxArchiveFileBytes || localFiles[name]) {
+		if d.manager.limits.IsHostLocal(info) || info.Mode().IsRegular() && localFiles[name] {
 			kept[name] = false
 			for parent := path.Dir(name); parent != "." && !kept[parent]; parent = path.Dir(parent) {
 				kept[parent] = true

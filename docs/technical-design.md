@@ -17,7 +17,7 @@
 
 前端采用 React + TypeScript + Vite，源码和 package.json/package-lock.json 全部在 `frontend/`。构建生成 `frontend/dist`，构建脚本复制到后端嵌入目录，通过 Go embed 编入二进制。Node.js 仅用于构建、测试或文件构建监听；默认开发流程也由 Go 统一提供页面，不要求另开 Vite HTTP 服务。
 
-版本资源、附件、产物及完整 Trace 原始载荷持久保存到 TOS，元数据及状态进入 MariaDB。每个 Session 在服务宿主机拥有真实临时工作目录，跨 Run 连续使用；每个已执行 Run 结束时将符合单文件大小阈值的文件打包上传 TOS，并将不可变快照 URI、摘要和来源入库。超过阈值的文件留在宿主，快照只记录其相对路径。工作区缺失或进程重启时从已提交快照恢复归档文件。详见 T11。
+版本资源、附件、产物及完整 Trace 原始载荷持久保存到 TOS，元数据及状态进入 MariaDB。每个 Session 在服务宿主机拥有真实临时工作目录，跨 Run 连续使用；每个已执行 Run 结束时将符合单文件大小阈值的文件打包上传 TOS，并将不可变快照 URI、摘要和来源入库。超过阈值的普通文件和符号链接留在宿主，快照只记录它们的相对路径。工作区缺失或进程重启时从已提交快照恢复归档文件。详见 T11。
 
 MVP 不增加 Redis、独立消息队列、向量数据库或独立认证服务。Eino 以 Go 库方式嵌入 MASS，并不等同于具体模型供应商或模型托管服务。
 
@@ -1180,7 +1180,7 @@ workspace_snapshots 保存 id、space_id、session_id、source_run_id、base_sna
 
 每个快照独立归档符合阈值的所有文件，并按以下顺序提交。
 
-1. Supervisor 等待所有执行/I/O 退出，仍持有会话占用，锁定目录，生成 Manifest 和 tar.gz；超过单文件阈值的文件留在宿主。检查入包文件未压缩总字节数与收尾超时。
+1. Supervisor 等待所有执行/I/O 退出，仍持有会话占用，锁定目录，生成 Manifest 和 tar.gz；超过单文件阈值的普通文件和符号链接留在宿主。打包只读取普通文件和目录，符号链接的目标不进入归档。检查入包文件未压缩总字节数与收尾超时。
 2. 分配唯一对象 ID，记录上传意图；上传 TOS 不覆盖旧 key。确认内容可读、大小及摘要后标 ready；不在 SQL 事务中等待上传。
 3. 一个 Journal 事务追加 workspace.snapshot.created，写入快照 URI/索引、最新指针和 run.finished/usage，释放占用。终态返回快照 ID；只有此步成功才代表目录持久化完成。
 4. SQL 提交结果未知时先按稳定快照 ID/append_key 核实，不能再次执行 Agent；上传成功而无引用的对象不可见，首版不自动回收。

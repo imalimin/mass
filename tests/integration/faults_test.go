@@ -300,6 +300,8 @@ func TestWorkspaceLocalFilesAcrossHosts(t *testing.T) {
 	session := r.session()
 	j := &journal.Journal{Repo: r.db.Store}
 	const large = ".local.bin"
+	const link = ".local.link"
+	const linkTarget = "missing-target"
 	runTask := func(text string, wantMissing []string) run.View {
 		t.Helper()
 		view := r.wait(r.submit(session, text).ID)
@@ -321,11 +323,20 @@ func TestWorkspaceLocalFilesAcrossHosts(t *testing.T) {
 		if !slices.Equal(prepared.Spec.MissingLocalFiles, wantMissing) {
 			t.Fatalf("missing paths in model projection: got %v, want %v", prepared.Spec.MissingLocalFiles, wantMissing)
 		}
-		warned := slices.ContainsFunc(prepared.Messages, func(message run.Message) bool {
-			return strings.HasPrefix(message.Content, "[MASS workspace:") && strings.Contains(message.Content, large)
-		})
-		if warned != (len(wantMissing) > 0) {
+		notice := ""
+		for _, message := range prepared.Messages {
+			if strings.HasPrefix(message.Content, "[MASS workspace:") {
+				notice = message.Content
+				break
+			}
+		}
+		if (notice != "") != (len(wantMissing) > 0) {
 			t.Fatalf("unexpected missing-file notice: %+v", prepared.Messages)
+		}
+		for _, name := range wantMissing {
+			if !strings.Contains(notice, name) {
+				t.Fatalf("missing path %q absent from model notice: %q", name, notice)
+			}
 		}
 		return view
 	}
@@ -333,6 +344,9 @@ func TestWorkspaceLocalFilesAcrossHosts(t *testing.T) {
 	largeContents := bytes.Repeat([]byte("x"), 2<<20+1)
 	if err := r.manager.With(ctx, r.space, session.ID, func(dir resource.WorkspaceDir) error {
 		if err := dir.Root().WriteFile(large, largeContents, 0600); err != nil {
+			return err
+		}
+		if err := dir.Root().Symlink(linkTarget, link); err != nil {
 			return err
 		}
 		for _, name := range []string{"first.bin", "second.bin"} {
@@ -371,6 +385,9 @@ func TestWorkspaceLocalFilesAcrossHosts(t *testing.T) {
 		if err != nil || !bytes.Equal(contents, largeContents) {
 			t.Fatalf("same-host restore lost local bytes: %v", err)
 		}
+		if target, err := dir.Root().Readlink(link); err != nil || target != linkTarget {
+			t.Fatalf("same-host restore lost the dangling link: %q, %v", target, err)
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -388,8 +405,8 @@ func TestWorkspaceLocalFilesAcrossHosts(t *testing.T) {
 	}
 	r.manager = manager
 	r.start()
-	runTask("Check the replacement host", []string{large})
-	runTask("Continue on the replacement host", []string{large})
+	runTask("Check the replacement host", []string{large, link})
+	runTask("Continue on the replacement host", []string{large, link})
 	if err := r.manager.With(ctx, r.space, session.ID, func(dir resource.WorkspaceDir) error {
 		contents, err := dir.Root().ReadFile(".small")
 		if err != nil || string(contents) != "portable" {
@@ -399,7 +416,7 @@ func TestWorkspaceLocalFilesAcrossHosts(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	runTask("Check the replacement file", nil)
+	runTask("Check the replacement file", []string{link})
 }
 func (r *faultRig) entered() {
 	r.t.Helper()

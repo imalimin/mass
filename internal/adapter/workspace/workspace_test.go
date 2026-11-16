@@ -121,14 +121,6 @@ func TestPackBoundariesAndLockCancellation(t *testing.T) {
 	defer m.Close()
 	space, session := storage.NewShortID(), storage.NewShortID()
 	if err = m.With(context.Background(), space, session, func(dir resource.WorkspaceDir) error {
-		if err := dir.Root().Symlink("/etc/passwd", "link"); err != nil {
-			return err
-		}
-		if f, _, err := dir.Pack(context.Background(), nil); err == nil {
-			f.Close()
-			t.Fatal("symlink packed")
-		}
-		dir.Root().Remove("link")
 		for _, name := range []string{"first", "second", "third"} {
 			if err := dir.Root().WriteFile(name, make([]byte, 16), 0600); err != nil {
 				return err
@@ -186,6 +178,7 @@ func TestPackAndRestoreHostLocalFiles(t *testing.T) {
 	}
 	defer destination.Close()
 	space, session := storage.NewShortID(), storage.NewShortID()
+	linkTarget := t.TempDir()
 	random := rand.NewChaCha8([32]byte{1})
 	contents := make([]byte, threshold+1)
 	random.Read(contents)
@@ -194,6 +187,9 @@ func TestPackAndRestoreHostLocalFiles(t *testing.T) {
 	if err := origin.With(ctx, space, session, func(dir resource.WorkspaceDir) error {
 		root := dir.Root()
 		if err := root.Mkdir(".data", 0700); err != nil {
+			return err
+		}
+		if err := root.Symlink(linkTarget, ".data/host-link"); err != nil {
 			return err
 		}
 		for name, size := range map[string]int{".data/large": threshold + 1, ".data/equal": threshold, ".small": threshold - 1} {
@@ -212,7 +208,7 @@ func TestPackAndRestoreHostLocalFiles(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if !slices.Equal(manifest.LocalFiles, []string{".data/large"}) || len(manifest.Entries) != 3 || len(raw) <= threshold {
+		if !slices.Equal(manifest.LocalFiles, []string{".data/host-link", ".data/large"}) || len(manifest.Entries) != 3 || len(raw) <= threshold {
 			t.Fatalf("unexpected packed files or archive size: %+v, %d", manifest, len(raw))
 		}
 		before, err := root.ReadFile(".data/large")
@@ -224,6 +220,9 @@ func TestPackAndRestoreHostLocalFiles(t *testing.T) {
 		}
 		if err := dir.Restore(ctx, bytes.NewReader(raw), manifest); err != nil {
 			return err
+		}
+		if target, err := root.Readlink(".data/host-link"); err != nil || target != linkTarget {
+			t.Fatalf("same-host restore changed the link: %q, %v", target, err)
 		}
 		after, err := root.ReadFile(".data/large")
 		if err != nil || !bytes.Equal(before, after) {
@@ -246,8 +245,10 @@ func TestPackAndRestoreHostLocalFiles(t *testing.T) {
 		if err := dir.Restore(ctx, bytes.NewReader(raw), manifest); err != nil {
 			return err
 		}
-		if _, err := dir.Root().Lstat(".data/large"); !errors.Is(err, fs.ErrNotExist) {
-			t.Fatalf("new host received the local-only file: %v", err)
+		for _, name := range manifest.LocalFiles {
+			if _, err := dir.Root().Lstat(name); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("new host received local-only entry %q: %v", name, err)
+			}
 		}
 		if info, err := dir.Root().Stat(".small"); err != nil || info.Size() != threshold-1 {
 			t.Fatalf("new host did not receive the small hidden file: %v", err)

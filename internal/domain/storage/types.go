@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"regexp"
 	"strings"
 
@@ -111,4 +112,10 @@ func UsesContentObjectLimit(kind string) bool {
 type Limits struct {
 	MaxArchiveFileBytes int64
 	MaxTotalBytes       int64
+}
+
+// IsHostLocal applies to the entry itself as returned by Lstat.
+func (l Limits) IsHostLocal(info fs.FileInfo) bool {
+	mode := info.Mode()
+	return mode&fs.ModeSymlink != 0 || mode.IsRegular() && info.Size() > l.MaxArchiveFileBytes
 }

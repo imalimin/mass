@@ -77,7 +77,9 @@ func (f *FileService) checkWrite(ctx context.Context, root *os.Root, target stri
 		if err != nil {
 			return err
 		}
-		if !filePath(name) || (!info.IsDir() && !info.Mode().IsRegular()) || hasMultipleLinks(info) {
+		local := f.Limits.IsHostLocal(info)
+		regular := info.Mode().IsRegular()
+		if !filePath(name) || (!local && !info.IsDir() && !regular) || (regular && hasMultipleLinks(info)) {
 			return storage.ErrWorkspace
 		}
 		folded := strings.ToLower(name)
@@ -85,7 +87,7 @@ func (f *FileService) checkWrite(ctx context.Context, root *os.Root, target stri
 			return storage.ErrWorkspace
 		}
 		entries[folded] = name
-		if info.Mode().IsRegular() && name != target && info.Size() <= f.Limits.MaxArchiveFileBytes {
+		if regular && !local && name != target {
 			if info.Size() > f.Limits.MaxTotalBytes-total {
 				return run.ErrOverflow
 			}

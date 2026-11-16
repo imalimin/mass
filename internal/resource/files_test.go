@@ -49,6 +49,9 @@ func TestWriteCASBoundariesAndQuotas(t *testing.T) {
 	if err := manager.With(ctx, snapshot.SpaceID, snapshot.SessionID, func(dir resource.WorkspaceDir) error { return dir.Root().Symlink(t.TempDir(), "link") }); err != nil {
 		t.Fatal(err)
 	}
+	if err := write("beside-link.txt", "", "missing"); err != nil {
+		t.Fatal("unrelated symlink blocked a workspace write", err)
+	}
 	if write("link/outside", "x", "missing") == nil {
 		t.Fatal("symlink accepted")
 	}

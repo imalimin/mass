@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"path"
 	"sync"
 	"syscall"
 
@@ -78,12 +79,20 @@ func (w *RunWorkspaces) Ensure(ctx context.Context, s run.Snapshot) ([]string, e
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			if parent := path.Dir(name); parent != "." {
+				if err := checkParents(dir.Root(), parent); errors.Is(err, fs.ErrNotExist) || errors.Is(err, storage.ErrWorkspace) {
+					missing = append(missing, name)
+					continue
+				} else if err != nil {
+					return err
+				}
+			}
 			info, err := dir.Root().Lstat(name)
 			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 				missing = append(missing, name)
 			} else if err != nil {
 				return err
-			} else if !info.Mode().IsRegular() {
+			} else if !info.Mode().IsRegular() && info.Mode()&fs.ModeSymlink == 0 {
 				missing = append(missing, name)
 			}
 		}
