@@ -1123,6 +1123,10 @@ func WriteAGUIEvent(w http.ResponseWriter, cursor string, body json.RawMessage) 
 
 UI 在读取时根据业务记录重新投影。Schema 14 删除通用会话事件表和离线事件回放命令。
 
+### T10.8 会话诊断日志实时追加（待实现）
+
+见[会话诊断日志技术方案](session-diagnostic-logs.md)。
+
 ## T11 M11 TOS 持久化、工作区与产物
 
 ### T11.1 统一对象存储

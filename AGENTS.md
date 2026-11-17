@@ -1,3 +1,7 @@
+# Git 提交
+
+- Git 提交信息使用英文。
+
 # MASS 会话与 Run 排查
 
 收到 `session_id` 或 `run_id` 后，先下载对应记录，按 Run 定位失败原因。会话消息、模型与工具步骤、运行终态共用一份 `session.jsonl`，通过 `run_id` 区分各轮，通过 `seq` 确定顺序。JSONL 的 `seq` 与 Trace 页面的事件序号各自独立。
