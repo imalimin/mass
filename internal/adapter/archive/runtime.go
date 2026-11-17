@@ -301,7 +301,7 @@ func (r *Runtime) restoreAccepted(s *conversation, d sessionlog.Accepted) {
 		def.Skills[i].Markdown, def.Skills[i].Resources = "", nil
 	}
 	v := run.Snapshot{ID: d.RunID, SpaceID: s.session.SpaceID, SessionID: s.session.ID, ActorID: d.ActorID,
-		DefinitionRef: s.session.DefinitionRef, UserEventID: d.UserEventID, Definition: def, Build: d.Execution.Build,
+		DefinitionRef: s.session.DefinitionRef, UserEventID: d.UserEventID, WorkspaceCleanup: d.WorkspaceCleanup, Definition: def, Build: d.Execution.Build,
 		Profile: "mass-agui-v1", MapperVersion: 1, ParserVersion: 1, CreatedAt: d.AcceptedAt}
 	if d.BaseSnapshotID != nil {
 		v.BaseSnapshotID = *d.BaseSnapshotID

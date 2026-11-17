@@ -11,9 +11,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/imalimin/mass/internal/adapter/javascript"
 	"github.com/imalimin/mass/internal/adapter/workspace"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
@@ -237,4 +239,80 @@ func TestBoundedReadAndStableQueryPages(t *testing.T) {
 	if _, err = f.Query(ctx, s, "glob_files", resource.PageInput{Pattern: "**", Cursor: cursor}); !errors.Is(err, run.ErrPermission) {
 		t.Fatal("revoked cursor read", err)
 	}
+}
+
+func TestFileToolsReportSymlinksWithoutFollowing(t *testing.T) {
+	ctx := context.Background()
+	f, s, root := fileFixture(t)
+	f.EnableRunPagination()
+	const content = "searchable text"
+	const original = "source/notes.txt"
+	if _, err := f.Write(ctx, s, resource.WriteFileInput{Path: original, Content: content, MediaType: "text/plain", ExpectedSHA256: "missing"}); err != nil {
+		t.Fatal(err)
+	}
+	links := []string{"alias.txt", "broken.txt", "configs"}
+	for i, target := range []string{original, "missing.txt", "source"} {
+		if err := os.Symlink(target, filepath.Join(root, links[i])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkItems := func(data map[string]any, want []string) {
+		t.Helper()
+		paths := []string{}
+		for _, raw := range data["items"].([]any) {
+			item := raw.(map[string]any)
+			name := item["path"].(string)
+			paths = append(paths, name)
+			if slices.Contains(links, name) && (item["type"] != "symlink" || len(item) != 2) {
+				t.Fatalf("link should contain only path and type: %v", item)
+			}
+		}
+		if !slices.Equal(paths, want) {
+			t.Fatalf("paths = %v, want %v", paths, want)
+		}
+	}
+	query := func(kind string, input resource.PageInput) map[string]any {
+		t.Helper()
+		result, err := f.Query(ctx, s, kind, input)
+		if err != nil || result.Status != "completed" || result.SideEffect != "none" || !result.Complete {
+			t.Fatalf("%s: result=%+v err=%v", kind, result, err)
+		}
+		return toolData(t, result)
+	}
+	checkItems(query("list_files", resource.PageInput{}), []string{"alias.txt", "broken.txt", "configs", "source"})
+	first := query("glob_files", resource.PageInput{Pattern: "**", Limit: 2})
+	checkItems(first, links[:2])
+	checkItems(query("glob_files", resource.PageInput{Pattern: "**", Limit: 2, Cursor: first["next_cursor"].(string)}), []string{"configs", original})
+	checkItems(query("glob_files", resource.PageInput{Pattern: "*.txt"}), links[:2])
+	checkItems(query("search_files", resource.PageInput{Pattern: content}), []string{original})
+
+	assertRejected := func(err error) {
+		t.Helper()
+		var failure *run.ToolError
+		if !errors.As(err, &failure) || failure.Code != "workspace_symlink" || failure.Effect != "none" {
+			t.Fatalf("expected a recoverable link error, got %v", err)
+		}
+	}
+	_, err := f.Query(ctx, s, "list_files", resource.PageInput{Directory: "configs"})
+	assertRejected(err)
+	_, err = f.Read(ctx, s, resource.ReadFileInput{Path: "configs/notes.txt"})
+	assertRejected(err)
+	_, err = f.Write(ctx, s, resource.WriteFileInput{Path: "alias.txt", Content: "changed", MediaType: "text/plain", ExpectedSHA256: digest(content)})
+	assertRejected(err)
+	_, err = f.Delete(ctx, s, resource.ReadFileInput{Path: "alias.txt", ExpectedSHA256: digest(content)})
+	assertRejected(err)
+	if raw, err := os.ReadFile(filepath.Join(root, original)); err != nil || string(raw) != content {
+		t.Fatalf("link target changed: %q (%v)", raw, err)
+	}
+	if target, err := os.Readlink(filepath.Join(root, "alias.txt")); err != nil || target != original {
+		t.Fatalf("link changed: %q (%v)", target, err)
+	}
+
+	s.Definition.ToolPolicy = run.ToolPolicy{TimeoutMS: 5000, MaxCodeBytes: 1024, MaxInputBytes: 1024, MaxOutputBytes: 4096, MaxFileOperations: 1}
+	code := &resource.CodeService{Files: f, Engine: &javascript.Runner{MaxConcurrent: 1}}
+	result, err := code.Run(ctx, s, run.CodeInput{Language: "javascript", Code: "return fs.list();", Input: json.RawMessage("null")})
+	if err != nil || result.Status != "completed" || result.SideEffect != "none" {
+		t.Fatalf("fs.list: result=%+v err=%v", result, err)
+	}
+	checkItems(toolData(t, result)["value"].(map[string]any), []string{"alias.txt", "broken.txt", "configs", "source"})
 }

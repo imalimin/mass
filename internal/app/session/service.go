@@ -41,6 +41,7 @@ type Service struct {
 	Catalog       *catalog.Service
 	Identity      *identity.Service
 	Content       *resource.ContentStore
+	Workspaces    *resource.RunWorkspaces
 	Build         string
 	Ready         func(context.Context) error
 	Notify        func()
@@ -178,6 +179,14 @@ func (s *Service) Definition(ctx context.Context, actor, space string, ref stora
 	return d, nil
 }
 func (s *Service) Submit(ctx context.Context, actor, space, sessionID string, in SubmitInput) (run.View, error) {
+	return s.submit(ctx, actor, space, sessionID, in, false)
+}
+
+func (s *Service) SubmitWorkspaceCleanup(ctx context.Context, actor, space, sessionID, key string) (run.View, error) {
+	return s.submit(ctx, actor, space, sessionID, SubmitInput{Key: key, Text: "帮我清理当前工作区的非产物中间文件"}, true)
+}
+
+func (s *Service) submit(ctx context.Context, actor, space, sessionID string, in SubmitInput, workspaceCleanup bool) (run.View, error) {
 	if !keyPattern.MatchString(in.Key) || len(in.Text) > 256<<10 || !utf8.ValidString(in.Text) || strings.TrimSpace(in.Text) == "" {
 		return run.View{}, identity.ErrInvalid
 	}
@@ -192,9 +201,10 @@ func (s *Service) Submit(ctx context.Context, actor, space, sessionID string, in
 		seen[id] = true
 	}
 	digest := journal.Digest(struct {
-		Session string
-		Input   SubmitInput
-	}{sessionID, in})
+		Session          string
+		Input            SubmitInput
+		WorkspaceCleanup bool `json:",omitempty"`
+	}{sessionID, in, workspaceCleanup})
 	var id string
 	var found bool
 	var err error
@@ -217,6 +227,9 @@ func (s *Service) Submit(ctx context.Context, actor, space, sessionID string, in
 	session, err := s.Repo.RuntimeSession(ctx, actor, space, sessionID)
 	if err != nil {
 		return run.View{}, err
+	}
+	if workspaceCleanup && !s.Workspaces.LocalExists(space, sessionID) {
+		return run.View{}, storage.ErrWorkspace
 	}
 	definition, err := s.Definition(ctx, actor, space, session.DefinitionRef)
 	if err != nil {
@@ -271,6 +284,7 @@ func (s *Service) Submit(ctx context.Context, actor, space, sessionID string, in
 		definition.Skills[i].Resources = nil
 	}
 	snapshot := run.Snapshot{ID: id, SpaceID: space, SessionID: sessionID, ActorID: actor, DefinitionRef: session.DefinitionRef, UserEventID: message.EventID, BaseSnapshotID: session.LatestSnapshotID, Definition: definition, Build: s.Build, Profile: "mass-agui-v1", MapperVersion: 1, ParserVersion: 1, CreatedAt: time.Now().UTC().Truncate(time.Microsecond)}
+	snapshot.WorkspaceCleanup = workspaceCleanup
 	created := journal.New(actor, "run.created", id, journal.RunData{Snapshot: &snapshot})
 	created.CausationID = message.EventID
 	batch, err := journal.Prepare(actor, journal.Request{SpaceID: space, SessionID: sessionID, AppendKey: uuid.NewString(), Events: []journal.Proposed{message, created}})

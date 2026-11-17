@@ -442,6 +442,20 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		writeJSON(w, 200, map[string]any{"items": items})
 		return nil
 	})
+	register("POST "+base+"/sessions/{session_id}/workspace/cleanup", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		var b struct {
+			Key string `json:"idempotency_key"`
+		}
+		if err := decodeBody(w, r, &b); err != nil {
+			return err
+		}
+		v, err := svc.SubmitWorkspaceCleanup(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("session_id"), b.Key)
+		if err != nil {
+			return err
+		}
+		writeJSON(w, 202, runtime.runResponse(v))
+		return nil
+	})
 	register("POST "+base+"/sessions/{session_id}/workspace-snapshots/retry", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		space, session := r.PathValue("space_id"), r.PathValue("session_id")
 		if err := runtime.Repo.BeginWorkspaceMaintenance(r.Context(), u.ID, space, session); err != nil {

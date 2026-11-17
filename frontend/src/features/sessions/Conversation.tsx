@@ -9,8 +9,9 @@ const Trace = lazy(() => import('../debug/Trace'))
 const SafeMarkdown = lazy(() => import('../debug/SafeMarkdown'))
 type Run = Schema['RuntimeRun']
 type Attachment = Schema['RuntimeAttachment']
-type DraftMessage = { text: string; files: File[]; key: string }
+type DraftMessage = { text: string; files: File[]; key: string; workspaceCleanup?: boolean }
 type SubmittedMessage = { run: Run; text: string; attachments: Attachment[] }
+const cleanupText = '帮我清理当前工作区的非产物中间文件'
 const statuses: Record<string, string> = { queued: '排队中', running: '运行中', succeeded: '已完成', failed: '失败', cancelled: '已取消' }
 const toolStatuses: Record<string, string> = {
   parameters: '准备中', parameters_complete: '准备中', not_started: '待执行', running: '运行中',
@@ -39,6 +40,7 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
   const olderScroll = useRef<{ top: number; height: number; pageCount: number } | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null), fileInput = useRef<HTMLInputElement>(null)
   const requestKey = useRef<{ text: string; files: File[]; key: string } | null>(null)
+  const cleanupKey = useRef<string | null>(null)
   const createKey = useRef<{ version: string; key: string } | null>(null)
   const uploaded = useRef(new WeakMap<File, Attachment>())
 
@@ -111,6 +113,10 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
   const [fileError, setFileError] = useState('')
   const submit = useMutation({
     mutationFn: async (draft: DraftMessage) => {
+      if (draft.workspaceCleanup) {
+        const run = await request<Run>(`${sessionURL}/workspace/cleanup`, 'POST', { idempotency_key: draft.key })
+        return { run, attachments: [] }
+      }
       let target = session.data ?? createdSession
       if (!target) {
         if (createKey.current?.version !== versionID) createKey.current = { version: versionID, key: newRequestKey() }
@@ -137,11 +143,15 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
     },
     onSuccess: ({ target, run, attachments }, draft) => {
       setAccepted({ run, text: draft.text, attachments })
-      setText('')
-      setFiles([])
-      requestKey.current = null
-      const key = ['private', space, target.id]
-      client.setQueryData([...key, 'session'], target)
+      if (draft.workspaceCleanup) {
+        cleanupKey.current = null
+      } else {
+        setText('')
+        setFiles([])
+        requestKey.current = null
+      }
+      const key = ['private', space, run.session_id]
+      if (target) client.setQueryData([...key, 'session'], target)
       client.setQueryData<Run[]>([...key, 'runs'], previous => [run, ...(previous ?? []).filter(r => r.id !== run.id)])
       client.setQueryData([...key, 'run', run.id], run)
       composer.current?.focus()
@@ -158,6 +168,7 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
     mutationFn: (action: string) => request(`${sessionURL}/${action}`, 'POST'),
     onSuccess: () => { void client.invalidateQueries({ queryKey: sessionKey }); void client.invalidateQueries({ queryKey: ['private', space, 'sessions'] }) },
   })
+  const workspaceActionPending = workspaceAction.isPending || submit.isPending
 
   const validVersion = !!createdSession || versions.data?.some(version => version.id === versionID)
   const canSend = (sessionID ? ownsSession && runs.isSuccess && !session.data?.workspace_error : !agent.archived && validVersion)
@@ -168,7 +179,7 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
     jumpToLatest()
     submit.mutate(requestKey.current, {
       onSuccess: ({ target }) => {
-        if (!sessionID) {
+        if (!sessionID && target) {
           onCreated(target.id)
           navigate(agentSessionsPath(space, agent.id, target.id), { replace: true })
         }
@@ -292,11 +303,17 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
     </div>
     <div className="composer-dock">
       {showJump && <button type="button" className="secondary jump-to-latest" onClick={jumpToLatest}>↓ 回到最新消息</button>}
-      {session.data?.workspace_error && <div className="error workspace-notice">
+      {session.data?.workspace_error && !busy && <div className="error workspace-notice">
         <p role="alert">工作目录尚未确认持久化，已阻止下一轮运行。</p>
         <div className="actions">
-          <button disabled={workspaceAction.isPending} onClick={() => workspaceAction.mutate('workspace-snapshots/retry')}>仅重试保存文件</button>
-          <button className="secondary" disabled={workspaceAction.isPending} onClick={() => workspaceAction.mutate('workspace/restore')}>恢复最近已提交快照</button>
+          <button disabled={workspaceActionPending} onClick={() => workspaceAction.mutate('workspace-snapshots/retry')}>仅重试保存文件</button>
+          <button className="secondary" disabled={workspaceActionPending || !runs.isSuccess} onClick={() => {
+            cleanupKey.current ??= newRequestKey()
+            workspaceAction.reset()
+            jumpToLatest()
+            submit.mutate({ text: cleanupText, files: [], key: cleanupKey.current, workspaceCleanup: true })
+          }}>尝试Agent清理文件</button>
+          <button className="secondary" disabled={workspaceActionPending} onClick={() => workspaceAction.mutate('workspace/restore')}>恢复最近已提交快照</button>
         </div>
         <p>恢复会丢弃当前未保存文件。</p>
       </div>}

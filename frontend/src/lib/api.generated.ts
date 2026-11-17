@@ -822,6 +822,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/spaces/{space_id}/sessions/{session_id}/workspace/cleanup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["submitWorkspaceCleanup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/spaces/{space_id}/sessions/{session_id}/workspace/restore": {
         parameters: {
             query?: never;
@@ -1377,6 +1393,7 @@ export interface components {
             error: string;
             snapshot_error: string;
             workspace_snapshot_committed: boolean;
+            workspace_cleanup?: boolean;
             started_at: string | null;
             finished_at: string | null;
             heartbeat_at: string | null;
@@ -5259,6 +5276,44 @@ export interface operations {
                     "application/json": {
                         workspace_snapshot_committed: boolean;
                     };
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    submitWorkspaceCleanup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    idempotency_key: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Cleanup run accepted for the existing local workspace. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeRun"];
                 };
             };
             /** @description Request rejected or dependency unavailable. */

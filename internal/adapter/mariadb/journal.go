@@ -42,8 +42,10 @@ func createRun(ctx context.Context, tx *sql.Tx, actor, space, session string, e 
 	if err := tx.QueryRowContext(ctx, "SELECT workspace_error FROM sessions WHERE space_id=? AND id=?", space, session).Scan(&workspaceError); err != nil {
 		return err
 	}
-	if workspaceError != "" {
-		return storage.ErrWorkspace
+	var data journal.RunData
+	json.Unmarshal(e.Data, &data)
+	if err := run.CheckWorkspaceSubmission(workspaceError, data.Snapshot != nil && data.Snapshot.WorkspaceCleanup); err != nil {
+		return err
 	}
 	var active int
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM session_active_runs WHERE space_id=? AND session_id=?", space, session).Scan(&active); err != nil {
@@ -53,8 +55,6 @@ func createRun(ctx context.Context, tx *sql.Tx, actor, space, session string, e 
 		return storage.ErrActive
 	}
 
-	var data journal.RunData
-	json.Unmarshal(e.Data, &data)
 	var raw any
 	if data.Snapshot == nil {
 		if _, err := tx.ExecContext(ctx, "INSERT INTO runs(space_id,session_id,id,actor_id,status,source_event_id,created_event_id,created_sequence,applied_sequence) VALUES(?,?,?,?,'queued',?,?,?,?)", space, session, e.RunID, actor, e.EventID, e.EventID, seq, seq); err != nil {

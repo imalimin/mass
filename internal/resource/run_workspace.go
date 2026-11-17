@@ -30,9 +30,9 @@ func (w *RunWorkspaces) key(space, session string) string { return space + ":" +
 func (w *RunWorkspaces) Available(space, session string) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.ready[w.key(space, session)] && w.exists(space, session)
+	return w.ready[w.key(space, session)] && w.LocalExists(space, session)
 }
-func (w *RunWorkspaces) exists(space, session string) bool {
+func (w *RunWorkspaces) LocalExists(space, session string) bool {
 	if e, ok := w.Workspaces.(workspaceExistence); ok {
 		return e.Exists(space, session)
 	}
@@ -52,7 +52,16 @@ func (w *RunWorkspaces) Mark(space, session string) {
 	w.ready[w.key(space, session)] = true
 }
 func (w *RunWorkspaces) Ensure(ctx context.Context, s run.Snapshot) ([]string, error) {
-	ready := w.Available(s.SpaceID, s.SessionID)
+	var ready bool
+	if s.WorkspaceCleanup {
+		// The unsaved directory is the cleanup target. Restoring would replace its contents.
+		if !w.LocalExists(s.SpaceID, s.SessionID) {
+			return nil, storage.ErrWorkspace
+		}
+		ready = true
+	} else {
+		ready = w.Available(s.SpaceID, s.SessionID)
+	}
 	snapshot, err := w.Repo.RunBaseSnapshot(ctx, s)
 	if err != nil {
 		return nil, err
@@ -62,6 +71,9 @@ func (w *RunWorkspaces) Ensure(ctx context.Context, s run.Snapshot) ([]string, e
 		return nil, err
 	}
 	if ready && len(manifest.LocalFiles) == 0 {
+		if s.WorkspaceCleanup {
+			w.Mark(s.SpaceID, s.SessionID)
+		}
 		return nil, nil
 	}
 	var missing []string
@@ -80,7 +92,7 @@ func (w *RunWorkspaces) Ensure(ctx context.Context, s run.Snapshot) ([]string, e
 				return err
 			}
 			if parent := path.Dir(name); parent != "." {
-				if err := checkParents(dir.Root(), parent); errors.Is(err, fs.ErrNotExist) || errors.Is(err, storage.ErrWorkspace) {
+				if err := checkParents(dir.Root(), parent); errors.Is(err, fs.ErrNotExist) || errors.Is(err, storage.ErrWorkspace) || errors.Is(err, errWorkspaceSymlink) {
 					missing = append(missing, name)
 					continue
 				} else if err != nil {

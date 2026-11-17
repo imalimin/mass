@@ -129,12 +129,12 @@ func (r *Runtime) AcceptRuntimeRequest(ctx context.Context, actor, space, operat
 	if s.active != "" || s.maintenance {
 		return "", "", storage.ErrActive
 	}
-	if s.session.WorkspaceError != "" {
-		return "", "", storage.ErrWorkspace
-	}
 	d := fromJSON[journal.RunData](runEvent.Data)
 	if d.Snapshot == nil || !storage.ValidShortID(d.Snapshot.ID) {
 		return "", "", storage.ErrInvalid
+	}
+	if err := run.CheckWorkspaceSubmission(s.session.WorkspaceError, d.Snapshot.WorkspaceCleanup); err != nil {
+		return "", "", err
 	}
 	if d.Snapshot.BaseSnapshotID != s.session.LatestSnapshotID {
 		return "", "", storage.ErrConflict
@@ -149,7 +149,7 @@ func (r *Runtime) AcceptRuntimeRequest(ctx context.Context, actor, space, operat
 	v := d.Snapshot
 	entry := sessionlog.Accepted{Header: sessionlog.Header{Seq: int64(len(s.records)) + 1, Type: sessionlog.RunAccepted, Role: "user", RunID: v.ID},
 		ActorID: actor, EventID: runEvent.EventID, MessageID: message.ID, UserEventID: msgEvent.EventID,
-		AcceptedAt: v.CreatedAt, RequestKey: key, RequestDigest: digest, BaseSnapshotID: orNil(v.BaseSnapshotID),
+		AcceptedAt: v.CreatedAt, RequestKey: key, RequestDigest: digest, BaseSnapshotID: orNil(v.BaseSnapshotID), WorkspaceCleanup: v.WorkspaceCleanup,
 		Message:   sessionlog.Message{Text: string(body), Attachments: message.Attachments},
 		Execution: sessionlog.Execution{Build: v.Build, Model: v.Definition.Model, Tools: v.Definition.Tools, ToolPolicy: v.Definition.ToolPolicy, ModelAttempts: v.Definition.ModelAttempts}}
 	err = r.commit(ctx, s, entry)
@@ -421,6 +421,9 @@ func (r *Runtime) finishedRecords(s *conversation, id string, final journal.Prop
 			return nil, end, err
 		}
 		end.WorkspaceSnapshot = spec
+	} else if state.view.WorkspaceCleanup && end.SnapshotError == "" {
+		// A cleanup that ends before saving (for example, while queued) leaves the workspace blocked.
+		end.SnapshotError = s.session.WorkspaceError
 	}
 	end.Header = sessionlog.Header{Seq: seq + 1, Type: sessionlog.RunFinished, Role: "system", RunID: id}
 	return append(batch, end), end, nil

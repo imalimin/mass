@@ -48,6 +48,8 @@ type PublishInput struct {
 	MediaType      string `json:"media_type"`
 }
 
+var errWorkspaceSymlink = run.ToolFailure("workspace_symlink", "none")
+
 func filePath(s string) bool {
 	return fs.ValidPath(s) && s != "." && len(s) <= 1024 && !strings.ContainsAny(s, "\\:\x00\r\n")
 }
@@ -122,7 +124,10 @@ func checkParents(root *os.Root, name string) error {
 		if err != nil {
 			return err
 		}
-		if hasMultipleLinks(info) || info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errWorkspaceSymlink
+		}
+		if hasMultipleLinks(info) || (!info.IsDir() && !info.Mode().IsRegular()) {
 			return storage.ErrWorkspace
 		}
 		if i < len(parts) && !info.IsDir() {

@@ -72,12 +72,31 @@ export async function startModelFixture() {
       if (count === 1 && (results[0].data.exit_code !== 7 || results[0].data.stderr !== 'problem')) throw new Error('missing command failure details')
       if (actions[count]) [name, args] = actions[count]
     }
+    else if (task === '帮我清理当前工作区的非产物中间文件') {
+      const results = messages.slice(index + 1).filter(m => m.role === 'tool').map(m => JSON.parse(m.content))
+      const retried = messages.slice(0, index).some(message => message.role === 'user' && message.content === task)
+      const scratch = retried ? 'scratch-2.txt' : 'scratch.txt'
+      const actions = [
+        ['glob_files', { pattern: '{configs,configs/**,scratch*.txt}', limit: 100 }],
+        ['read_file', { path: `configs/${scratch}` }],
+        ['delete_file', { path: scratch, expected_sha256: createHash('sha256').update('temporary').digest('hex') }],
+      ]
+      if (count === 1) {
+        const items = results[0].data.items
+        const link = items?.find(item => item.path === 'configs')
+        if (link?.type !== 'symlink' || Object.keys(link).length !== 2 || items.some(item => item.path.startsWith('configs/')) || !items.some(item => item.path === scratch)) {
+          throw new Error('file enumeration failed to report the link and ordinary files separately')
+        }
+      }
+      if (count === 2 && (results[1].error !== 'workspace_symlink' || results[1].side_effect !== 'none')) throw new Error('expected recoverable symlink access error')
+      if (actions[count]) [name, args] = actions[count]
+    }
     else if (/second|读取已有/.test(task)) { if (!count) { name = 'read_file'; args = { path: 'notes.txt' } } }
     else if (count === 0) { name = 'write_file'; args = { path: 'notes.txt', content: 'hello workspace', media_type: 'text/plain', expected_sha256: 'missing' } }
     else if (count === 1) { name = 'read_file'; args = { path: 'notes.txt' } }
     else if (count === 2) { name = 'publish_artifact'; args = { path: 'notes.txt', expected_sha256: sha, display_name: 'notes.txt', media_type: 'text/plain' } }
     if (name) frame({ role: 'assistant', tool_calls: [{ index: 0, id: task.startsWith('D05') ? 'reused-native-id' : randomUUID(), type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, 'tool_calls', usage)
-    else { frame({ role: 'assistant', content: task.startsWith('D05') ? '十四工具处理完成，汇总结果为 10。' : task === 'run a host command' ? '已运行宿主命令并发布 command.txt' : /second|读取已有/.test(task) ? '已读取已有文件：hello workspace' : '已完成写入、读取和发布 notes.txt' }); frame({}, 'stop', usage) }
+    else { frame({ role: 'assistant', content: task.startsWith('D05') ? '十四工具处理完成，汇总结果为 10。' : task === 'run a host command' ? '已运行宿主命令并发布 command.txt' : task === '帮我清理当前工作区的非产物中间文件' ? '已处理清理请求。' : /second|读取已有/.test(task) ? '已读取已有文件：hello workspace' : '已完成写入、读取和发布 notes.txt' }); frame({}, 'stop', usage) }
     res.end('data: [DONE]\n\n')
   })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')

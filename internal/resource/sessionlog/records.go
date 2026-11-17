@@ -112,6 +112,8 @@ type Accepted struct {
 	Execution      Execution `json:"execution"`
 	Message        Message   `json:"message"`
 	BaseSnapshotID *string   `json:"base_snapshot_id"`
+
+	WorkspaceCleanup bool `json:"workspace_cleanup,omitempty"`
 }
 
 type Execution struct {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir, readdir, readlink, rm, symlink, truncate, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { startFixtureServer } from './fixture-server.mjs'
@@ -17,6 +17,8 @@ try {
   await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click()
   await page.getByLabel('定义名称').fill('file-assistant'); await page.getByRole('button', { name: '创建 Agent', exact: true }).click(); const editor = page.locator('[data-editor="AGENTS.md"]'); await editor.locator('.view-lines').click(); await page.keyboard.insertText('# File assistant\nRead and write session files.')
   await page.getByLabel('绑定模型').selectOption({ label: '运行模型' })
+  await page.getByRole('checkbox', { name: 'delete_file', exact: true }).check()
+  await page.getByRole('checkbox', { name: 'glob_files', exact: true }).check()
   const publishing = page.waitForResponse(r => r.url().endsWith('/versions') && r.request().method() === 'POST'); await page.getByRole('button', { name: '发布版本', exact: true }).click(); const published = await publishing; assert.equal(published.status(), 201); const version = await published.json()
   await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByRole('link', { name: '打开 file-assistant 的会话', exact: true }).click()
   const send = async text => { await page.getByLabel('输入任务', { exact: true }).fill(text); const accepted = page.waitForResponse(r => /\/sessions\/[^/]+\/runs$/.test(r.url()) && r.request().method() === 'POST'); await page.getByRole('button', { name: '发送任务', exact: true }).click(); const response = await accepted; assert.equal(response.status(), 202, await response.text()); return response.json() }
@@ -114,6 +116,11 @@ try {
     await rm(join(server.maintenance.directory, 'workspaces'), { recursive: true, force: true })
   })
   await expect(page.getByTestId('run-status')).toContainText('失败', { timeout: 30000 }); await expect(page.getByTestId('run-status')).toContainText('interrupted')
+  const missingLocal = await context.request.post(`${server.url}/api/v1/spaces/${first.space_id}/sessions/${first.session_id}/workspace/cleanup`, {
+    headers: { Origin: server.url }, data: { idempotency_key: 'missing-local-workspace' },
+  })
+  assert.equal(missingLocal.status(), 409)
+  assert.equal((await missingLocal.json()).code, 'workspace_unavailable')
   await page.getByRole('button', { name: '恢复最近已提交快照', exact: true }).click(); await expect(page.getByText('工作目录尚未确认持久化，已阻止下一轮运行。', { exact: true })).toHaveCount(0, { timeout: 15000 })
   await send('second read after restart'); await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 30000 }); await page.getByText('已读取已有文件：hello workspace', { exact: true }).last().waitFor()
   await expect(page.locator('.past-run').filter({ hasText: '已取消' })).toHaveCount(1)
@@ -132,6 +139,62 @@ try {
   const older = await (await context.request.get(messagesURL + `?before_sequence=${recent.items[0].sequence}&limit=2`)).json()
   assert.ok(older.items.length > 0 && older.items.every(m => BigInt(m.sequence) < BigInt(recent.items[0].sequence)))
   assert.equal((await context.request.get(messagesURL + '?after_sequence=0&before_sequence=0')).status(), 400)
-  assert.deepEqual(errors, []); console.log('D04 browser flow passed: real Eino/HTTP and TOS protocol fixtures, task/file/artifact/snapshot, continuous conversation, replay without execution, cancellation, SIGKILL recovery and mobile layout.')
+  await page.goto(sessionRoot)
+  const uncommitted = await send('wait for workspace cleanup fixture')
+  await page.getByText('正在等待取消或重启。', { exact: true }).waitFor()
+  const local = join(server.maintenance.directory, 'workspaces', `${first.space_id}_${uncommitted.session_id}`)
+  // Any remaining scratch file puts this workspace over the 128 MiB snapshot limit.
+  for (let i = 0; i < 64; i++) {
+    const retained = join(local, `retained-${i}.bin`)
+    await writeFile(retained, '')
+    await truncate(retained, 2 * 1024 * 1024)
+  }
+  await writeFile(join(local, 'scratch.txt'), 'temporary')
+  await writeFile(join(local, 'scratch-2.txt'), 'temporary')
+  await symlink('.', join(local, 'configs'))
+  await page.getByRole('button', { name: '取消运行', exact: true }).click()
+  const cleanupButton = page.getByRole('button', { name: '尝试Agent清理文件', exact: true })
+  await expect(cleanupButton).toBeVisible({ timeout: 30000 })
+  const prior = await (await context.request.get(`${api}/runs/${uncommitted.id}`)).json()
+  assert.equal(prior.workspace_snapshot_committed, false)
+  const sessionAPI = `${api}/sessions/${uncommitted.session_id}`
+  const userText = '帮我清理当前工作区的非产物中间文件'
+  const post = (url, data) => context.request.post(url, { headers: { Origin: server.url }, data })
+  assert.equal((await post(`${sessionAPI}/runs`, { text: userText, idempotency_key: 'blocked-normal-run' })).status(), 409)
+  await server.restart()
+  await page.reload()
+  await input.fill('保留这条草稿')
+  const cleanupWorkspace = async () => {
+    const accepting = page.waitForResponse(r => r.url().endsWith('/workspace/cleanup') && r.request().method() === 'POST')
+    await cleanupButton.click()
+    const response = await accepting
+    assert.equal(response.status(), 202, await response.text())
+    return response
+  }
+  const acceptedCleanup = await cleanupWorkspace()
+  const firstCleanup = await acceptedCleanup.json()
+  const retried = await post(`${sessionAPI}/workspace/cleanup`, acceptedCleanup.request().postDataJSON())
+  assert.equal((await retried.json()).id, firstCleanup.id)
+  await expect(page.getByTestId('run-status')).toContainText('workspace_snapshot_failed', { timeout: 30000 })
+  await expect(page.getByRole('button', { name: '发送任务', exact: true })).toBeDisabled()
+  const cleanup = await (await cleanupWorkspace()).json()
+  await expect(page.getByTestId('run-status')).toContainText('已完成', { timeout: 30000 })
+  await expect(page.locator('.chat-turn.user').getByText(userText, { exact: true })).toHaveCount(2)
+  await expect(input).toHaveValue('保留这条草稿')
+  await expect(cleanupButton).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '发送任务', exact: true })).toBeEnabled()
+  assert.equal((await (await context.request.get(`${api}/runs/${cleanup.id}`)).json()).workspace_snapshot_committed, true)
+  assert.equal((await (await context.request.get(`${api}/runs/${uncommitted.id}`)).json()).workspace_snapshot_committed, false)
+  assert.equal((await post(`${sessionAPI}/workspace/cleanup`, { idempotency_key: 'already-saved' })).status(), 409)
+  assert.equal(await readlink(join(local, 'configs')), '.')
+  const remaining = (await readdir(local)).filter(name => name !== 'configs')
+  assert.equal(remaining.length, 64)
+  assert.ok(remaining.every(name => name.startsWith('retained-')))
+  const cleanupLog = [...server.maintenance.tos.objects].find(([key]) => key.endsWith(`/${uncommitted.session_id}/session.jsonl`))[1]
+  const savedSnapshot = JSON.parse(cleanupLog.toString().trimEnd().split('\n').at(-1)).workspace_snapshot
+  assert.deepEqual(savedSnapshot.manifest.local_files, ['configs'])
+  assert.ok(savedSnapshot.manifest.entries.every(entry => entry.path !== 'configs' && !entry.path.startsWith('configs/')))
+  assert.ok([...server.maintenance.tos.objects.keys()].some(key => key.endsWith(`/${uncommitted.session_id}/workspace/${savedSnapshot.id}.tar.gz`)))
+  assert.deepEqual(errors, []); console.log('D04 browser flow passed: real Eino/HTTP and TOS protocol fixtures, task/file/artifact/snapshot, continuous conversation, cancellation, restart, workspace cleanup with a symbolic link and mobile layout.')
 } catch (e) { await mkdir('.cache', { recursive: true }); await page?.screenshot({ path: '.cache/d04-failure.png', fullPage: true }); throw e }
 finally { await browser?.close(); await server.stop() }

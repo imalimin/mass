@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/imalimin/mass/internal/domain/run"
+	"github.com/imalimin/mass/internal/domain/storage"
 )
 
 type Runner interface {
@@ -91,7 +92,7 @@ func Code(err error) string {
 	if err == nil {
 		return ""
 	}
-	for _, candidate := range []error{run.ErrSummary, run.ErrCodeTimeout, run.ErrNetworkTimeout, run.ErrUnknownEffect, run.ErrBudget, run.ErrOverflow, run.ErrCancelled, run.ErrProtocol, run.ErrTool, run.ErrUnavailable, run.ErrPermission} {
+	for _, candidate := range []error{run.ErrSummary, run.ErrCodeTimeout, run.ErrNetworkTimeout, run.ErrUnknownEffect, run.ErrBudget, run.ErrOverflow, run.ErrCancelled, run.ErrProtocol, run.ErrTool, run.ErrUnavailable, run.ErrPermission, storage.ErrWorkspace} {
 		if errors.Is(err, candidate) {
 			return candidate.Error()
 		}

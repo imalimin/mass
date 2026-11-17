@@ -93,8 +93,11 @@ func (f *FileService) Query(ctx context.Context, s run.Snapshot, kind string, in
 						if directory != "." {
 							name = path.Join(directory, name)
 						}
-						if err := checkParents(dir.Root(), name); err != nil {
-							return err
+						// A link is an enumerable entry, but cannot be opened or traversed.
+						if entry.Type()&fs.ModeSymlink == 0 {
+							if err := checkParents(dir.Root(), name); err != nil {
+								return err
+							}
 						}
 						names = append(names, name)
 						if entry.IsDir() && kind != "list_files" {
@@ -125,7 +128,8 @@ func (f *FileService) Query(ctx context.Context, s run.Snapshot, kind string, in
 				if err != nil {
 					return err
 				}
-				if hasMultipleLinks(info) || !info.IsDir() && !info.Mode().IsRegular() {
+				symlink := info.Mode()&fs.ModeSymlink != 0
+				if !symlink && (hasMultipleLinks(info) || !info.IsDir() && !info.Mode().IsRegular()) {
 					return storage.ErrWorkspace
 				}
 				if kind == "glob_files" {
@@ -133,6 +137,13 @@ func (f *FileService) Query(ctx context.Context, s run.Snapshot, kind string, in
 					if info.IsDir() || !match {
 						continue
 					}
+				}
+				if symlink {
+					if kind != "search_files" {
+						raw, _ := json.Marshal(map[string]string{"path": name, "type": "symlink"})
+						q.Items = append(q.Items, raw)
+					}
+					continue
 				}
 				if kind == "search_files" {
 					match, _ := doublestar.Match(in.PathGlob, name)

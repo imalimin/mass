@@ -3199,6 +3199,47 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/sessions/{session_id}/workspace/cleanup:
+    post:
+      operationId: submitWorkspaceCleanup
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [idempotency_key]
+              properties:
+                idempotency_key:
+                  type: string
+                  pattern: ^[A-Za-z0-9._:-]{1,128}$
+      responses:
+        '202':
+          description: Cleanup run accepted for the existing local workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeRun'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/sessions/{session_id}/workspace/restore:
     post:
       operationId: restoreWorkspace
@@ -4683,6 +4724,8 @@ components:
         snapshot_error:
           type: string
         workspace_snapshot_committed:
+          type: boolean
+        workspace_cleanup:
           type: boolean
         started_at:
           anyOf:

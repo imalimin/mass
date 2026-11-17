@@ -100,7 +100,20 @@ type Snapshot struct {
 	MapperVersion  int         `json:"mapper_version"`
 	ParserVersion  int         `json:"parser_version"`
 	CreatedAt      time.Time   `json:"created_at"`
+
+	WorkspaceCleanup bool `json:"workspace_cleanup,omitempty"`
 }
+
+func CheckWorkspaceSubmission(workspaceError string, cleanup bool) error {
+	if cleanup && workspaceError == "" {
+		return storage.ErrConflict
+	}
+	if !cleanup && workspaceError != "" {
+		return storage.ErrWorkspace
+	}
+	return nil
+}
+
 type Usage struct {
 	Input      *int64 `json:"input_tokens"`
 	Output     *int64 `json:"output_tokens"`
