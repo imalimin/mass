@@ -7,7 +7,7 @@ const step = z.object({ id: z.string(), title: z.string(), status: z.enum(['pend
 const state = z.object({
   status: z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled']), cancel_requested: z.boolean(), error: z.string(), usage,
   messages: z.array(z.object({ id: z.string(), text: z.string(), closed: z.boolean(), incomplete: z.boolean() })),
-  tools: z.array(z.object({ id: z.string(), name: z.string(), arguments: z.string(), result: z.string(), status: z.string(), standard: z.boolean() })),
+  tools: z.array(z.object({ id: z.string(), name: z.string(), arguments: z.string(), result: z.string(), status: z.string(), standard: z.boolean(), parent_message_id: z.string().optional() })),
   artifacts: z.array(z.object({ id: z.string(), space_id: z.string(), session_id: z.string(), run_id: z.string(), call_id: z.string(), object_id: z.string(), sha256: z.string(), name: z.string(), media_type: z.string(), path: z.string(), download_url: z.string() })),
   plan: z.object({ revision: z.number().int().positive(), steps: z.array(step).max(100) }).optional(),
 })

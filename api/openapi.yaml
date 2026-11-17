@@ -4826,6 +4826,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RuntimeAttachment'
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/UITool'
     RuntimeMessages:
       type: object
       additionalProperties: false
@@ -4942,6 +4946,8 @@ components:
           type: string
         standard:
           type: boolean
+        parent_message_id:
+          type: string
     UIState:
       type: object
       additionalProperties: false

@@ -1429,6 +1429,7 @@ export interface components {
             content: string;
             truncated: boolean;
             attachments?: components["schemas"]["RuntimeAttachment"][];
+            tools?: components["schemas"]["UITool"][];
         };
         RuntimeMessages: {
             items: components["schemas"]["RuntimeMessage"][];
@@ -1470,6 +1471,7 @@ export interface components {
             result: string;
             status: string;
             standard: boolean;
+            parent_message_id?: string;
         };
         UIState: {
             status: string;

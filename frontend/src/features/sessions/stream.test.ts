@@ -19,6 +19,24 @@ describe('persisted AG-UI state application', () => {
     expect(() => reduceEvent(s, { type: 'RUN_FINISHED', threadId: 'other', runId: 'r' }, 's', 'r')).toThrow()
     expect(() => reduceEvent(s, { type: 'TEXT_MESSAGE_CONTENT', messageId: 'm', delta: 'late' }, 's', 'r')).toThrow()
   })
+  it('keeps tool parent messages in order even for steps without text', () => {
+    let state = empty()
+    const events = [
+      { type: 'TEXT_MESSAGE_START', messageId: 'm1', role: 'assistant' },
+      { type: 'TEXT_MESSAGE_CONTENT', messageId: 'm1', delta: 'Inspect workspace' },
+      { type: 'TEXT_MESSAGE_END', messageId: 'm1' },
+      { type: 'TOOL_CALL_START', toolCallId: 'normal', toolCallName: 'list_files', parentMessageId: 'm1' },
+      { type: 'CUSTOM', name: 'mass.tool.status.v1', value: {
+        schemaVersion: 1, threadId: 's', runId: 'r', sourceEventIds: ['e'],
+        toolCallId: 'large', toolName: 'write_file', parentMessageId: 'm2', status: 'parameters_complete',
+      } },
+      { type: 'TEXT_MESSAGE_START', messageId: 'm3', role: 'assistant' },
+    ]
+    for (const event of events) state = reduceEvent(state, event, 's', 'r')
+    expect(state.messages.map(m => m.id)).toEqual(['m1', 'm2', 'm3'])
+    expect(state.messages[1]).toMatchObject({ text: '', closed: true })
+    expect(state.tools.map(t => [t.id, t.parent_message_id])).toEqual([['normal', 'm1'], ['large', 'm2']])
+  })
   it('restores plan progress independently from the run outcome', () => {
     const plan = { revision: 2, steps: [{ id: 'report', title: 'Create summary', status: 'completed' }] }
     const event = { type: 'CUSTOM', name: 'mass.plan.v1', value: { schemaVersion: 1, threadId: 's', runId: 'r', sourceEventIds: ['e'], plan } }

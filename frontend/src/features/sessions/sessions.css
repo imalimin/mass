@@ -71,6 +71,16 @@
 .assistant-label small { color: #85634f; margin: 0; }
 .assistant-icon { display: grid; place-items: center; width: 24px; height: 24px; color: #346b5a; background: #edf5f0; border-radius: 6px; }
 .chat-turn.assistant .chat-turn-content { padding-left: 32px; }
+.assistant-steps { display: grid; gap: 12px; }
+.assistant-step { min-width: 0; }
+.assistant-step .safe-markdown p { white-space: pre-line; overflow-wrap: anywhere; }
+.assistant-incomplete { display: block; margin-top: 4px; color: #85634f; }
+.assistant-steps .tool-activity { margin-top: 3px; color: #526660; font-size: 12px; }
+.assistant-steps .tool-activity > summary { display: flex; width: fit-content; align-items: center; gap: 8px; padding: 4px 2px; list-style: none; cursor: pointer; }
+.assistant-steps .tool-activity > summary::-webkit-details-marker { display: none; }
+.assistant-steps .tool-activity > summary::before { content: ''; width: 6px; height: 6px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); }
+.assistant-steps .tool-activity[open] > summary::before { transform: rotate(45deg); }
+.assistant-steps .tool-activity > details { margin-left: 14px; padding: 3px 0; }
 .chat-turn-content .safe-markdown > :first-child { margin-top: 0; }
 .chat-turn-content .safe-markdown > :last-child { margin-bottom: 0; }
 .chat-turn-content .safe-markdown a, .attached-file, .run-artifacts a { color: #236e58; text-decoration: underline; overflow-wrap: anywhere; }

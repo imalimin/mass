@@ -267,8 +267,9 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		}
 		type item struct {
 			run.MessageView
-			Content   string `json:"content"`
-			Truncated bool   `json:"truncated"`
+			Content   string           `json:"content"`
+			Truncated bool             `json:"truncated"`
+			Tools     []agui.ToolState `json:"tools,omitempty"`
 		}
 		result := []item{}
 		next := after
@@ -278,12 +279,14 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 				return err
 			}
 			text := string(raw)
+			var tools []agui.ToolState
 			if m.Role == "assistant" {
 				var reply run.Reply
 				if json.Unmarshal(raw, &reply) != nil {
 					return storage.ErrIntegrity
 				}
 				text = reply.Message.Content
+				tools = runtime.UI.MessageTools(m.RunID, m.ID, reply.Message.ToolCalls)
 			}
 			truncated := len(text) > 8192
 			if truncated {
@@ -292,7 +295,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 					text = text[:len(text)-1]
 				}
 			}
-			result = append(result, item{MessageView: m, Content: text, Truncated: truncated})
+			result = append(result, item{MessageView: m, Content: text, Truncated: truncated, Tools: tools})
 			next = m.Sequence
 		}
 		writeJSON(w, 200, map[string]any{"items": result, "next_after": strconv.FormatInt(next, 10), "has_more": more})

@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { agentSessionsPath } from '../../app/routes'
@@ -9,6 +9,9 @@ const Trace = lazy(() => import('../debug/Trace'))
 const SafeMarkdown = lazy(() => import('../debug/SafeMarkdown'))
 type Run = Schema['RuntimeRun']
 type Attachment = Schema['RuntimeAttachment']
+type Message = Schema['RuntimeMessage']
+type Tool = Schema['UITool']
+type Turn = { key: string; runID?: string; user?: Message; assistant: Message[] }
 type DraftMessage = { text: string; files: File[]; key: string; workspaceCleanup?: boolean }
 type SubmittedMessage = { run: Run; text: string; attachments: Attachment[] }
 const cleanupText = '帮我清理当前工作区的非产物中间文件'
@@ -223,19 +226,26 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
   }, [text, sessionID, ownsSession])
 
   const history = messages.data?.pages.slice().reverse().flatMap(page => page.items) ?? []
-  const live = new Map(stream.state?.messages.map(m => [m.id, m]))
-  const messageIDs = new Set(history.map(m => m.id))
   const runsByOrigin = new Map(sorted.map(run => [run.user_event_id, run.id]))
   const runsByID = new Map(sorted.map(run => [run.id, run]))
-  const messageRunID = (message: Schema['RuntimeMessage']) => message.run_id || runsByOrigin.get(message.source_event_id)
-  const lastMessageByRun = new Map<string, string>()
+  const turns: Turn[] = []
   for (const message of history) {
-    const id = messageRunID(message)
-    if (id && (message.content || message.attachments?.length)) lastMessageByRun.set(id, message.id)
+    const id = message.run_id || runsByOrigin.get(message.source_event_id)
+    let turn = turns.at(-1)
+    if (!turn || !id || turn.runID !== id || message.role === 'user') {
+      turn = { key: id ?? message.id, runID: id, assistant: [] }
+      turns.push(turn)
+    }
+    if (message.role === 'user') turn.user = message
+    else turn.assistant.push(message)
   }
   const showAccepted = accepted && !history.some(m => m.source_event_id === accepted.run.user_event_id)
-  const acceptedBefore = showAccepted ? history.find(m => m.run_id === accepted.run.id)?.id : undefined
-  const acceptedMessage = showAccepted && <ChatMessage role="user" text={accepted.text} attachments={accepted.attachments} space={space} />
+  if (showAccepted && !turns.some(turn => turn.runID === accepted.run.id)) {
+    turns.push({ key: accepted.run.id, runID: accepted.run.id, assistant: [] })
+  }
+  if (latest && !turns.some(turn => turn.runID === latest.id)) {
+    turns.push({ key: latest.id, runID: latest.id, assistant: [] })
+  }
   const pending = submit.isPending ? submit.variables : undefined
   const liveMessage = stream.state?.messages.some(m => m.text && !m.closed)
   const errors = [runs.error, current.error, messages.error, versions.error, submit.error, cancel.error, workspaceAction.error].filter(Boolean)
@@ -267,27 +277,23 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
           </button>
         </div>}
         {sessionID && messages.isPending && <p className="muted" role="status">正在读取消息…</p>}
-        {(!sessionID || messages.isSuccess) && !history.length && !pending && !showAccepted && !busy && !live.size &&
+        {(!sessionID || messages.isSuccess) && !history.length && !pending && !showAccepted && !busy && !stream.state?.messages.length &&
           <div className="empty-conversation"><h2>开始对话</h2>{!sessionID && agent.archived ? <p>此 Agent 已归档。</p>
             : !sessionID && versions.data?.length === 0 ? <p>请先发布 Agent 版本。</p> : null}</div>}
-        {history.map(m => {
-          const reply = live.get(m.id)
-          const body = reply && reply.text.length >= m.content.length ? reply.text : m.content
-          const id = messageRunID(m)
-          const previous = id && id !== latest?.id && lastMessageByRun.get(id) === m.id ? runsByID.get(id) : undefined
-          return <Fragment key={m.id}>
-            {acceptedBefore === m.id && acceptedMessage}
-            {(body || !!m.attachments?.length) && <ChatMessage role={m.role} text={body} live={reply} attachments={m.attachments} space={space}
-              contentID={m.truncated && body.length <= m.content.length ? m.content_id : undefined} />}
+        {turns.map(({ key, runID, user, assistant }) => {
+          const previous = runID && runID !== latest?.id ? runsByID.get(runID) : undefined
+          const draft = showAccepted && accepted.run.id === runID ? accepted : undefined
+          return <div key={key}>
+            {user && (user.content || !!user.attachments?.length) && <ChatMessage role="user" text={user.content} attachments={user.attachments} space={space}
+              contentID={user.truncated ? user.content_id : undefined} />}
+            {draft && <ChatMessage role="user" text={draft.text} attachments={draft.attachments} space={space} />}
+            <AssistantTurn space={space} messages={assistant} state={runID === latest?.id ? stream.state : null} />
             {previous && <div className="past-run">
               {previous.status !== 'succeeded' && <span>{statuses[previous.status]}{previous.error && ` · ${previous.error}`}</span>}
               <button type="button" className="text-link" onClick={() => openRun(previous.id)}>查看本轮运行</button>
             </div>}
-          </Fragment>
+          </div>
         })}
-        {!acceptedBefore && acceptedMessage}
-        {stream.state?.messages.filter(m => m.text && !messageIDs.has(m.id)).map(m =>
-          <ChatMessage key={m.id} role="assistant" text={m.text} live={m} space={space} />)}
         {latest && <>
           <div className="run-status" data-testid="run-status" role="status">
             {busy && <span className="working-dot" aria-hidden="true" />}
@@ -384,9 +390,7 @@ function ChatMessage({ role, text, live, attachments, space, contentID, pending 
   return <article className={`chat-turn ${role}`}>
     {role === 'assistant' && <div className="assistant-label"><span className="assistant-icon" aria-hidden="true">✦</span><strong>助手</strong>{live?.incomplete && <small>输出未完成</small>}</div>}
     <div className="chat-turn-content">
-      {text && (role === 'user' || live && (!live.closed || live.incomplete)
-        ? <div className="chat-plain">{text}{live && !live.closed && !live.incomplete && <span className="typing-cursor" aria-hidden="true" />}</div>
-        : <Suspense fallback={<div className="chat-plain">{text}</div>}><SafeMarkdown text={text} showSource={false} /></Suspense>)}
+      <MessageText text={text} plain={role === 'user'} live={live} />
       {attachments?.map(a => <a className="attached-file" key={a.id} href={`/api/v1/spaces/${space}/payloads/${a.ref.object_id}`} download>{a.name}</a>)}
       {contentID && <a className="attached-file" href={`/api/v1/spaces/${space}/payloads/${contentID}`} download>下载完整内容</a>}
       {pending && <small>正在发送…</small>}
@@ -394,24 +398,103 @@ function ChatMessage({ role, text, live, attachments, space, contentID, pending 
   </article>
 }
 
-function RunActivity({ state }: { state: Schema['UIState'] | null }) {
+function MessageText({ text, plain, live }: { text: string; plain?: boolean; live?: Schema['UIMessage'] }) {
+  if (!text) return null
+  if (plain || live && (!live.closed || live.incomplete)) {
+    return <div className="chat-plain">{text}{live && !live.closed && !live.incomplete && <span className="typing-cursor" aria-hidden="true" />}</div>
+  }
+  return <Suspense fallback={<div className="chat-plain">{text}</div>}><SafeMarkdown text={text} showSource={false} /></Suspense>
+}
+
+function AssistantTurn({ space, messages, state }: { space: string; messages: Message[]; state: Schema['UIState'] | null }) {
+  const positions = new Map(messages.map((message, index) => [message.id, index]))
+  const liveTools = new Map(state?.tools.map(tool => [tool.id, tool]))
+  const toolsByMessage = new Map<string, Tool[]>()
+  for (const tool of liveTools.values()) {
+    if (!tool.parent_message_id) continue
+    const tools = toolsByMessage.get(tool.parent_message_id) ?? []
+    tools.push(tool)
+    toolsByMessage.set(tool.parent_message_id, tools)
+  }
+  const attached = new Set<string>()
+  const steps: { id: string; text: string; live?: Schema['UIMessage']; contentID?: string; tools: Tool[] }[] = []
+  const addStep = (message?: Message, live?: Schema['UIMessage']) => {
+    const id = live?.id ?? message?.id
+    if (!id) return
+    const saved = message?.content ?? ''
+    const text = live && live.text.length >= saved.length ? live.text : saved
+    const contentID = message?.truncated && text.length <= saved.length ? message.content_id : undefined
+    const tools = new Map(message?.tools?.map(tool => [tool.id, tool]))
+    for (const tool of toolsByMessage.get(id) ?? []) {
+      if (!tools.has(tool.id)) tools.set(tool.id, tool)
+    }
+    const calls = [...tools.values()].map(tool => {
+      attached.add(tool.id)
+      const active = liveTools.get(tool.id)
+      return active ? { ...active, arguments: active.arguments || tool.arguments, result: active.result || tool.result } : tool
+    })
+    if (!text && !contentID) {
+      if (!calls.length) return
+      const previous = steps.at(-1)
+      if (previous) {
+        previous.tools.push(...calls)
+        return
+      }
+    }
+    steps.push({ id, text, live, contentID, tools: calls })
+  }
+
+  // Merge by message ID before grouping textless tool steps. History may start mid-run.
+  let next = 0
+  for (const live of state?.messages ?? []) {
+    const position = positions.get(live.id)
+    if (position === undefined) addStep(undefined, live)
+    else {
+      while (next < position) addStep(messages[next++])
+      addStep(messages[next++], live)
+    }
+  }
+  while (next < messages.length) addStep(messages[next++])
+  const unattached = [...liveTools.values()].filter(tool => !attached.has(tool.id))
+  if (!steps.length && !unattached.length) return null
+
+  return <article className="chat-turn assistant">
+    <div className="assistant-label"><span className="assistant-icon" aria-hidden="true">✦</span><strong>助手</strong></div>
+    <div className="chat-turn-content assistant-steps">
+      {steps.map(step => <div key={step.id} className="assistant-step">
+        <MessageText text={step.text} live={step.live} />
+        {step.live?.incomplete && <small className="assistant-incomplete">输出未完成</small>}
+        {step.contentID && <a className="attached-file" href={`/api/v1/spaces/${space}/payloads/${step.contentID}`} download>下载完整内容</a>}
+        <ToolActivity tools={step.tools} />
+      </div>)}
+      <ToolActivity tools={unattached} />
+    </div>
+  </article>
+}
+
+function ToolActivity({ tools }: { tools: Tool[] }) {
   const [limit, setLimit] = useState(50)
-  if (!state || !state.plan && !state.tools.length && !state.artifacts.length) return null
+  if (!tools.length) return null
+  return <details className="tool-activity">
+    <summary>工具调用 · {tools.length}</summary>
+    {tools.length > limit && <button className="secondary" onClick={() => setLimit(n => n + 50)}>显示更早的工具调用</button>}
+    {tools.slice(-limit).map(t => <details key={t.id}>
+      <summary>{t.name} · {toolStatuses[t.status] ?? t.status}</summary>
+      {t.standard ? <pre>{t.arguments}</pre> : <p className="muted">完整参数可在运行详情的 Trace 中查看。</p>}
+      {t.result && <pre>{t.result}</pre>}
+    </details>)}
+  </details>
+}
+
+function RunActivity({ state, showTools }: { state: Schema['UIState'] | null; showTools?: boolean }) {
+  if (!state || !state.plan && !state.artifacts.length && !(showTools && state.tools.length)) return null
   return <div className="run-output">
     {state.plan && <aside aria-label="当前运行计划" className="run-plan"><strong>任务计划 · 修订 {state.plan.revision}</strong>
       <ol>{state.plan.steps.map(step => <li key={step.id}>
         <span>{({ pending: '待处理', in_progress: '进行中', completed: '已完成', skipped: '已跳过' })[step.status]}</span> · {step.title}
       </li>)}</ol>
     </aside>}
-    {state.tools.length > 0 && <details className="tool-activity">
-      <summary>工具调用 · {state.tools.length}</summary>
-      {state.tools.length > limit && <button className="secondary" onClick={() => setLimit(n => n + 50)}>显示更早的工具调用</button>}
-      {state.tools.slice(-limit).map(t => <details key={t.id}>
-        <summary>{t.name} · {toolStatuses[t.status] ?? t.status}</summary>
-        {t.standard ? <pre>{t.arguments}</pre> : <p className="muted">完整参数可在运行详情的 Trace 中查看。</p>}
-        {t.result && <pre>{t.result}</pre>}
-      </details>)}
-    </details>}
+    {showTools && <ToolActivity tools={state.tools} />}
     {state.artifacts.length > 0 && <div className="run-artifacts">{state.artifacts.map(a => <a key={a.id} href={a.download_url} download>{a.name} ↓</a>)}</div>}
   </div>
 }
@@ -449,7 +532,7 @@ function RunDetails({ space, session, chosenRun, runs, current, onSelect, onClos
       {historical.error && <p role="alert">{historical.error}</p>}
       {selected.id !== current?.id && state?.messages.filter(m => m.incomplete && m.text).map(m =>
         <ChatMessage key={m.id} role="assistant" text={m.text} live={m} space={space} />)}
-      {selected.id !== current?.id && <RunActivity key={selected.id} state={state} />}
+      {selected.id !== current?.id && <RunActivity key={selected.id} state={state} showTools />}
       <Suspense fallback={<p role="status">正在载入 Trace…</p>}><Trace key={selected.id} space={space} runID={selected.id} /></Suspense>
     </>}
   </dialog>

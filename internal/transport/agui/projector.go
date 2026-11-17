@@ -21,12 +21,13 @@ type MessageState struct {
 	Incomplete bool   `json:"incomplete"`
 }
 type ToolState struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-	Result    string `json:"result"`
-	Status    string `json:"status"`
-	Standard  bool   `json:"standard"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Arguments       string `json:"arguments"`
+	Result          string `json:"result"`
+	Status          string `json:"status"`
+	Standard        bool   `json:"standard"`
+	ParentMessageID string `json:"parent_message_id,omitempty"`
 }
 type State struct {
 	Plan            *run.Plan      `json:"plan,omitempty"`
@@ -74,6 +75,45 @@ type Projector struct {
 	Live         *Live
 	ResponseText func(context.Context, string, string, string) (string, error)
 	ToolState    func(string, string) trace.Tool
+}
+
+func newToolState(call run.Call, messageID string) ToolState {
+	t := ToolState{ID: call.ID, Name: call.Name, ParentMessageID: messageID, Status: "parameters_complete"}
+	if call.Arguments != "" && len(call.Arguments) <= 8192 {
+		t.Standard, t.Arguments = true, call.Arguments
+	}
+	return t
+}
+
+func toolPreview(raw json.RawMessage) (preview, effect string) {
+	if len(raw) == 0 {
+		return "", ""
+	}
+	var result run.ToolResult
+	json.Unmarshal(raw, &result)
+	if len(raw) > 4096 {
+		raw, _ = json.Marshal(map[string]any{"status": result.Status, "truncated": true, "side_effect": result.SideEffect})
+	}
+	return string(raw), result.SideEffect
+}
+
+func (p *Projector) MessageTools(runID, messageID string, calls []run.Call) []ToolState {
+	if len(calls) == 0 {
+		return nil
+	}
+	tools := make([]ToolState, 0, len(calls))
+	for _, call := range calls {
+		t := newToolState(call, messageID)
+		if p.ToolState != nil {
+			state := p.ToolState(runID, call.ID)
+			if state.Status != "" {
+				t.Status = state.Status
+			}
+			t.Result, _ = toolPreview(state.Result)
+		}
+		tools = append(tools, t)
+	}
+	return tools
 }
 
 func (p *Projector) CatchUp(ctx context.Context, actor, space, runID string) (Checkpoint, error) {
@@ -142,16 +182,7 @@ func (p *Projector) CatchUp(ctx context.Context, actor, space, runID string) (Ch
 					continue
 				}
 				data := journal.ToolData{CallID: tool.CallID, Status: tool.Status}
-				if len(tool.Result) > 0 {
-					var result run.ToolResult
-					json.Unmarshal(tool.Result, &result)
-					data.SideEffect = result.SideEffect
-					data.Preview = string(tool.Result)
-					if len(tool.Result) > 4096 {
-						preview, _ := json.Marshal(map[string]any{"status": result.Status, "truncated": true, "side_effect": result.SideEffect})
-						data.Preview = string(preview)
-					}
-				}
+				data.Preview, data.SideEffect = toolPreview(tool.Result)
 				event := journal.New(actor, liveToolEvent, runID, data)
 				event.EventID = tool.CallID
 				updates = append(updates, journal.Event{Proposed: event, Sequence: next.Source})
@@ -352,15 +383,18 @@ func Map(old Checkpoint, runID string, input []journal.Event) (Checkpoint, []Fra
 					m.Closed = true
 				}
 			}
+			if len(d.Calls) > 0 {
+				// Tool-only model responses still anchor their calls in the conversation.
+				message(d.MessageID).Closed = true
+			}
 			for _, call := range d.Calls {
-				t := ToolState{ID: call.ID, Name: call.Name, Status: "parameters_complete", Arguments: call.Arguments, Standard: call.Arguments != "" && len(call.Arguments) <= 8192}
+				t := newToolState(call, d.MessageID)
 				if t.Standard {
 					emit(events.NewToolCallStartEvent(call.ID, call.Name, events.WithParentMessageID(d.MessageID)))
 					emit(events.NewToolCallArgsEvent(call.ID, call.Arguments))
 					emit(events.NewToolCallEndEvent(call.ID))
 				} else {
-					t.Arguments = ""
-					custom("mass.tool.status.v1", map[string]any{"toolCallId": call.ID, "toolName": call.Name, "status": "parameters_complete", "truncated": true, "payloadRef": d.ContentID})
+					custom("mass.tool.status.v1", map[string]any{"toolCallId": call.ID, "toolName": call.Name, "parentMessageId": d.MessageID, "status": "parameters_complete", "truncated": true, "payloadRef": d.ContentID})
 				}
 				cp.State.Tools = append(cp.State.Tools, t)
 			}
