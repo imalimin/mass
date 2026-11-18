@@ -6,6 +6,11 @@ export async function startModelFixture() {
   let calls = 0
   const requests = []
   const server = createServer(async (req, res) => {
+    if (req.url === '/tools-network-probe') { res.writeHead(200); res.end('{}'); return }
+    if (req.url.startsWith('/tools-network-drop?')) {
+      for await (const chunk of req) { /* Consume the request before dropping the connection. */ }
+      req.socket.end(); return
+    }
     if (req.method === 'POST' && req.url === '/tools-input') {
       let value = ''; for await (const b of req) value += b
       res.writeHead(value === '10' ? 201 : 400, { 'Content-Type': 'application/json' }); res.end('{"accepted":true}'); return
@@ -35,7 +40,19 @@ export async function startModelFixture() {
     }
     const sha = createHash('sha256').update('hello workspace').digest('hex')
     let name, args
-    if (task.startsWith('D05')) {
+    if (task.startsWith('network failure ')) {
+      if (count === 0) {
+        const origin = `http://127.0.0.1:${server.address().port}`
+        const large = task === 'network failure GET excerpt'
+        const code = `${large ? 'host("net.request", {"url": input["probe"]})\nlog("x" * 8000)\n' : ''}return host("net.request", {"url": input["url"], "method": input["method"], "headers": {"Authorization": "Bearer fixture-request-secret"}})`
+        name = 'run_code'
+        args = { language: 'python', code, input: { url: `${origin}/tools-network-drop?token=fixture-query-secret`, method: task.endsWith('POST') ? 'POST' : 'GET', probe: `${origin}/tools-network-probe` } }
+      } else {
+        frame({ role: 'assistant', content: '模型已收到网络错误并继续。' }, 'stop', usage)
+        res.end('data: [DONE]\n\n'); return
+      }
+    }
+    else if (task.startsWith('D05')) {
       const results = messages.slice(index + 1).filter(m => m.role === 'tool').map(m => JSON.parse(m.content))
       const failed = results.find(r => r.status !== 'completed'); if (failed) throw new Error(`D05 tool failed: ${JSON.stringify(failed)}`)
       const data = i => results[i]?.data ?? {}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 )
@@ -26,13 +27,15 @@ type codeHost struct {
 	service                   *CodeService
 	ctx                       context.Context
 	s                         run.Snapshot
+	callID                    string
 	sequence, files, requests int
 	inputs, outputs           int64
 	effect                    string
 	networkTimedOut           bool
+	networkFailure            *run.NetworkFailure
 }
 
-func (c *CodeService) Run(ctx context.Context, s run.Snapshot, input run.CodeInput) (run.ToolResult, error) {
+func (c *CodeService) Run(ctx context.Context, s run.Snapshot, callID string, input run.CodeInput) (run.ToolResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(s.Definition.ToolPolicy.TimeoutMS)*time.Millisecond)
 	defer cancel()
 	if err := c.Files.Check(ctx, s); err != nil {
@@ -41,7 +44,7 @@ func (c *CodeService) Run(ctx context.Context, s run.Snapshot, input run.CodeInp
 	if int64(len(input.Input)+len(input.Code)) > s.Definition.ToolPolicy.MaxInputBytes {
 		return run.ToolResult{}, run.ToolFailure("code_input_limit", "none")
 	}
-	host := &codeHost{service: c, ctx: ctx, s: s, effect: "none", inputs: int64(len(input.Input) + len(input.Code))}
+	host := &codeHost{service: c, ctx: ctx, s: s, callID: callID, effect: "none", inputs: int64(len(input.Input) + len(input.Code))}
 	output, actionErr := c.Engine.Execute(ctx, input, host, s.Definition.ToolPolicy)
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(actionErr, context.DeadlineExceeded) {
 		output.Error = run.ErrCodeTimeout.Error()
@@ -60,7 +63,11 @@ func (c *CodeService) Run(ctx context.Context, s run.Snapshot, input run.CodeInp
 	if output.Value == nil {
 		output.Value = json.RawMessage(`null`)
 	}
-	result := dataResult(map[string]any{"value": output.Value, "logs": output.Logs, "logs_complete": output.LogsComplete, "error": output.Error, "error_detail": output.Detail, "io_count": host.sequence, "io_complete": true, "engine_version": output.Engine}, host.effect)
+	data := map[string]any{"value": output.Value, "logs": output.Logs, "logs_complete": output.LogsComplete, "error": output.Error, "error_detail": output.Detail, "io_count": host.sequence, "io_complete": true, "engine_version": output.Engine}
+	if host.networkFailure != nil {
+		data["network_failure"] = host.networkFailure
+	}
+	result := dataResult(data, host.effect)
 	if output.Error != "" || actionErr != nil {
 		result.Status = "failed"
 		result.Error = output.Error
@@ -152,6 +159,14 @@ func (h *codeHost) perform(name string, args any) (result run.ToolResult, err er
 			return result, run.ToolFailure("code_output_limit", "none")
 		}
 		data, effect, e := h.service.Network.Request(ctx, m, maximum, func(ctx context.Context) error { return f.Check(ctx, s) })
+		var requestErr *networkRequestError
+		if errors.As(e, &requestErr) {
+			failure := requestErr.NetworkFailure
+			failure.RequestNo = h.requests
+			h.networkFailure = &failure
+			diagnostic.Record(ctx, "warn", "tool.network_request_failed", "call_id=%s request_no=%d method=%s host=%q phase=%s code=%s cause=%s side_effect=%s",
+				h.callID, failure.RequestNo, failure.Method, failure.Host, failure.Phase, failure.Code, failure.Cause, failure.SideEffect)
+		}
 		result := dataResult(data, effect)
 		if data != nil {
 			result.Complete, _ = data["complete"].(bool)

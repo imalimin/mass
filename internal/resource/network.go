@@ -2,6 +2,7 @@ package resource
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -12,11 +13,20 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 )
 
 type Network struct{ Client *http.Client }
+
+type networkRequestError struct {
+	run.NetworkFailure
+	err error
+}
+
+func (e *networkRequestError) Error() string { return e.Code }
+func (e *networkRequestError) Unwrap() error { return e.err }
 
 func sensitiveHeader(name string) bool {
 	name = strings.ToLower(name)
@@ -106,13 +116,19 @@ func (n *Network) Request(ctx context.Context, args map[string]any, maximum int6
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		if networkTimedOut(err) {
-			if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
-				return nil, "none", run.ErrNetworkTimeout
-			}
-			return nil, "unknown", run.ErrNetworkTimeout
+		effect := "unknown"
+		if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
+			effect = "none"
 		}
-		return nil, "unknown", run.ToolFailure("network_request_failed", "unknown")
+		failure := run.NetworkFailure{Method: method, Host: u.Hostname(), Phase: "request", Code: "network_request_failed", Cause: networkCause(err), SideEffect: effect}
+		if response != nil {
+			failure.Phase, failure.HTTPStatus = "redirect", response.StatusCode
+		}
+		classified := run.ToolFailure(failure.Code, effect)
+		if networkTimedOut(err) {
+			failure.Code, classified = run.ErrNetworkTimeout.Error(), run.ErrNetworkTimeout
+		}
+		return nil, effect, &networkRequestError{NetworkFailure: failure, err: classified}
 	}
 	defer response.Body.Close()
 	raw, readErr := io.ReadAll(io.LimitReader(storage.ContextReader{Context: ctx, Reader: response.Body}, maximum+1))
@@ -149,6 +165,34 @@ func (n *Network) Request(ctx context.Context, args map[string]any, maximum int6
 		return data, "committed", err
 	}
 	return data, "committed", nil
+}
+
+func networkCause(err error) string {
+	var dns *net.DNSError
+	var certificate *tls.CertificateVerificationError
+	var record tls.RecordHeaderError
+	var alert tls.AlertError
+	switch {
+	case errors.As(err, &dns):
+		if dns.IsNotFound {
+			return "dns_not_found"
+		}
+		if dns.Timeout() {
+			return "dns_timeout"
+		}
+		return "dns_error"
+	case errors.As(err, &certificate):
+		return "tls_certificate_error"
+	case errors.As(err, &record), errors.As(err, &alert):
+		return "tls_protocol_error"
+	case errors.Is(err, io.EOF):
+		return "connection_closed"
+	default:
+		if cause := diagnostic.Cause(err); cause != "unknown" {
+			return cause
+		}
+		return "transport_error"
+	}
 }
 
 func networkTimedOut(err error) bool {

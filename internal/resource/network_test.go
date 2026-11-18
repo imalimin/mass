@@ -2,11 +2,16 @@ package resource_test
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -14,6 +19,10 @@ import (
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/resource"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestNetworkStatusLimitsRedirectAndAuthorization(t *testing.T) {
 	count := atomic.Int32{}
@@ -102,7 +111,7 @@ func TestCodeReportsHTTPClientTimeout(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			input := run.CodeInput{Language: "javascript", Code: tc.script, Input: []byte("\"" + server.URL + "\"")}
-			result, err := code.Run(context.Background(), snapshot, input)
+			result, err := code.Run(context.Background(), snapshot, "call-timeout", input)
 			if result.Status != tc.status || result.SideEffect != tc.effect {
 				t.Fatalf("unexpected tool result: status=%q effect=%q error=%v", result.Status, result.SideEffect, err)
 			}
@@ -112,6 +121,48 @@ func TestCodeReportsHTTPClientTimeout(t *testing.T) {
 				}
 			} else if err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCodeReportsClassifiedNetworkFailure(t *testing.T) {
+	files, snapshot, _ := fileFixture(t)
+	snapshot.Definition.ToolPolicy = run.ToolPolicy{
+		TimeoutMS: 5000, MaxCodeBytes: 1024, MaxInputBytes: 1024, MaxOutputBytes: 1024,
+		MaxNetworkRequests: 1, MaxNetworkBodyBytes: 1024,
+	}
+	for _, tc := range []struct {
+		method, effect, cause string
+		err                   error
+	}{
+		{"HEAD", "none", "dns_not_found", &net.DNSError{IsNotFound: true}},
+		{"OPTIONS", "none", "tls_certificate_error", &tls.CertificateVerificationError{Err: errors.New("fixture-certificate-secret")}},
+		{"PUT", "unknown", "connection_reset", fmt.Errorf("fixture-transport-secret: %w", syscall.ECONNRESET)},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			code := &resource.CodeService{Files: files, Engine: &javascript.Runner{MaxConcurrent: 1}, Network: &resource.Network{
+				Client: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					if r.Method != tc.method {
+						t.Errorf("request method = %s, want %s", r.Method, tc.method)
+					}
+					return nil, tc.err
+				})},
+			}}
+			input := run.CodeInput{Language: "javascript", Code: "return net.request(input);", Input: json.RawMessage(fmt.Sprintf(`{"method":%q,"url":"https://fixture.example/path?token=fixture-query-secret"}`, tc.method))}
+			result, err := code.Run(context.Background(), snapshot, "call-network", input)
+			if err != nil || result.Status != "failed" || result.SideEffect != tc.effect {
+				t.Fatalf("unexpected result: status=%s effect=%s err=%v", result.Status, result.SideEffect, err)
+			}
+			var data struct {
+				Failure run.NetworkFailure `json:"network_failure"`
+			}
+			if err := json.Unmarshal(result.Data, &data); err != nil {
+				t.Fatal(err)
+			}
+			want := run.NetworkFailure{RequestNo: 1, Method: tc.method, Host: "fixture.example", Phase: "request", Code: "network_request_failed", Cause: tc.cause, SideEffect: tc.effect}
+			if data.Failure != want || strings.Contains(string(result.Data), "-secret") {
+				t.Fatalf("unexpected model-facing diagnostics: %s", result.Data)
 			}
 		})
 	}

@@ -310,7 +310,7 @@ func TestFileToolsReportSymlinksWithoutFollowing(t *testing.T) {
 
 	s.Definition.ToolPolicy = run.ToolPolicy{TimeoutMS: 5000, MaxCodeBytes: 1024, MaxInputBytes: 1024, MaxOutputBytes: 4096, MaxFileOperations: 1}
 	code := &resource.CodeService{Files: f, Engine: &javascript.Runner{MaxConcurrent: 1}}
-	result, err := code.Run(ctx, s, run.CodeInput{Language: "javascript", Code: "return fs.list();", Input: json.RawMessage("null")})
+	result, err := code.Run(ctx, s, "call-list", run.CodeInput{Language: "javascript", Code: "return fs.list();", Input: json.RawMessage("null")})
 	if err != nil || result.Status != "completed" || result.SideEffect != "none" {
 		t.Fatalf("fs.list: result=%+v err=%v", result, err)
 	}

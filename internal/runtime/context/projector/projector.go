@@ -327,6 +327,14 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 						return result, storage.ErrIntegrity
 					}
 					fields := map[string]any{"status": tr.Status, "side_effect": tr.SideEffect, "error": tr.Error, "complete": tr.Complete, "excerpt": prefix(string(tr.Data), ExcerptBytes), "truncated": true}
+					if run.CodeLanguage(call.Name) != "" {
+						var data struct {
+							NetworkFailure *run.NetworkFailure `json:"network_failure"`
+						}
+						if json.Unmarshal(tr.Data, &data) == nil && data.NetworkFailure != nil {
+							fields["network_failure"] = data.NetworkFailure
+						}
+					}
 					if durable {
 						fields["original_content_id"] = td.ContentID
 					}

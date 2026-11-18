@@ -84,6 +84,19 @@ type CodeOutput struct {
 	Error        string            `json:"error,omitempty"`
 	LogsComplete bool              `json:"logs_complete"`
 }
+
+// NetworkFailure describes the most recent failed HTTP request within a code tool call.
+type NetworkFailure struct {
+	RequestNo  int    `json:"request_no"`
+	Method     string `json:"method"`
+	Host       string `json:"host"`
+	Phase      string `json:"phase"`
+	Code       string `json:"code"`
+	Cause      string `json:"cause"`
+	SideEffect string `json:"side_effect"`
+	HTTPStatus int    `json:"http_status,omitempty"`
+}
+
 type ToolError struct {
 	Code   string
 	Effect string

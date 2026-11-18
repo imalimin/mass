@@ -56,6 +56,7 @@ TOS 使用同一个会话目录。宿主在 `<runtime.workspace_temp_root>/.sess
 | `model.stream_limit_exceeded` | Eino 适配器检测到单次模型响应超出分片限制时 | `attempt_id`、收到的分片数、累计序列化字节数、两个门限及实际触发项。两个计数都包含触发检查的分片，字节按 `json.Marshal(chunk)` 口径计算 |
 | `model.attempt_failed` | 模型凭证解析、请求、流读取或协议校验失败时，在返回通用错误码前记录 | `attempt_id`、失败阶段和分类后的实际错误。已收到 HTTP 状态或供应商请求 ID 时一并记录 |
 | `tool.execution_failed` | 工具失败将中止 Run、被归并为通用 `tool_failed`，或被判为 `side_effect: unknown` 时 | 工具名、`call_id`、失败阶段、可确认的错误原因和副作用分类。工具结果超限时记录实际字节数和门限 |
+| `tool.network_request_failed` | 代码工具内的 HTTP 请求未能取得可用响应时 | `call_id`、请求序号、方法、主机名、阶段、分类后的错误和副作用。工具结果中的 `network_failure` 保留最近一次失败的这些信息，投影截取长结果时仍会传给模型 |
 | `workspace.operation_failed` | 工作区恢复、文件写入配额检查、快照打包、归档上传、清单保存或快照提交失败时 | 操作阶段和实际错误码。工作区超限时在检查点记录参与归档的累计字节、触发条目的字节数和有效上限 |
 | `session.persist_failed` | 保存 `session.jsonl`、上传会话对象或更新 Run 终态索引失败时 | 失败环节、本次需要提交的会话记录位置，以及可取得的存储或数据库错误码 |
 

@@ -72,6 +72,40 @@ try {
     assert.equal(commands[0].result.data.stderr, 'problem')
     console.log('Host command browser flow passed: Agent opt-in, failure details, workspace artifact and session JSONL.')
   }
+  for (const [task, method, requestNo, effect] of [
+    ['network failure GET', 'GET', 1, 'none'],
+    ['network failure GET excerpt', 'GET', 2, 'committed'],
+    ['network failure POST', 'POST', 1, 'unknown'],
+  ]) {
+    const priorCalls = server.modelCalls()
+    const sessionBase = `${server.url}/api/v1/spaces/${run.space_id}/sessions/${run.session_id}`
+    const accepted = await context.request.post(`${sessionBase}/runs`, { headers: { Origin: server.url }, data: { text: task, idempotency_key: task.replaceAll(' ', '-') } })
+    assert.equal(accepted.status(), 202, await accepted.text())
+    const { id } = await accepted.json()
+    const runURL = `${server.url}/api/v1/spaces/${run.space_id}/runs/${id}`
+    await expect.poll(async () => (await (await context.request.get(runURL)).json()).status, { timeout: 30000 }).toBe(method === 'POST' ? 'failed' : 'succeeded')
+    const requests = server.modelRequests().slice(priorCalls)
+    if (method === 'POST') {
+      assert.equal(requests.length, 1)
+      assert.equal((await (await context.request.get(runURL)).json()).error, 'tool_effect_unknown')
+    } else {
+      assert.equal(requests.length, 2)
+      const raw = requests[1].messages.at(-1)
+      assert.equal(raw.role, 'tool')
+      assert.doesNotMatch(raw.content, /fixture-query-secret|fixture-request-secret/)
+      const result = JSON.parse(raw.content)
+      const failure = result.data?.network_failure ?? result.network_failure
+      assert.equal(result.status, 'failed')
+      assert.equal(result.side_effect, effect)
+      assert.deepEqual(failure, { request_no: requestNo, method, host: '127.0.0.1', phase: 'request', code: 'network_request_failed', cause: 'connection_closed', side_effect: 'none' })
+      if (requestNo === 2) assert.equal(result.truncated, true)
+    }
+    await expect.poll(async () => {
+      const response = await context.request.get(`${server.url}/api/v1/diagnostic-logs?run_id=${id}`)
+      assert.equal(response.status(), 200)
+      return (await response.text()).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).find(row => row.event === 'tool.network_request_failed')?.msg
+    }, { timeout: 15000 }).toMatch(new RegExp(`^call_id=[a-f0-9-]+ request_no=${requestNo} method=${method} host="127\\.0\\.0\\.1" phase=request code=network_request_failed cause=connection_closed side_effect=${method === 'POST' ? 'unknown' : 'none'}$`))
+  }
   assert.deepEqual(errors, []); console.log('D05 browser passed: all 14 tools through actual Eino/HTTP, accepted attachment and fixed Skill, JS file/network/CSV IO, plan, immutable artifact after deletion, replay without execution and mobile layout.')
 } catch (e) { await mkdir('.cache', { recursive: true }); await page?.screenshot({ path: '.cache/d05-failure.png', fullPage: true }); throw e }
 finally { await browser?.close(); await server.stop() }
