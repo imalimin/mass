@@ -15,6 +15,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	jschema "github.com/eino-contrib/jsonschema"
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 )
 
@@ -71,16 +72,18 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 	if t.Fake != nil {
 		observation.Component = "eino-fake"
 	}
+	stage, underlying := "request", ""
 	defer func() {
 		observation.DurationMS = time.Since(started).Milliseconds()
 		reply.Observation = observation
 		if t.Fake == nil {
-			observation.HTTPStatus, reply.Usage, reply.Trace.UsagePresent, reply.Trace.ReasoningTokens = wire.observation()
+			observation.HTTPStatus, reply.Usage, reply.Trace.UsagePresent, reply.Trace.ReasoningTokens, reply.Trace.ProviderRequestID = wire.observation()
 		}
 		status := observation.HTTPStatus
 		if retErr != nil && (status == 429 || status == 502 || status == 503 || status == 504) {
 			retErr = &run.ModelFailure{Code: "model_http_failed", Status: status, Retryable: true}
 		}
+		retErr = diagnostic.ModelFailed(ctx, retErr, stage, p.Spec.Purpose, status, reply.Trace.ProviderRequestID, underlying)
 	}()
 
 	if t.Fake != nil {
@@ -101,6 +104,7 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 		client := &http.Client{Transport: capture, Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		created, err := ark.NewChatModel(ctx, &ark.ChatModelConfig{APIKey: key, Model: s.Definition.Model.ModelID, BaseURL: s.Definition.Model.Endpoint, HTTPClient: client, RetryTimes: &zero, MaxTokens: &output, Temperature: &temperature})
 		if err != nil {
+			underlying = diagnostic.Cause(err)
 			return reply, run.ErrProtocol
 		}
 		chat = created
@@ -108,14 +112,17 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 	if len(tools) > 0 {
 		bound, err := chat.WithTools(tools)
 		if err != nil {
+			underlying = diagnostic.Cause(err)
 			return reply, run.ErrProtocol
 		}
 		chat = bound
 	}
 	stream, err := chat.Stream(ctx, messages)
 	if err != nil {
+		underlying = diagnostic.Cause(err)
 		return reply, errors.New("model_transport_failed")
 	}
+	stage = "stream"
 	defer stream.Close()
 	chunks := make([]*schema.Message, 0, 32)
 	var text, reasoning strings.Builder
@@ -134,6 +141,7 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 			}
 		}
 	}()
+	const maxChunks, maxBytes = 10000, 4 << 20
 	size := 0
 	for {
 		chunk, err := stream.Recv()
@@ -141,15 +149,27 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 			break
 		}
 		if err != nil {
+			underlying = diagnostic.Cause(err)
 			return reply, errors.New("model_stream_failed")
 		}
 		if chunk == nil {
+			stage = "protocol"
 			return reply, run.ErrProtocol
 		}
 		raw, _ := json.Marshal(chunk)
 		size += len(raw)
-		if size > 4<<20 || len(chunks) >= 10000 {
-			return reply, run.ErrOverflow
+		count := len(chunks) + 1
+		if count > maxChunks || size > maxBytes {
+			trigger := "chunks"
+			if size > maxBytes {
+				trigger = "bytes"
+				if count > maxChunks {
+					trigger = "both"
+				}
+			}
+			return reply, diagnostic.Failure(ctx, "model.stream_limit_exceeded", run.ErrOverflow,
+				"attempt_id=%s received_chunks=%d max_chunks=%d serialized_chunk_bytes=%d max_serialized_chunk_bytes=%d trigger=%s",
+				diagnostic.Attempt(ctx), count, maxChunks, size, maxBytes, trigger)
 		}
 		chunks = append(chunks, chunk)
 		text.WriteString(chunk.Content)
@@ -163,10 +183,12 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 				observation.FirstTokenMS = &ms
 			}
 			if err = delta(chunk.Content); err != nil {
+				stage = "protocol"
 				return reply, err
 			}
 		}
 	}
+	stage = "protocol"
 	if t.Fake == nil && !wire.complete() {
 		return reply, run.ErrProtocol
 	}

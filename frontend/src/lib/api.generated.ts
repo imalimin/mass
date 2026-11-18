@@ -726,6 +726,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/diagnostic-logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Supply exactly one run_id or session_id. Run lookup returns only rows for that run. An authorized session with no uploaded rows returns an empty body. */
+        get: operations["getSessionDiagnosticLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/spaces/{space_id}/runs/{run_id}/trace": {
         parameters: {
             query?: never;
@@ -5075,6 +5092,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunDiagnostics"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getSessionDiagnosticLogs: {
+        parameters: {
+            query?: {
+                run_id?: components["schemas"]["ShortResourceID"];
+                session_id?: components["schemas"]["ShortResourceID"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Uploaded session diagnostic records, one JSON object per line. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-ndjson": string;
                 };
             };
             /** @description Request rejected or dependency unavailable. */

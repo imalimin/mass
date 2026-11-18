@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 )
@@ -91,7 +92,7 @@ func (f *FileService) checkWrite(ctx context.Context, root *os.Root, target stri
 		entries[folded] = name
 		if regular && !local && name != target {
 			if info.Size() > f.Limits.MaxTotalBytes-total {
-				return run.ErrOverflow
+				return diagnostic.Failure(ctx, "workspace.operation_failed", run.ErrOverflow, "stage=write limit=workspace_bytes accumulated_bytes=%d entry_bytes=%d max_bytes=%d", total, info.Size(), f.Limits.MaxTotalBytes)
 			}
 			total += info.Size()
 		}
@@ -101,7 +102,7 @@ func (f *FileService) checkWrite(ctx context.Context, root *os.Root, target stri
 		return err
 	}
 	if size <= f.Limits.MaxArchiveFileBytes && size > f.Limits.MaxTotalBytes-total {
-		return run.ErrOverflow
+		return diagnostic.Failure(ctx, "workspace.operation_failed", run.ErrOverflow, "stage=write limit=workspace_bytes accumulated_bytes=%d entry_bytes=%d max_bytes=%d", total, size, f.Limits.MaxTotalBytes)
 	}
 	parts := strings.Split(target, "/")
 	for i := 1; i <= len(parts); i++ {

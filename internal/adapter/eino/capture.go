@@ -14,9 +14,10 @@ import (
 // responseWire keeps a bounded copy of the response for checking stream
 // completion and extracting usage fields that the SDK may omit.
 type responseWire struct {
-	mu     sync.Mutex
-	raw    bytes.Buffer
-	status int
+	mu        sync.Mutex
+	raw       bytes.Buffer
+	status    int
+	requestID string
 }
 
 func (w *responseWire) complete() bool {
@@ -25,11 +26,11 @@ func (w *responseWire) complete() bool {
 	return wireComplete(w.raw.Bytes())
 }
 
-func (w *responseWire) observation() (int, run.Usage, bool, *int64) {
+func (w *responseWire) observation() (int, run.Usage, bool, *int64, string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	usage, present, reasoning := wireTraceUsage(w.raw.Bytes())
-	return w.status, usage, present, reasoning
+	return w.status, usage, present, reasoning, w.requestID
 }
 
 type observedTransport struct {
@@ -60,6 +61,10 @@ func (t *observedTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 	t.wire.mu.Lock()
 	t.wire.status = response.StatusCode
+	t.wire.requestID = response.Header.Get("X-Request-Id")
+	if t.wire.requestID == "" {
+		t.wire.requestID = response.Header.Get("X-Tt-Logid")
+	}
 	t.wire.mu.Unlock()
 	response.Body = &observedBody{ReadCloser: response.Body, ctx: req.Context(), wire: t.wire, remaining: 8 << 20}
 	return response, nil

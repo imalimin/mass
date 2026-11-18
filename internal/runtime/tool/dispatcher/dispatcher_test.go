@@ -4,9 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/resource/trace"
@@ -18,10 +25,16 @@ func (r registry) Describe([]run.ToolSpec) ([]run.ToolSpec, error) {
 	return []run.ToolSpec{r.spec}, nil
 }
 
-type handler struct{ calls int }
+type handler struct {
+	calls int
+	err   error
+}
 
 func (h *handler) Execute(context.Context, run.Snapshot, run.Call, map[string]any) (run.ToolResult, *run.Artifact, error) {
 	h.calls++
+	if h.err != nil {
+		return run.ToolResult{}, nil, h.err
+	}
 	return run.ToolResult{Status: "completed", Data: json.RawMessage(`{}`), SideEffect: "none", Complete: true, SourceRefs: []storage.Ref{}}, nil, nil
 }
 
@@ -85,6 +98,35 @@ func TestValidArgumentsExecuteHandler(t *testing.T) {
 	}
 	if handler.calls != 1 {
 		t.Fatal("valid arguments were not executed", handler.calls)
+	}
+}
+
+func TestGenericToolFailureLogsClassifiedCauseAndEffect(t *testing.T) {
+	spec := run.ToolSpec{Name: "write_file", Version: "1", Schema: json.RawMessage(`{"type":"object"}`)}
+	recorder, snapshot, handler := fixture(spec, `{}`)
+	handler.err = &os.PathError{Op: "write", Path: "/private/payload.txt", Err: syscall.ENOSPC}
+	snapshot.SpaceID, snapshot.SessionID = "aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"
+	root := t.TempDir()
+	store := diagnostic.NewStore(root, "", nil, slog.New(slog.DiscardHandler))
+	ctx := diagnostic.WithRun(context.Background(), store, snapshot)
+	d := &Dispatcher{Registry: registry{spec: spec}, Handler: handler, Control: control{}, Trace: recorder}
+	if err := d.DispatchAndRecord(ctx, snapshot, run.Call{ID: "call-1", Name: spec.Name, Arguments: `{}`, ResponseEventID: "event-1"}); !errors.Is(err, run.ErrUnknownEffect) {
+		t.Fatalf("failure did not retain unknown-effect outcome: %v", err)
+	}
+	if result := recorder.ToolResult(snapshot.ID, "call-1"); !bytes.Contains(result, []byte(`"tool_failed"`)) {
+		t.Fatalf("tool result lost its original error code: %s", result)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, snapshot.SpaceID, "sessions", snapshot.SessionID, snapshot.SessionID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := bytes.Split(bytes.TrimSuffix(raw, []byte{'\n'}), []byte{'\n'})
+	if len(rows) != 2 {
+		t.Fatalf("wanted tool start and one failure: %s", raw)
+	}
+	var failure diagnostic.Entry
+	if err := json.Unmarshal(rows[1], &failure); err != nil || failure.Event != "tool.execution_failed" || !strings.Contains(failure.Message, "stage=execute tool=write_file call_id=call-1 side_effect=unknown") || !strings.Contains(failure.Message, "cause=no_space_left") || strings.Contains(failure.Message, "payload.txt") {
+		t.Fatalf("tool diagnostics: %s (%v)", raw, err)
 	}
 }
 

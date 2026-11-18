@@ -96,7 +96,10 @@ func NewHandler(assets fs.FS, version string, logger *slog.Logger, options ...Id
 		w.Header().Set("X-Request-ID", hex.EncodeToString(id[:]))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		defer func() {
-			if recover() != nil {
+			if cause := recover(); cause != nil {
+				if cause == http.ErrAbortHandler {
+					panic(cause)
+				}
 				logger.Error("HTTP handler panic", "request_id", w.Header().Get("X-Request-ID"))
 				writeError(w, 500, "internal_error", "Internal server error")
 			}

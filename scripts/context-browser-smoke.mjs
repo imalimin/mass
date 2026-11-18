@@ -47,6 +47,17 @@ try {
   await expect(page.getByRole('region', { name: '上下文来源检查' })).toContainText('Epoch 2')
   await page.setViewportSize({ width: 390, height: 844 }); await page.getByRole('region', { name: '上下文来源检查' }).scrollIntoViewIfNeeded(); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await mkdir('.cache', { recursive: true }); await page.screenshot({ path: '.cache/d06-inspection-mobile.png' }); await page.setViewportSize({ width: 1440, height: 1100 });
   const calls = server.modelCalls(); await page.reload(); await page.getByRole('heading', { name: run.session_id, exact: true }).waitFor(); assert.equal(server.modelCalls(), calls)
+  const overflowResponse = await context.request.post(`${server.url}/api/v1/spaces/${run.space_id}/sessions/${run.session_id}/runs`, {
+    headers: { Origin: server.url }, data: { text: 'overflow '.repeat(7000), idempotency_key: 'context-diagnostic-overflow' },
+  })
+  assert.equal(overflowResponse.status(), 202, await overflowResponse.text())
+  const overflow = await overflowResponse.json()
+  await expect.poll(async () => {
+    const logs = await context.request.get(`${server.url}/api/v1/diagnostic-logs?run_id=${overflow.id}`)
+    assert.equal(logs.status(), 200)
+    return (await logs.text()).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).find(row => row.event === 'context.prepare_failed')?.msg
+  }, { timeout: 15000 }).toMatch(/stage=summary estimated_input=(?:8\d{3}|\d{5,}) max_input=8000 reserved_output=\d+ cause=context_overflow/)
+  assert.equal(server.modelCalls(), calls, 'overflow reached the model provider')
   await mkdir('.cache', { recursive: true }); await page.screenshot({ path: '.cache/d06-desktop.png', fullPage: true }); await page.setViewportSize({ width: 390, height: 844 }); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await page.screenshot({ path: '.cache/d06-mobile.png' })
   assert.deepEqual(errors, []); console.log('D06 browser passed: actual Eino HTTP serialization, one summary reused across turns, stable wire prefixes, source inspection, no summary chat pollution, reload without calls, mobile layout.')
 } catch (e) { await mkdir('.cache', { recursive: true }); await page?.screenshot({ path: '.cache/d06-failure.png', fullPage: true }); throw e }

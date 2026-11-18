@@ -4,6 +4,7 @@ package executor
 import (
 	"context"
 
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 )
 
@@ -55,5 +56,5 @@ func (e *Executor) Execute(ctx context.Context, s run.Snapshot) (run.Outcome, er
 			}
 		}
 	}
-	return run.Outcome{}, run.ErrBudget
+	return run.Outcome{}, diagnostic.Failure(ctx, "run.limit_exceeded", run.ErrBudget, "limit=steps steps=%d max_steps=%d", s.Definition.MaxSteps, s.Definition.MaxSteps)
 }

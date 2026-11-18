@@ -218,6 +218,18 @@ func (r *Runtime) RuntimeTrace(ctx context.Context, actor, space, id string, aft
 }
 
 func (r *Runtime) Diagnostics(ctx context.Context, actor, session, id string) ([]json.RawMessage, error) {
+	space, session, err := r.DiagnosticScope(ctx, actor, session, id)
+	if err != nil {
+		return nil, err
+	}
+	records, err := r.Log.ReadRemote(ctx, space, session)
+	if err != nil {
+		return nil, notFound(err)
+	}
+	return sessionlog.Diagnostic(records, id)
+}
+
+func (r *Runtime) DiagnosticScope(ctx context.Context, actor, session, id string) (string, string, error) {
 	var space string
 	var err error
 	if id != "" {
@@ -226,19 +238,15 @@ func (r *Runtime) Diagnostics(ctx context.Context, actor, session, id string) ([
 		err = r.DB.DB.QueryRowContext(ctx, "SELECT space_id FROM sessions WHERE id=?", session).Scan(&space)
 	}
 	if err != nil {
-		return nil, notFound(err)
+		return "", "", notFound(err)
 	}
 	if err := r.access(ctx, actor, space); err != nil {
 		if errors.Is(err, identity.ErrForbidden) {
-			return nil, identity.ErrNotFound
+			return "", "", identity.ErrNotFound
 		}
-		return nil, err
+		return "", "", err
 	}
-	records, err := r.Log.ReadRemote(ctx, space, session)
-	if err != nil {
-		return nil, notFound(err)
-	}
-	return sessionlog.Diagnostic(records, id)
+	return space, session, nil
 }
 
 func (r *Runtime) RuntimeDiagnosticSpace(ctx context.Context, actor, id, session string) (string, error) {

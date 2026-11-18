@@ -93,7 +93,7 @@ func (r *Runtime) AcceptRuntimeRequest(ctx context.Context, actor, space, operat
 		s := newConversation()
 		s.loaded = true
 		r.restoreCreated(s, created)
-		if err := r.commit(ctx, s, created); err != nil {
+		if err := r.commit(ctx, s, "", created); err != nil {
 			return "", "", err
 		}
 		_, err = r.DB.DB.ExecContext(ctx, "INSERT INTO sessions(id,space_id,agent_id,actor_id,created_at,request_key,request_digest) VALUES(?,?,?,?,?,?,?)",
@@ -152,7 +152,7 @@ func (r *Runtime) AcceptRuntimeRequest(ctx context.Context, actor, space, operat
 		AcceptedAt: v.CreatedAt, RequestKey: key, RequestDigest: digest, BaseSnapshotID: orNil(v.BaseSnapshotID), WorkspaceCleanup: v.WorkspaceCleanup,
 		Message:   sessionlog.Message{Text: string(body), Attachments: message.Attachments},
 		Execution: sessionlog.Execution{Build: v.Build, Model: v.Definition.Model, Tools: v.Definition.Tools, ToolPolicy: v.Definition.ToolPolicy, ModelAttempts: v.Definition.ModelAttempts}}
-	err = r.commit(ctx, s, entry)
+	err = r.commit(ctx, s, v.ID, entry)
 	if int64(len(s.records)) == entry.Seq {
 		r.restoreAccepted(s, entry)
 	}
@@ -206,7 +206,7 @@ func (r *Runtime) RegisterAttachment(ctx context.Context, actor, space string, a
 		return storage.ErrIntegrity
 	}
 	entry := sessionlog.Attachment{Header: sessionlog.Header{Seq: int64(len(s.records)) + 1, Type: sessionlog.AttachmentAdded, Role: "system"}, Value: a}
-	if err := r.commit(ctx, s, entry); err != nil {
+	if err := r.commit(ctx, s, "", entry); err != nil {
 		return err
 	}
 	s.attachments[a.ID] = a
@@ -292,7 +292,7 @@ func (r *Runtime) appendEvents(ctx context.Context, batch journal.Batch) ([]jour
 				EventID: p.EventID, OccurredAt: p.OccurredAt, SnapshotID: v.SnapshotID, Reason: v.Reason}
 			// A start-time restoration is only needed for the active run.
 			if p.RunID == "" {
-				if err := r.commit(ctx, s, entry); err != nil {
+				if err := r.commit(ctx, s, "", entry); err != nil {
 					return nil, err
 				}
 				s.session.WorkspaceError = ""
@@ -437,11 +437,12 @@ func (r *Runtime) finish(ctx context.Context, s *conversation, state *runState, 
 	if err != nil {
 		return err
 	}
-	err = r.commit(ctx, s, batch...)
+	err = r.commit(ctx, s, end.RunID, batch...)
 	if int64(len(s.records)) == end.Seq {
 		state.final = &end
 		if err != nil {
 			// The local terminal record is complete and the upload worker retries it.
+			state.uploadFailure = true
 			return nil
 		}
 	}
@@ -456,8 +457,13 @@ func (r *Runtime) publishSummary(ctx context.Context, s *conversation, state *ru
 		return storage.ErrIntegrity
 	}
 	if err := r.uploadLocal(ctx, s); err != nil {
+		if !state.uploadFailure {
+			r.persistFailed(s, state.final.RunID, "upload", state.final.Seq, err)
+			state.uploadFailure = true
+		}
 		return err
 	}
+	state.uploadFailure = false
 	return r.updateSummary(ctx, s, state)
 }
 
@@ -470,8 +476,13 @@ func (r *Runtime) updateSummary(ctx context.Context, s *conversation, state *run
 	_, err := r.DB.DB.ExecContext(ctx, "UPDATE runs SET status=?,error_code=?,started_at=?,finished_at=? WHERE id=? AND session_id=?",
 		end.Status, code, end.StartedAt, end.FinishedAt, end.RunID, s.session.ID)
 	if err != nil {
+		if !state.summaryFailure {
+			r.persistFailed(s, end.RunID, "terminal_index", end.Seq, err)
+			state.summaryFailure = true
+		}
 		return err
 	}
+	state.summaryFailure = false
 	state.view.Status, state.view.Error, state.view.FinishedAt, state.view.SnapshotError = end.Status, code, ptr(end.FinishedAt), end.SnapshotError
 	if end.FinalModelSeq != nil {
 		state.view.FinalResponseEventID = fromJSON[sessionlog.Step](s.records[*end.FinalModelSeq-1]).EventID
@@ -520,6 +531,7 @@ func (r *Runtime) attachSnapshot(ctx context.Context, s *conversation, state *ru
 	records := append([]json.RawMessage(nil), s.records...)
 	records[f.Seq-1] = raw
 	if err = r.Log.Save(ctx, s.session.SpaceID, s.session.ID, records); err != nil {
+		r.persistFailed(s, f.RunID, "local_save", f.Seq, err)
 		return err
 	}
 	s.records, state.final = records, &f

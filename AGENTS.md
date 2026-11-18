@@ -27,6 +27,18 @@ DIAG_DIR=$(mktemp -d "${TMPDIR:-/tmp}/mass-diag.XXXXXX") &&
 
 也可以在已登录的浏览器里打开同一个诊断 URL，保存 JSON 响应后用相同的 `jq` 表达式转换。遇到 `401` 时检查登录状态与服务地址，遇到 `404` 时核对 ID、部署实例和空间访问权限。
 
+`GET /api/v1/diagnostic-logs` 使用相同的 Cookie 和查询参数，直接返回已经追加到 TOS 的诊断 JSONL。Run 进行中也可以下载，首次追加前响应体为空。保存到不同的文件，避免覆盖会话记录。
+
+```sh
+curl -fsS --cookie "$MASS_COOKIE_JAR" --get \
+  --data-urlencode "$LOOKUP_FIELD=$LOOKUP_ID" \
+  --output "$DIAG_DIR/$LOOKUP_ID.diagnostic.jsonl" "$MASS_URL/api/v1/diagnostic-logs"
+
+jq -c '{timestamp, level, event, run_id, msg}' "$DIAG_DIR/$LOOKUP_ID.diagnostic.jsonl"
+```
+
+诊断日志和 `session.jsonl` 存在同一会话目录，对象键和宿主文件的最后一段为 `<session_id>.jsonl`。先用 `run_id` 和 `timestamp` 对齐两份记录。用 `model.stream_limit_exceeded`、`context.prepare_failed` 或 `tool.execution_failed` 区分 `context_overflow` 的来源，用 `workspace.operation_failed` 和 `session.persist_failed` 定位工作区和会话提交的失败阶段。远端缺记录时，检查宿主的诊断 JSONL 和 `diagnostic log upload pending` 服务日志。
+
 ### 读取宿主或 TOS 原始记录
 
 当服务不可用、需要检查快照清单，或需要确认 TOS 上实际保存了哪一轮时，查看原始 `session.jsonl`。从会话页面 URL 获取 `space_id`。只有 `run_id` 时，可用诊断接口直接查该轮；如果需要原始对象且只有 `run_id`，通过有权限的只读数据库查询将 `runs.session_id` 关联到 `sessions.id`，取 `sessions.space_id` 和会话 ID。

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"time"
 
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
@@ -35,7 +36,14 @@ type Dispatcher struct {
 	Trace    *trace.Recorder
 }
 
-func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call run.Call) error {
+func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call run.Call) (err error) {
+	stage := "resolve"
+	toolName := ""
+	defer func() {
+		if ctx.Err() == nil {
+			err = diagnostic.Failure(ctx, "tool.execution_failed", err, "stage=%s tool=%s call_id=%s", stage, toolName, call.ID)
+		}
+	}()
 	tools, err := d.Registry.Describe(s.Definition.Tools)
 	if err != nil {
 		return err
@@ -49,9 +57,11 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 	if spec == nil || call.ResponseEventID == "" {
 		return run.ErrTool
 	}
+	toolName = spec.Name
 	if err = d.Control.Reserve(ctx, call.ID, "tool", 0); err != nil {
 		return err
 	}
+	stage = "validate_arguments"
 	var schemaDoc, args any
 	if json.Unmarshal(spec.Schema, &schemaDoc) != nil {
 		return run.ErrProtocol
@@ -84,6 +94,8 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 			Complete: true, SourceRefs: []storage.Ref{}, Data: raw,
 		}
 	} else {
+		stage = "execute"
+		diagnostic.Record(ctx, "info", "tool.execution_started", "tool=%s call_id=%s", call.Name, call.ID)
 		at := time.Now()
 		d.Trace.Tool(s.ID, call.ID, "running", nil, nil)
 		result, artifact, actionErr = d.Handler.Execute(ctx, s, call, args.(map[string]any))
@@ -116,10 +128,19 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 		}
 		result = run.ToolResult{CallID: call.ID, Status: "failed", Error: code, SideEffect: effect, Complete: true, SourceRefs: []storage.Ref{}, Data: json.RawMessage(`{}`)}
 	}
+	failureReported := false
+	if result.Error == "tool_failed" || result.SideEffect == "unknown" {
+		cause := actionErr
+		if cause == nil {
+			cause = run.ToolFailure(result.Error, result.SideEffect)
+		}
+		failureReported = diagnostic.Reported(diagnostic.Failure(ctx, "tool.execution_failed", cause, "stage=execute tool=%s call_id=%s side_effect=%s result_code=%s", call.Name, call.ID, result.SideEffect, result.Error))
+	}
 	result.CallID = call.ID
+	stage = "validate_result"
 	raw, _ := json.Marshal(result)
 	if len(raw) > 2<<20 {
-		return run.ErrOverflow
+		return diagnostic.Failure(ctx, "tool.execution_failed", run.ErrOverflow, "stage=result_size tool=%s call_id=%s bytes=%d max_bytes=%d side_effect=%s", call.Name, call.ID, len(raw), 2<<20, result.SideEffect)
 	}
 	if len(spec.ResultSchema) > 0 {
 		var doc any
@@ -162,13 +183,20 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 		facts = append(facts, event)
 	}
 	if len(facts) > 0 {
+		stage = "persist_result"
 		if _, err = resource.AppendRun(recordCtx, d.Journal, s, facts...); err != nil {
 			return err
 		}
 	}
 	if result.SideEffect == "unknown" {
 		if errors.Is(actionErr, run.ErrCodeTimeout) || errors.Is(actionErr, run.ErrNetworkTimeout) {
+			if failureReported {
+				return diagnostic.ReportedAs(actionErr)
+			}
 			return actionErr
+		}
+		if failureReported {
+			return diagnostic.ReportedAs(run.ErrUnknownEffect)
 		}
 		return run.ErrUnknownEffect
 	}

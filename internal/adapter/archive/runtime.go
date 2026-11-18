@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/imalimin/mass/internal/adapter/mariadb"
 	"github.com/imalimin/mass/internal/app/identity"
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
@@ -30,6 +32,7 @@ type Runtime struct {
 	Lease         *mariadb.RuntimeLease
 	Objects       *Objects
 	Log           *sessionlog.Store
+	DiagnosticLog *diagnostic.Store
 	Recorder      *trace.Recorder
 	Live          *agui.Live
 	CatalogObject ObjectLookup
@@ -55,12 +58,14 @@ type conversation struct {
 }
 
 type runState struct {
-	view     run.View
-	key      string
-	digest   string
-	finished bool
-	plan     *run.CleanupPlan
-	final    *sessionlog.Finished
+	uploadFailure  bool
+	summaryFailure bool
+	view           run.View
+	key            string
+	digest         string
+	finished       bool
+	plan           *run.CleanupPlan
+	final          *sessionlog.Finished
 }
 
 type inline struct {
@@ -166,19 +171,35 @@ func (r *Runtime) reconcileAccepted(ctx context.Context, s *conversation) error 
 		return err
 	}
 	p := journal.New(state.view.ActorID, "run.finished", state.view.ID, journal.FinishData{Status: "failed", Error: "interrupted"})
+	diagnostic.Record(diagnostic.WithRun(ctx, r.DiagnosticLog, state.view.Snapshot), "warn", "run.interrupted", "reason=recovery state=queued")
 	return r.finish(ctx, s, state, p)
 }
 
-func (r *Runtime) commit(ctx context.Context, s *conversation, records ...any) error {
+func (r *Runtime) commit(ctx context.Context, s *conversation, runID string, records ...any) error {
 	space, session := s.session.SpaceID, s.session.ID
 	if err := r.Log.Save(ctx, space, session, s.records, records...); err != nil {
+		r.persistFailed(s, runID, "local_save", int64(len(s.records)+len(records)), err)
 		return err
 	}
 	for _, value := range records {
 		raw, _ := json.Marshal(value)
 		s.records = append(s.records, raw)
 	}
-	return r.Log.Upload(ctx, space, session)
+	err := r.Log.Upload(ctx, space, session)
+	if err != nil {
+		r.persistFailed(s, runID, "upload", int64(len(s.records)), err)
+	}
+	return err
+}
+
+func (r *Runtime) persistFailed(s *conversation, runID, stage string, seq int64, err error) {
+	if r.DiagnosticLog != nil {
+		msg := fmt.Sprintf("stage=%s through_seq=%d", stage, seq)
+		if cause := diagnostic.Cause(err); cause != "unknown" {
+			msg += " cause=" + cause
+		}
+		r.DiagnosticLog.Write(s.session.SpaceID, s.session.ID, runID, "warn", "session.persist_failed", msg)
+	}
 }
 
 func (s *conversation) append(p journal.Proposed) journal.Event {

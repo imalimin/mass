@@ -2986,6 +2986,38 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/diagnostic-logs:
+    get:
+      operationId: getSessionDiagnosticLogs
+      description: Supply exactly one run_id or session_id. Run lookup returns only rows for that run. An authorized session with no uploaded rows returns an empty body.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: run_id
+          in: query
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: session_id
+          in: query
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+      responses:
+        '200':
+          description: Uploaded session diagnostic records, one JSON object per line.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/runs/{run_id}/trace:
     get:
       operationId: getRuntrace

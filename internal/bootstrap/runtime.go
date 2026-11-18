@@ -16,6 +16,7 @@ import (
 	"github.com/imalimin/mass/internal/app/catalog"
 	"github.com/imalimin/mass/internal/app/identity"
 	sessionapp "github.com/imalimin/mass/internal/app/session"
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
@@ -90,11 +91,13 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	var repo runtimeStore = store
 	var coordinator runCoordinator = lease
 	var sessions *storearchive.Runtime
+	var diagnosticLog *diagnostic.Store
 	live := store.LiveUI
 	responseText := store.UIResponseText
 	scope := func(s run.Snapshot) resource.CleanupStore { return lease.Cleanup(s) }
 	if len(persisted) > 0 {
 		sessions = persisted[0]
+		diagnosticLog = sessions.DiagnosticLog
 		sessions.Lease, sessions.Live = lease, live
 		repo, coordinator, responseText, scope = sessions, sessions, sessions.ResponseText, sessions.Cleanup
 	}
@@ -119,8 +122,9 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	store.UIToolState = recorder.ToolState
 	registryService := &registry.Registry{}
 	workspaceService := &resource.RunWorkspaces{Workspaces: workspaces, Repo: repo, Content: content, Journal: journalService}
-	finisher := &resource.Finisher{Scope: scope, Content: content, Workspaces: workspaces, Timeout: c.Runtime.SnapshotTimeout}
-	supervisorService := &supervisor.Supervisor{Guard: auth, Coordinator: coordinator, Workspaces: workspaceService, Finisher: finisher, CleanupTimeout: c.Runtime.SnapshotTimeout + 5*time.Second}
+	finisher := &resource.Finisher{Scope: scope, Content: content, Workspaces: workspaces, Timeout: c.Runtime.SnapshotTimeout, DiagnosticLog: diagnosticLog}
+	snapshots.DiagnosticLog = diagnosticLog
+	supervisorService := &supervisor.Supervisor{Guard: auth, Coordinator: coordinator, Workspaces: workspaceService, Finisher: finisher, CleanupTimeout: c.Runtime.SnapshotTimeout + 5*time.Second, DiagnosticLog: diagnosticLog}
 	schedulerService := &scheduler.Scheduler{Repo: coordinator, Launcher: supervisorService, MaxConcurrent: c.Runtime.MaxConcurrentRuns, MaxPerSpace: min(c.Runtime.MaxConcurrentRuns, 2)}
 	fault := func(err error) {
 		schedulerService.Fault(err)
@@ -160,6 +164,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	codeEngine := codevm.New(c.Tools.Code.MaxConcurrent, filepath.Join(traceRoot, ".go-wasi"))
 	supervisorService.NewRunner = func(ctx context.Context, s run.Snapshot, started time.Time, missingLocalFiles []string) (supervisor.Runner, error) {
 		budget := control.New(s, started)
+		budget.DiagnosticContext = ctx
 		runJournal, runContent := journalService, content
 		if sessions != nil {
 			runJournal, runContent = sessions.RunServices(s, content)
@@ -197,6 +202,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 			return nil, nil, err
 		}
 		plan := run.CleanupPlan{Outcome: run.Outcome{Status: "failed", Error: "interrupted"}, At: time.Now().UTC().Truncate(time.Microsecond), WorkspaceReady: false}
+		diagnostic.Record(diagnostic.WithRun(ctx, diagnosticLog, s), "warn", "run.interrupted", "reason=recovery state=running")
 		if err = scope(s).SavePlan(ctx, plan); err != nil {
 			cancel()
 			return nil, nil, err
@@ -216,7 +222,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		}
 	}
 	service := &sessionapp.Service{ModelAttempts: max(1, c.LLM.MaxAttempts), ToolPolicy: policy, Repo: repo, Catalog: catalogue, Identity: auth, Content: content, Workspaces: workspaceService, Build: build, Ready: schedulerService.Ready, Notify: schedulerService.Notify, ResolveTools: registryService.Describe}
-	options = &httptransport.RuntimeOptions{Service: service, Repo: repo, UI: &agui.Projector{Repo: repo, Live: live, ResponseText: responseText, ToolState: toolState}, Trace: archive, Workspaces: workspaceService, Snapshots: snapshots, Finisher: finisher, Cancel: supervisorService.Cancel}
+	options = &httptransport.RuntimeOptions{Service: service, Repo: repo, UI: &agui.Projector{Repo: repo, Live: live, ResponseText: responseText, ToolState: toolState}, Trace: archive, Workspaces: workspaceService, Snapshots: snapshots, Finisher: finisher, Cancel: supervisorService.Cancel, DiagnosticLog: diagnosticLog}
 	saveTraces := func(ctx context.Context) map[string][]run.View {
 		if sessions != nil {
 			if err := sessions.RetryUploads(ctx); err != nil && ctx.Err() == nil {
@@ -248,6 +254,13 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		return ready
 	}
 	lifecycle = &runtimeLifecycle{lease: lease, supervisor: supervisorService, cancel: cancel, saveTraces: saveTraces}
+	if diagnosticLog != nil {
+		lifecycle.wg.Add(1)
+		go func() {
+			defer lifecycle.wg.Done()
+			diagnosticLog.Run(ctx, lease.Check)
+		}()
+	}
 	lifecycle.wg.Add(2)
 	go func() {
 		defer lifecycle.wg.Done()

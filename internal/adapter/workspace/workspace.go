@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/resource"
 )
@@ -166,7 +167,7 @@ func (d *directory) Pack(ctx context.Context, missingLocalFiles []string) (io.Re
 		header := &tar.Header{Name: name, Mode: 0700, Typeflag: tar.TypeDir, Format: tar.FormatPAX}
 		if info.Mode().IsRegular() {
 			if info.Size() > d.manager.limits.MaxTotalBytes-total {
-				return storage.ErrWorkspace
+				return diagnostic.Failure(ctx, "workspace.operation_failed", storage.ErrWorkspace, "stage=pack limit=workspace_bytes accumulated_bytes=%d entry_bytes=%d max_bytes=%d", total, info.Size(), d.manager.limits.MaxTotalBytes)
 			}
 			record.Type = "file"
 			record.Size = info.Size()

@@ -16,6 +16,7 @@ import (
 
 	"github.com/imalimin/mass/internal/app/identity"
 	sessionapp "github.com/imalimin/mass/internal/app/session"
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
@@ -38,14 +39,15 @@ type RuntimeRepository interface {
 	RuntimeCleanupPlan(context.Context, string, string, string) (run.CleanupPlan, error)
 }
 type RuntimeOptions struct {
-	Service    *sessionapp.Service
-	Repo       RuntimeRepository
-	UI         *agui.Projector
-	Trace      *trace.Archive
-	Workspaces *resource.RunWorkspaces
-	Snapshots  *resource.SnapshotStore
-	Finisher   *resource.Finisher
-	Cancel     func(string)
+	DiagnosticLog *diagnostic.Store
+	Service       *sessionapp.Service
+	Repo          RuntimeRepository
+	UI            *agui.Projector
+	Trace         *trace.Archive
+	Workspaces    *resource.RunWorkspaces
+	Snapshots     *resource.SnapshotStore
+	Finisher      *resource.Finisher
+	Cancel        func(string)
 }
 
 type runResponse struct {
@@ -226,6 +228,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		return nil
 	})
 	register("GET /api/v1/diagnostics", true, runtime.diagnostics)
+	register("GET /api/v1/diagnostic-logs", true, runtime.diagnosticLogs)
 	register("POST "+base+"/runs/{run_id}/cancel", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		v, err := svc.Repo.CancelRuntimeRun(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("run_id"))
 		if err != nil {

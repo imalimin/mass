@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
@@ -20,10 +21,11 @@ type CleanupStore interface {
 	SavePlan(context.Context, run.CleanupPlan) error
 }
 type Finisher struct {
-	Scope      func(run.Snapshot) CleanupStore
-	Content    *ContentStore
-	Workspaces Workspaces
-	Timeout    time.Duration
+	DiagnosticLog *diagnostic.Store
+	Scope         func(run.Snapshot) CleanupStore
+	Content       *ContentStore
+	Workspaces    Workspaces
+	Timeout       time.Duration
 }
 
 func stableID(runID, label string) string {
@@ -53,6 +55,12 @@ func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, plan run.CleanupP
 	}
 	if current.CancelRequested {
 		plan.Outcome = run.Outcome{Status: "cancelled", Error: "run_cancelled"}
+	}
+	logCtx := diagnostic.WithRun(ctx, f.DiagnosticLog, s)
+	if plan.Outcome.Error != "" {
+		diagnostic.Record(logCtx, "info", "run.finalizing", "status=%s workspace_ready=%t error=%s", plan.Outcome.Status, plan.WorkspaceReady, plan.Outcome.Error)
+	} else {
+		diagnostic.Record(logCtx, "info", "run.finalizing", "status=%s workspace_ready=%t", plan.Outcome.Status, plan.WorkspaceReady)
 	}
 	if err = repo.SavePlan(ctx, plan); err != nil {
 		return err
@@ -118,7 +126,7 @@ func (f *Finisher) Finish(ctx context.Context, s run.Snapshot, plan run.CleanupP
 	if inline, ok := repo.(InlineContent); ok {
 		content.Inline = inline
 	}
-	snapshots := &SnapshotStore{Repo: repo, Content: &content, Journal: j, Workspaces: f.Workspaces, Timeout: f.Timeout, ActorKind: "system"}
+	snapshots := &SnapshotStore{Repo: repo, Content: &content, Journal: j, Workspaces: f.Workspaces, Timeout: f.Timeout, ActorKind: "system", DiagnosticLog: f.DiagnosticLog}
 	if plan.WorkspaceReady {
 		_, err = snapshots.Save(ctx, s.ActorID, request)
 		if errors.Is(err, run.ErrCancelled) {

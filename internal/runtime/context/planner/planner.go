@@ -8,6 +8,7 @@ import (
 	"errors"
 
 	"github.com/google/uuid"
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
@@ -33,16 +34,31 @@ type Planner struct {
 	Model     ModelCaller
 }
 
-func (p *Planner) Prepare(ctx context.Context, s run.Snapshot) (run.Prepared, error) {
+func (p *Planner) Prepare(ctx context.Context, s run.Snapshot) (prepared run.Prepared, err error) {
+	stage := "history"
+	estimatedInput := 0
+	defer func() {
+		if err == nil || ctx.Err() != nil || diagnostic.Reported(err) {
+			return
+		}
+		if errors.Is(err, run.ErrOverflow) && estimatedInput > 0 {
+			err = diagnostic.Failure(ctx, "context.prepare_failed", err, "stage=%s estimated_input=%d max_input=%d reserved_output=%d", stage, estimatedInput, projector.Budget(s), s.Definition.OutputTokens)
+		} else {
+			err = diagnostic.Failure(ctx, "context.prepare_failed", err, "stage=%s", stage)
+		}
+	}()
 	events, ranges, through, err := projector.ReadHistory(ctx, p.Journal, s)
 	if err != nil {
 		return run.Prepared{}, err
 	}
+	stage = "resolve_tools"
 	tools, err := p.Tools.Describe(s.Definition.Tools)
 	if err != nil {
 		return run.Prepared{}, err
 	}
-	prepared, err := p.Projector.Project(ctx, s, events, through, tools, ranges)
+	stage = "projection"
+	prepared, err = p.Projector.Project(ctx, s, events, through, tools, ranges)
+	estimatedInput = prepared.InputTokens
 	if err != nil && !errors.Is(err, run.ErrOverflow) {
 		return prepared, err
 	}
@@ -70,6 +86,7 @@ func (p *Planner) Prepare(ctx context.Context, s run.Snapshot) (run.Prepared, er
 		}
 		return p.save(ctx, s, prepared)
 	}
+	stage = "summary"
 	cut := latest
 	if prior > 1 {
 		tail := prepared
@@ -94,6 +111,7 @@ func (p *Planner) Prepare(ctx context.Context, s run.Snapshot) (run.Prepared, er
 			}
 		}
 		if earlier <= 1 {
+			estimatedInput = trial.InputTokens
 			return prepared, run.ErrOverflow
 		}
 		cut = earlier
@@ -103,6 +121,7 @@ func (p *Planner) Prepare(ctx context.Context, s run.Snapshot) (run.Prepared, er
 	required.Messages = append([]run.Message{prepared.Messages[0]}, prepared.Messages[end:]...)
 	projector.Finalize(&required)
 	if !projector.Fits(required, s) {
+		estimatedInput = required.InputTokens
 		return prepared, run.ErrOverflow
 	}
 	if p.Model == nil {
@@ -144,6 +163,7 @@ func (p *Planner) Prepare(ctx context.Context, s run.Snapshot) (run.Prepared, er
 	}
 	projector.Finalize(&summaryInput)
 	if !projector.Fits(summaryInput, s) {
+		estimatedInput = summaryInput.InputTokens
 		return prepared, run.ErrOverflow
 	}
 	summaryInput, err = p.save(ctx, s, summaryInput)
@@ -183,6 +203,7 @@ func (p *Planner) Prepare(ctx context.Context, s run.Snapshot) (run.Prepared, er
 	spec.PrefixChangeReason = "history_compressed"
 	compacted, err := p.Projector.Build(ctx, s, events, tools, spec)
 	if err != nil {
+		estimatedInput = compacted.InputTokens
 		return prepared, err
 	}
 	// Require material headroom, avoiding repeated per-turn summary regeneration.

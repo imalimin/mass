@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/imalimin/mass/internal/app/identity"
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
@@ -80,6 +81,7 @@ func (r *Runtime) Recover(ctx context.Context, snapshot run.Snapshot) (bool, err
 		return false, err
 	}
 	if !start.Valid {
+		diagnostic.Record(diagnostic.WithRun(ctx, r.DiagnosticLog, snapshot), "warn", "run.interrupted", "reason=recovery state=queued")
 		event := journal.New(snapshot.ActorID, "run.finished", snapshot.ID, journal.FinishData{Status: "failed", Error: "interrupted"})
 		if err := r.finish(ctx, s, state, event); err != nil {
 			return false, err
@@ -112,6 +114,7 @@ func (r *Runtime) Claim(ctx context.Context, snapshot run.Snapshot) (run.View, e
 		return run.View{}, run.ErrState
 	}
 	state.view.Status, state.view.StartedAt, state.view.OwnerID = "running", &now, r.Lease.ID
+	diagnostic.Record(diagnostic.WithRun(ctx, r.DiagnosticLog, snapshot), "info", "run.claimed", "queue_ms=%d", now.Sub(snapshot.CreatedAt).Milliseconds())
 	event := journal.New(snapshot.ActorID, "run.started", snapshot.ID, journal.StartData{OwnerID: r.Lease.ID})
 	event.OccurredAt = now
 	s.append(event)
@@ -155,6 +158,7 @@ func (r *Runtime) RejectQueued(ctx context.Context, snapshot run.Snapshot, code 
 	if state == nil || state.view.Status != "queued" {
 		return run.ErrState
 	}
+	diagnostic.Record(diagnostic.WithRun(ctx, r.DiagnosticLog, snapshot), "warn", "run.start_failed", "stage=claim cause=%s", code)
 	event := journal.New(snapshot.ActorID, "run.finished", snapshot.ID, journal.FinishData{Status: "failed", Error: code})
 	return r.finish(ctx, s, state, event)
 }

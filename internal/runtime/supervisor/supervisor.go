@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 )
@@ -30,6 +31,7 @@ type Finisher interface {
 	Finish(context.Context, run.Snapshot, run.CleanupPlan) error
 }
 type Supervisor struct {
+	DiagnosticLog  *diagnostic.Store
 	Guard          Guard
 	Coordinator    Coordinator
 	Workspaces     Workspaces
@@ -132,10 +134,11 @@ func (s *Supervisor) run(parent context.Context, v run.View) {
 	var missingLocalFiles []string
 	runTimeout := time.Duration(snapshot.Definition.TimeoutSeconds) * time.Second
 	runStarted := time.Now()
-	ctx, stop := context.WithTimeout(parent, runTimeout)
+	ctx, stop := context.WithTimeout(diagnostic.WithRun(parent, s.DiagnosticLog, snapshot), runTimeout)
 	defer func() {
 		if recover() != nil {
 			outcome = run.Outcome{Status: "failed", Error: "executor_panic"}
+			diagnostic.Record(ctx, "error", "run.interrupted", "reason=executor_panic")
 		}
 		if outcome.FailureDetail == nil && outcome.Status == "failed" && outcome.Error == "run_timeout" && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			deadline, _ := ctx.Deadline()
@@ -160,8 +163,14 @@ func (s *Supervisor) run(parent context.Context, v run.View) {
 	if err != nil && authorized.Err() == nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(probeErr, context.DeadlineExceeded)) {
 		detail = failureDetail("start_check", err, probeErr, started, failedAt, checkTimeout)
 	}
+	if err != nil && authorized.Err() == nil {
+		err = diagnostic.Failure(ctx, "run.start_failed", err, "stage=start_check timeout_ms=%d", checkTimeout.Milliseconds())
+	}
 	if err == nil && authorized.Err() == nil {
 		missingLocalFiles, err = s.Workspaces.Ensure(authorized, snapshot)
+		if err != nil && authorized.Err() == nil {
+			err = diagnostic.Failure(ctx, "workspace.operation_failed", err, "stage=restore")
+		}
 		if err == nil {
 			workspaceReady = true
 			started = time.Now()
@@ -171,10 +180,20 @@ func (s *Supervisor) run(parent context.Context, v run.View) {
 			var runner Runner
 			if runner, err = s.NewRunner(authorized, snapshot, started, missingLocalFiles); err == nil {
 				outcome, err = runner.Execute(authorized, snapshot)
+			} else if authorized.Err() == nil {
+				err = diagnostic.Failure(ctx, "run.start_failed", err, "stage=runner_init")
 			}
 		}
 	}
 	if cause := context.Cause(authorized); cause != nil {
+		switch {
+		case errors.Is(cause, context.Canceled) && parent.Err() != nil:
+			diagnostic.Record(ctx, "warn", "run.interrupted", "reason=service_stopping")
+		case errors.Is(cause, context.DeadlineExceeded) && errors.Is(ctx.Err(), context.DeadlineExceeded):
+			diagnostic.Record(ctx, "warn", "run.interrupted", "reason=deadline_exceeded elapsed_ms=%d max_ms=%d", time.Since(runStarted).Milliseconds(), runTimeout.Milliseconds())
+		default:
+			diagnostic.Record(ctx, "warn", "run.interrupted", "reason=%s", diagnostic.Cause(cause))
+		}
 		err = cause
 	}
 	if err != nil {

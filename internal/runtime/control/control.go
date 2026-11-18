@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/journal"
 )
@@ -18,7 +19,9 @@ type reservation struct {
 	Usage   run.Usage
 }
 type Control struct {
+	DiagnosticContext  context.Context
 	mu                 sync.Mutex
+	started            time.Time
 	deadline           time.Time
 	maxCalls, maxTools int
 	calls, tools       int
@@ -27,14 +30,14 @@ type Control struct {
 }
 
 func New(snapshot run.Snapshot, started time.Time) *Control {
-	return &Control{deadline: started.Add(time.Duration(snapshot.Definition.TimeoutSeconds) * time.Second), maxCalls: snapshot.Definition.MaxSteps, maxTools: snapshot.Definition.MaxSteps * 16, maxTokens: int64(snapshot.Definition.MaxSteps) * int64(snapshot.Definition.MaxInputTokens+snapshot.Definition.OutputTokens), items: map[string]reservation{}}
+	return &Control{started: started, deadline: started.Add(time.Duration(snapshot.Definition.TimeoutSeconds) * time.Second), maxCalls: snapshot.Definition.MaxSteps, maxTools: snapshot.Definition.MaxSteps * 16, maxTokens: int64(snapshot.Definition.MaxSteps) * int64(snapshot.Definition.MaxInputTokens+snapshot.Definition.OutputTokens), items: map[string]reservation{}}
 }
 func (c *Control) Check(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return context.Cause(ctx)
 	}
 	if !time.Now().Before(c.deadline) {
-		return run.ErrBudget
+		return diagnostic.Failure(ctx, "run.limit_exceeded", run.ErrBudget, "limit=execution_time elapsed_ms=%d max_ms=%d", time.Since(c.started).Milliseconds(), c.deadline.Sub(c.started).Milliseconds())
 	}
 	return nil
 }
@@ -55,14 +58,17 @@ func (c *Control) Reserve(ctx context.Context, id, kind string, upper int64) err
 	}
 	switch kind {
 	case "model":
-		if c.calls >= c.maxCalls || upper > c.maxTokens-c.charged {
-			return run.ErrBudget
+		if c.calls >= c.maxCalls {
+			return diagnostic.Failure(ctx, "run.limit_exceeded", run.ErrBudget, "limit=model_calls calls=%d max_calls=%d", c.calls, c.maxCalls)
+		}
+		if upper > c.maxTokens-c.charged {
+			return diagnostic.Failure(ctx, "run.limit_exceeded", run.ErrBudget, "limit=tokens stage=reserve charged=%d requested=%d max_tokens=%d", c.charged, upper, c.maxTokens)
 		}
 		c.calls++
 		c.charged += upper
 	case "tool":
 		if c.tools >= c.maxTools {
-			return run.ErrBudget
+			return diagnostic.Failure(ctx, "run.limit_exceeded", run.ErrBudget, "limit=tool_calls calls=%d max_calls=%d", c.tools, c.maxTools)
 		}
 		c.tools++
 	default:
@@ -100,7 +106,7 @@ func (c *Control) Settle(id string, u run.Usage) error {
 	old.Usage = u
 	c.items[id] = old
 	if c.charged > c.maxTokens {
-		return run.ErrBudget
+		return diagnostic.Failure(c.DiagnosticContext, "run.limit_exceeded", run.ErrBudget, "limit=tokens stage=settle charged=%d max_tokens=%d", c.charged, c.maxTokens)
 	}
 	return nil
 }

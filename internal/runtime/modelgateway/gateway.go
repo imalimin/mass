@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
@@ -93,6 +94,17 @@ func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, 
 	if (purpose != "task" && purpose != "summary") || (purpose == "summary" && len(p.Tools) > 0) {
 		return reply, run.ErrProtocol
 	}
+	ctx = diagnostic.WithAttempt(ctx, state.id)
+	stage := "credential"
+	defer func() {
+		if stage != "" {
+			var status int
+			if reply.Observation != nil {
+				status = reply.Observation.HTTPStatus
+			}
+			err = diagnostic.ModelFailed(ctx, err, stage, purpose, status, reply.Trace.ProviderRequestID, "")
+		}
+	}()
 	key, baseURL, revision, err := g.Credentials.ResolveRunSecret(ctx, s.ActorID, s.SpaceID, s.Definition.Model)
 	if err != nil {
 		return reply, err
@@ -105,6 +117,7 @@ func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, 
 	// Resolve the URL and key together from the run's fixed model ID on every attempt.
 	s.Definition.Model.Endpoint = baseURL
 	attempt, message := state.id, uuid.NewString()
+	stage = ""
 	if err = g.Control.Reserve(ctx, attempt, "model", int64(p.InputTokens+s.Definition.OutputTokens)); err != nil {
 		return reply, err
 	}
@@ -155,6 +168,12 @@ func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, 
 	if err = g.Control.Check(ctx); err != nil {
 		return reply, err
 	}
+	if state.retryOf != "" {
+		diagnostic.Record(ctx, "info", "model.attempt_started", "attempt_id=%s purpose=%s retry_of=%s", attempt, purpose, state.retryOf)
+	} else {
+		diagnostic.Record(ctx, "info", "model.attempt_started", "attempt_id=%s purpose=%s", attempt, purpose)
+	}
+	stage = "request"
 	reply, err = g.Transport.Stream(ctx, s, p, string(key), func(delta string) error {
 		if !utf8.ValidString(delta) {
 			return run.ErrProtocol
@@ -171,6 +190,7 @@ func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, 
 	if err != nil {
 		return reply, err
 	}
+	stage = "protocol"
 	if !utf8.ValidString(reply.Message.Content) || (reply.FinishReason != "stop" && reply.FinishReason != "tool_calls") || (len(reply.Message.ToolCalls) > 0) != (reply.FinishReason == "tool_calls") || len(reply.Message.ToolCalls) > 16 {
 		return reply, run.ErrProtocol
 	}
@@ -198,6 +218,7 @@ func (g *Gateway) callOnce(ctx context.Context, s run.Snapshot, p run.Prepared, 
 		reply.Message.ToolCalls[i].ID = uuid.NewString()
 		reply.Message.ToolCalls[i].ResponseEventID = reply.ResponseEventID
 	}
+	stage = ""
 	raw, _ := json.Marshal(reply)
 	o, err := g.Content.Put(ctx, s.ActorID, s.SpaceID, uuid.NewString(), "model.response", "application/json", bytes.NewReader(raw))
 	if err != nil {

@@ -19,6 +19,7 @@ import (
 	"github.com/imalimin/mass/internal/adapter/workspace"
 	"github.com/imalimin/mass/internal/app/catalog"
 	"github.com/imalimin/mass/internal/app/identity"
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
 	"github.com/imalimin/mass/internal/resource"
@@ -58,6 +59,7 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 	objects := &archive.Objects{Authorize: store.CheckAccess}
 	sessions := &archive.Runtime{DB: store, Objects: objects, Log: &sessionlog.Store{
 		Root: filepath.Join(workspaces.LocalPath(), ".sessions"), Prefix: c.TOS.Prefix, Blobs: blobs}}
+	sessions.DiagnosticLog = diagnostic.NewStore(sessions.Log.Root, sessions.Log.Prefix, blobs, logger)
 	content := &resource.ContentStore{Repo: objects, Blobs: blobs, Prefix: c.TOS.Prefix, MaxBytes: storage.MaxContentObjectBytes, Inline: sessions}
 	catalogStore := &archive.Catalog{Blobs: blobs, Prefix: c.TOS.Prefix, Objects: objects, Content: content, Model: store.Model, Audit: store.Audit}
 	sessions.CatalogObject = catalogStore.Lookup

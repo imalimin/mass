@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/journal"
@@ -31,12 +32,13 @@ type SnapshotRepository interface {
 	SnapshotEvent(context.Context, string, string, string, string) (storage.Snapshot, bool, error)
 }
 type SnapshotStore struct {
-	Repo       SnapshotRepository
-	Content    *ContentStore
-	Journal    *journal.Journal
-	Workspaces Workspaces
-	Timeout    time.Duration
-	ActorKind  string
+	DiagnosticLog *diagnostic.Store
+	Repo          SnapshotRepository
+	Content       *ContentStore
+	Journal       *journal.Journal
+	Workspaces    Workspaces
+	Timeout       time.Duration
+	ActorKind     string
 }
 
 // SaveRequest IDs and timestamp must be retained across unknown-commit retries.
@@ -67,6 +69,9 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.Timeout)
 	defer cancel()
+	ctx = diagnostic.WithRun(ctx, s.DiagnosticLog, run.Snapshot{ID: r.RunID, SpaceID: r.SpaceID, SessionID: r.SessionID})
+	stage := "resolve_base"
+	defer func() { err = diagnostic.Failure(ctx, "workspace.operation_failed", err, "stage=%s", stage) }()
 	// Reconcile a possibly committed result before touching the mutable directory.
 	old, found, err := s.Repo.SnapshotEvent(ctx, actor, r.SpaceID, r.SessionID, r.EventID)
 	if err != nil {
@@ -76,6 +81,7 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 		if old.ID != r.SnapshotID || old.SourceRunID != r.RunID || old.ObjectID != r.ArchiveID || old.ManifestRef != r.ManifestID {
 			return v, storage.ErrConflict
 		}
+		stage = "commit"
 		return s.commit(ctx, actor, r, old)
 	}
 	err = s.Workspaces.With(ctx, r.SpaceID, r.SessionID, func(dir WorkspaceDir) error {
@@ -83,6 +89,7 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 		if e != nil {
 			return e
 		}
+		stage = "pack"
 		archive, manifest, e := dir.Pack(ctx, r.MissingLocalFiles)
 		if e != nil {
 			return e
@@ -117,6 +124,7 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 				manifest.State, _ = json.Marshal(map[string]any{"run_id": r.RunID, "through_sequence": through, "plan": plan, "artifacts": artifacts})
 			}
 		}
+		stage = "manifest_save"
 		raw, e := json.Marshal(manifest)
 		if e != nil {
 			return e
@@ -125,6 +133,7 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 			return storage.ErrWorkspace
 		}
 		var a storage.Object
+		stage = "archive_upload"
 		if s.Content.Inline != nil {
 			key := path.Join(s.Content.Prefix, r.SpaceID, "sessions", r.SessionID, "workspace", r.SnapshotID+".tar.gz")
 			a, e = s.Content.PutAt(ctx, actor, r.SpaceID, r.ArchiveID, "workspace.archive", "application/gzip", key, archive)
@@ -134,11 +143,13 @@ func (s *SnapshotStore) Save(ctx context.Context, actor string, r SaveRequest) (
 		if e != nil {
 			return e
 		}
+		stage = "manifest_save"
 		m, e := s.Content.Put(ctx, actor, r.SpaceID, r.ManifestID, "workspace.manifest", "application/json", bytes.NewReader(raw))
 		if e != nil {
 			return e
 		}
 		v = storage.Snapshot{ID: r.SnapshotID, SpaceID: r.SpaceID, SessionID: r.SessionID, SourceRunID: r.RunID, BaseSnapshotID: base, ObjectID: a.ID, ManifestRef: m.ID, URI: a.URI, SHA256: a.SHA256, FormatVersion: 1}
+		stage = "commit"
 		v, e = s.commit(ctx, actor, r, v)
 		return e
 	})
@@ -176,9 +187,11 @@ func (s *SnapshotStore) commit(ctx context.Context, actor string, r SaveRequest,
 
 // Restore loads the target session's committed pointer, including a snapshot
 // selected in session.created. It never inherits source conversation events.
-func (s *SnapshotStore) Restore(ctx context.Context, actor, space, session string) error {
+func (s *SnapshotStore) Restore(ctx context.Context, actor, space, session string) (err error) {
 	ctx, cancel := context.WithTimeout(ctx, s.Timeout)
 	defer cancel()
+	ctx = diagnostic.WithRun(ctx, s.DiagnosticLog, run.Snapshot{SpaceID: space, SessionID: session})
+	defer func() { err = diagnostic.Failure(ctx, "workspace.operation_failed", err, "stage=restore") }()
 	return s.Workspaces.With(ctx, space, session, func(dir WorkspaceDir) error {
 		id, err := s.Repo.SnapshotBase(ctx, actor, space, session, "")
 		if err != nil {

@@ -5,13 +5,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
+	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
 )
 
@@ -38,6 +45,7 @@ func TestActualProtocolMatrix(t *testing.T) {
 				count++
 				sent, _ = io.ReadAll(r.Body)
 				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("X-Request-Id", "fixture-request-123")
 				w.WriteHeader(tc.status)
 				for _, b := range []byte(tc.body) {
 					w.Write([]byte{b})
@@ -48,10 +56,11 @@ func TestActualProtocolMatrix(t *testing.T) {
 			}))
 			defer server.Close()
 			transport := &ModelTransport{}
-			s := run.Snapshot{Definition: run.Definition{OutputTokens: 256, Model: run.ModelConfig{Endpoint: server.URL, ModelID: "fixture"}}}
+			s, ctx, logPath := modelLog(t)
+			s.Definition = run.Definition{OutputTokens: 256, Model: run.ModelConfig{Endpoint: server.URL, ModelID: "fixture"}}
 			p := run.Prepared{Spec: run.ProjectionSpec{Purpose: "task"}, Messages: []run.Message{{Role: "user", Content: "hello"}}}
 			text := ""
-			reply, err := transport.Stream(context.Background(), s, p, "secret-only-in-header", func(part string) error { text += part; return nil })
+			reply, err := transport.Stream(ctx, s, p, "secret-only-in-header", func(part string) error { text += part; return nil })
 			if (err == nil) != tc.valid {
 				t.Fatal("outcome", err)
 			}
@@ -74,8 +83,83 @@ func TestActualProtocolMatrix(t *testing.T) {
 			if tc.name == "usage then broken" && (reply.Usage.Input == nil || *reply.Usage.Input != 12) {
 				t.Fatal("lost failed attempt usage")
 			}
+			if !tc.valid {
+				entry := readModelLog(t, logPath)
+				for _, want := range []string{"attempt_id=attempt-fixture", "purpose=task", fmt.Sprintf("http_status=%d", tc.status), "request_id=fixture-request-123"} {
+					if entry.Event != "model.attempt_failed" || !strings.Contains(entry.Message, want) {
+						t.Fatalf("model failure missing %s: %+v", want, entry)
+					}
+				}
+				if strings.Contains(entry.Message, "secret-only-in-header") || strings.Contains(entry.Message, "partial") {
+					t.Fatal("diagnostic log retained model content or credentials")
+				}
+			}
 		})
 	}
+}
+
+type chunkModel struct {
+	model.ToolCallingChatModel
+	chunks []*schema.Message
+}
+
+func (m chunkModel) Stream(context.Context, []*schema.Message, ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	return schema.StreamReaderFromArray(m.chunks), nil
+}
+
+func TestStreamLimitRecordsBothMeasuredCounters(t *testing.T) {
+	for _, tc := range []struct {
+		trigger string
+		count   int
+		large   bool
+	}{{"chunks", 10001, false}, {"bytes", 1, true}, {"both", 10001, true}} {
+		t.Run(tc.trigger, func(t *testing.T) {
+			s, ctx, logPath := modelLog(t)
+			small := &schema.Message{Role: schema.Assistant}
+			chunks := make([]*schema.Message, tc.count)
+			for i := range chunks {
+				chunks[i] = small
+			}
+			if tc.large {
+				chunks[len(chunks)-1] = &schema.Message{Role: schema.Assistant, Content: strings.Repeat("x", 4<<20)}
+			}
+			smallJSON, _ := json.Marshal(small)
+			lastJSON, _ := json.Marshal(chunks[len(chunks)-1])
+			size := (tc.count-1)*len(smallJSON) + len(lastJSON)
+			transport := &ModelTransport{Fake: chunkModel{chunks: chunks}}
+			_, err := transport.Stream(ctx, s, run.Prepared{}, "fixture", func(string) error { return nil })
+			if !errors.Is(err, run.ErrOverflow) {
+				t.Fatalf("stream limit returned %v", err)
+			}
+			entry := readModelLog(t, logPath)
+			want := fmt.Sprintf("attempt_id=attempt-fixture received_chunks=%d max_chunks=10000 serialized_chunk_bytes=%d max_serialized_chunk_bytes=4194304 trigger=%s", tc.count, size, tc.trigger)
+			if entry.Event != "model.stream_limit_exceeded" || !strings.Contains(entry.Message, want) {
+				t.Fatalf("stream limit missing %q: %+v", want, entry)
+			}
+		})
+	}
+}
+
+func modelLog(t *testing.T) (run.Snapshot, context.Context, string) {
+	t.Helper()
+	root := t.TempDir()
+	s := run.Snapshot{SpaceID: "aaaaaaaaaaaaaaaa", SessionID: "bbbbbbbbbbbbbbbb", ID: "cccccccccccccccc"}
+	log := diagnostic.NewStore(root, "", nil, slog.New(slog.DiscardHandler))
+	ctx := diagnostic.WithAttempt(diagnostic.WithRun(context.Background(), log, s), "attempt-fixture")
+	return s, ctx, filepath.Join(root, s.SpaceID, "sessions", s.SessionID, s.SessionID+".jsonl")
+}
+
+func readModelLog(t *testing.T, name string) diagnostic.Entry {
+	t.Helper()
+	raw, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entry diagnostic.Entry
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		t.Fatalf("expected one diagnostic row: %s (%v)", raw, err)
+	}
+	return entry
 }
 
 func TestModelTimeoutAppliesToStreamingBody(t *testing.T) {

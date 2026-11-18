@@ -19,10 +19,11 @@ type ModelObservation struct {
 
 // ModelTrace is the merged provider output retained for diagnostics during a run.
 type ModelTrace struct {
-	Reasoning       *string
-	ToolCalls       []NativeToolCall
-	UsagePresent    bool
-	ReasoningTokens *int64
+	ProviderRequestID string
+	Reasoning         *string
+	ToolCalls         []NativeToolCall
+	UsagePresent      bool
+	ReasoningTokens   *int64
 }
 
 type NativeToolCall struct {
