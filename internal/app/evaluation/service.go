@@ -19,6 +19,8 @@ type task struct {
 	progress    map[string]Progress
 	ctx         context.Context
 	cancel      context.CancelFunc
+	writeCtx    context.Context
+	stopWrites  context.CancelCauseFunc
 	active      int
 	finishing   bool
 	interrupted bool
@@ -133,7 +135,11 @@ func (s *Service) CreateExperiment(ctx context.Context, actor, space string, in 
 	s.mu.Lock()
 	if !s.stopped && s.ctx.Err() == nil {
 		background, cancel := context.WithCancel(s.ctx)
-		s.tasks[v.ID] = &task{experiment: v, dataset: d, progress: map[string]Progress{}, ctx: background, cancel: cancel}
+		writeCtx, stopWrites := context.WithCancelCause(background)
+		s.tasks[v.ID] = &task{
+			experiment: v, dataset: d, progress: map[string]Progress{},
+			ctx: background, cancel: cancel, writeCtx: writeCtx, stopWrites: stopWrites,
+		}
 	}
 	s.mu.Unlock()
 	s.notify()
@@ -312,7 +318,8 @@ func (s *Service) loop() {
 }
 func (s *Service) finish(t *task) {
 	defer s.wg.Done()
-	ctx, stop := context.WithTimeout(t.ctx, s.callTimeout)
+	// Finalization follows the service lifetime, including after a write is denied.
+	ctx, stop := context.WithTimeout(s.ctx, s.callTimeout)
 	err := s.Repo.FinishEvaluationExperiment(ctx, t.experiment.ActorID, t.experiment.SpaceID, t.experiment.ID, copyProgress(t.progress), time.Now().UTC().Truncate(time.Microsecond))
 	stop()
 	if err != nil && s.Logger != nil {

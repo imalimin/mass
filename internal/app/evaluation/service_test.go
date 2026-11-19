@@ -152,7 +152,7 @@ func TestExperimentReadsDuringCompletion(t *testing.T) {
 			worker := &task{experiment: exp, ctx: taskCtx, cancel: cancel, finishing: true, progress: map[string]Progress{
 				"1": {Status: "succeeded", RunIDs: []string{storage.NewShortID()}},
 			}}
-			s := &Service{MaxPerSpace: 1, callTimeout: time.Second, tasks: map[string]*task{id: worker}}
+			s := &Service{MaxPerSpace: 1, callTimeout: time.Second, ctx: ctx, tasks: map[string]*task{id: worker}}
 			s.Repo = completionDuringRead{memoryRepository: repo, complete: func() {
 				// Save the result and remove the task after taking the first
 				// storage snapshot, before the request consults memory.
@@ -238,7 +238,7 @@ func TestMultiTurnIsolationFailureAndIdempotency(t *testing.T) {
 			}
 			return v, nil
 		},
-		Diagnostics: func(context.Context, string, string, string) ([]json.RawMessage, error) { return nil, nil },
+		Diagnostics: func(context.Context, string, string, []string) ([]json.RawMessage, error) { return nil, nil },
 	}
 	s := &Service{Repo: repo, Calls: calls, MaxPerSpace: 2, pollInterval: time.Millisecond, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	s.Start(context.Background())
@@ -336,7 +336,7 @@ func TestExperimentsShareSpaceConcurrency(t *testing.T) {
 			}
 			return v, nil
 		},
-		Diagnostics: func(context.Context, string, string, string) ([]json.RawMessage, error) { return nil, nil },
+		Diagnostics: func(context.Context, string, string, []string) ([]json.RawMessage, error) { return nil, nil },
 	}
 	s := &Service{Repo: repo, Calls: calls, MaxPerSpace: 2, pollInterval: time.Millisecond}
 	s.Start(context.Background())
@@ -401,7 +401,7 @@ func TestMultiTurnFailurePosition(t *testing.T) {
 					}
 					return v, nil
 				},
-				Diagnostics: func(context.Context, string, string, string) ([]json.RawMessage, error) { return nil, nil },
+				Diagnostics: func(context.Context, string, string, []string) ([]json.RawMessage, error) { return nil, nil },
 			}
 			s := &Service{Repo: repo, Calls: calls, MaxPerSpace: 1, pollInterval: time.Millisecond}
 			s.Start(context.Background())

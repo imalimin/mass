@@ -103,8 +103,8 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 		},
 		Create:      runtimeOptions.Service.Create,
 		Submit:      runtimeOptions.Service.Submit,
-		Run:         runtimeOptions.Repo.RuntimeRun,
-		Diagnostics: sessions.Diagnostics,
+		Run:         sessions.AcceptedRunStatus,
+		Diagnostics: sessions.AcceptedRunDiagnostics,
 	}}
 	evaluations.Start(ctx)
 	defer func() {

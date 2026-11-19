@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/imalimin/mass/internal/domain/storage"
@@ -169,13 +170,22 @@ func (s *Store) Upload(ctx context.Context, space, session string) error {
 
 // Diagnostic records omit storage locators and the request deduplication key.
 func Diagnostic(records []json.RawMessage, runID string) ([]json.RawMessage, error) {
+	return diagnostic(records, func(id string) bool { return runID == "" || id == runID })
+}
+
+// DiagnosticForRuns excludes all records outside the supplied Run IDs.
+func DiagnosticForRuns(records []json.RawMessage, runIDs []string) ([]json.RawMessage, error) {
+	return diagnostic(records, func(id string) bool { return slices.Contains(runIDs, id) })
+}
+
+func diagnostic(records []json.RawMessage, include func(string) bool) ([]json.RawMessage, error) {
 	out := []json.RawMessage{}
 	for _, raw := range records {
 		var h Header
 		if json.Unmarshal(raw, &h) != nil {
 			return nil, storage.ErrIntegrity
 		}
-		if runID != "" && h.RunID != runID {
+		if !include(h.RunID) {
 			continue
 		}
 		switch h.Type {

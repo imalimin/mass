@@ -99,11 +99,12 @@ type Repository interface {
 	FinishEvaluationExperiment(context.Context, string, string, string, map[string]Progress, time.Time) error
 }
 
-// Calls are the same Go entry points used by the HTTP handlers. No runtime implementation is imported.
+// Write calls use the original actor. Reads receive only IDs returned by those
+// calls for the current case, never IDs supplied by an HTTP request.
 type Calls struct {
-	CheckAgent  func(context.Context, string, string, string, string) error
-	Create      func(context.Context, string, string, sessionapp.CreateInput) (run.Session, error)
-	Submit      func(context.Context, string, string, string, sessionapp.SubmitInput) (run.View, error)
-	Run         func(context.Context, string, string, string) (run.View, error)
-	Diagnostics func(context.Context, string, string, string) ([]json.RawMessage, error)
+	CheckAgent  func(ctx context.Context, actor, space, agent, version string) error
+	Create      func(ctx context.Context, actor, space string, in sessionapp.CreateInput) (run.Session, error)
+	Submit      func(ctx context.Context, actor, space, session string, in sessionapp.SubmitInput) (run.View, error)
+	Run         func(ctx context.Context, space, session, id string) (run.View, error)
+	Diagnostics func(ctx context.Context, space, session string, ids []string) ([]json.RawMessage, error)
 }

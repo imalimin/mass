@@ -187,20 +187,21 @@ func (s *Store) evaluationExperimentRows(ctx context.Context, actor, space, filt
 	})
 	return
 }
+
+// FinishEvaluationExperiment records the outcome of an already accepted task.
+// The actor identifies the original submission, even if membership was revoked.
 func (s *Store) FinishEvaluationExperiment(ctx context.Context, actor, space, id string, result map[string]evaluation.Progress, at time.Time) error {
 	raw, err := json.Marshal(result)
 	if err != nil {
 		return err
 	}
-	return s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
-		res, e := tx.ExecContext(ctx, "UPDATE evaluation_experiments SET result=?,completed_at=? WHERE space_id=? AND id=? AND actor_id=? AND completed_at IS NULL", raw, at, space, id, actor)
-		if e != nil {
-			return e
-		}
-		n, e := res.RowsAffected()
-		if e == nil && n != 1 {
-			return identity.ErrConflict
-		}
-		return e
-	})
+	res, err := s.DB.ExecContext(ctx, "UPDATE evaluation_experiments SET result=?,completed_at=? WHERE space_id=? AND id=? AND actor_id=? AND completed_at IS NULL", raw, at, space, id, actor)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n != 1 {
+		return identity.ErrConflict
+	}
+	return err
 }

@@ -31,33 +31,30 @@ func sleep(ctx context.Context, d time.Duration) error {
 		return ctx.Err()
 	}
 }
-func call[T any](s *Service, t *task, fn func(context.Context) (T, error)) (v T, err error) {
+func call[T any](s *Service, parent context.Context, fn func(context.Context) (T, error)) (v T, err error) {
 	for attempt := 0; attempt < 3; attempt++ {
-		ctx, stop := context.WithTimeout(t.ctx, s.callTimeout)
+		if err = context.Cause(parent); err != nil {
+			return
+		}
+		ctx, stop := context.WithTimeout(parent, s.callTimeout)
 		v, err = fn(ctx)
 		stop()
-		if err == nil || businessError(err) || errors.Is(err, run.ErrUnavailable) || t.ctx.Err() != nil {
+		if err == nil {
+			return
+		}
+		if cause := context.Cause(parent); cause != nil {
+			return v, cause
+		}
+		if businessError(err) || errors.Is(err, run.ErrUnavailable) || errors.Is(err, run.ErrPermission) {
 			return
 		}
 		if attempt < 2 {
-			if e := sleep(t.ctx, s.pollInterval); e != nil {
-				return v, e
+			if sleep(parent, s.pollInterval) != nil {
+				return v, context.Cause(parent)
 			}
 		}
 	}
 	return
-}
-func (s *Service) interrupt(t *task, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if t.interrupted {
-		return
-	}
-	t.interrupted = true
-	t.cancel()
-	if s.Logger != nil {
-		s.Logger.Warn("evaluation interrupted", "experiment_id", t.experiment.ID, "error", err)
-	}
 }
 func (s *Service) record(t *task, key string, p Progress) {
 	s.mu.Lock()
@@ -65,25 +62,34 @@ func (s *Service) record(t *task, key string, p Progress) {
 	s.mu.Unlock()
 }
 func (s *Service) failed(t *task, key string, p Progress, stage string, err error) {
-	if t.ctx.Err() != nil {
-		return
-	}
-	if errors.Is(err, run.ErrUnavailable) || !businessError(err) {
-		s.interrupt(t, err)
-		return
-	}
 	p.Status, p.FailureStage, p.FailureCode = "failed", stage, err.Error()
-	s.record(t, key, p)
-	if errors.Is(err, identity.ErrForbidden) {
-		s.mu.Lock()
-		for i := range t.dataset.Cases {
-			k := fmt.Sprint(i + 1)
-			if _, ok := t.progress[k]; !ok {
-				t.progress[k] = Progress{Status: "failed", RunIDs: []string{}, FailureStage: "create_session", FailureCode: "permission_revoked"}
+	s.mu.Lock()
+	switch {
+	case t.ctx.Err() != nil:
+		s.mu.Unlock()
+		return
+	case errors.Is(err, identity.ErrForbidden) || errors.Is(err, run.ErrPermission):
+		p.FailureCode = run.ErrPermission.Error()
+		if t.writeCtx.Err() == nil {
+			t.stopWrites(run.ErrPermission)
+			for i := range t.dataset.Cases {
+				k := fmt.Sprint(i + 1)
+				if _, ok := t.progress[k]; !ok {
+					t.progress[k] = Progress{Status: "failed", RunIDs: []string{}, FailureStage: "create_session", FailureCode: p.FailureCode}
+				}
 			}
 		}
+	case !businessError(err):
+		t.interrupted = true
+		t.cancel()
 		s.mu.Unlock()
+		if s.Logger != nil {
+			s.Logger.Warn("evaluation interrupted", "experiment_id", t.experiment.ID, "error", err)
+		}
+		return
 	}
+	t.progress[key] = p
+	s.mu.Unlock()
 	if p.SessionID != "" {
 		p.Metrics = s.metrics(t, p.RunIDs, p.SessionID)
 		s.record(t, key, p)
@@ -95,7 +101,7 @@ func (s *Service) runCase(t *task, index int) {
 	e := t.experiment
 	key := fmt.Sprint(index + 1)
 	p := Progress{Status: "active", RunIDs: []string{}}
-	session, err := call(s, t, func(ctx context.Context) (run.Session, error) {
+	session, err := call(s, t.writeCtx, func(ctx context.Context) (run.Session, error) {
 		return s.Calls.Create(ctx, e.ActorID, e.SpaceID, sessionapp.CreateInput{Key: fmt.Sprintf("eval.%s.%d.session", e.ID, index+1), AgentID: e.AgentID, VersionID: e.AgentVersionID, Hide: true})
 	})
 	if err != nil {
@@ -105,7 +111,7 @@ func (s *Service) runCase(t *task, index int) {
 	p.SessionID = session.ID
 	s.record(t, key, p)
 	for turnIndex, turn := range t.dataset.Cases[index].Turns {
-		v, err := call(s, t, func(ctx context.Context) (run.View, error) {
+		v, err := call(s, t.writeCtx, func(ctx context.Context) (run.View, error) {
 			return s.Calls.Submit(ctx, e.ActorID, e.SpaceID, p.SessionID, sessionapp.SubmitInput{Key: fmt.Sprintf("eval.%s.%d.%d", e.ID, index+1, turnIndex+1), Text: turn.Content[0].Text})
 		})
 		if err != nil {
@@ -121,14 +127,14 @@ func (s *Service) runCase(t *task, index int) {
 				expired = now.Sub(*v.StartedAt) > time.Duration(v.Definition.TimeoutSeconds)*time.Second+s.SnapshotTimeout+s.grace
 			}
 			if expired {
-				s.interrupt(t, errors.New("evaluation run wait deadline exceeded"))
+				s.failed(t, key, p, "run", errors.New("evaluation run wait deadline exceeded"))
 				return
 			}
 			if err = sleep(t.ctx, s.pollInterval); err != nil {
 				return
 			}
-			v, err = call(s, t, func(ctx context.Context) (run.View, error) {
-				return s.Calls.Run(ctx, e.ActorID, e.SpaceID, p.RunIDs[len(p.RunIDs)-1])
+			v, err = call(s, t.ctx, func(ctx context.Context) (run.View, error) {
+				return s.Calls.Run(ctx, e.SpaceID, p.SessionID, p.RunIDs[len(p.RunIDs)-1])
 			})
 			if err != nil {
 				s.failed(t, key, p, "run", err)

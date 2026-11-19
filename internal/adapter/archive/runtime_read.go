@@ -74,6 +74,41 @@ func (r *Runtime) RuntimeRun(ctx context.Context, actor, space, id string) (run.
 	return view(s, id)
 }
 
+// AcceptedRunStatus is an internal read for the experiment worker. The
+// worker supplies the Session and Run IDs returned by Create and Submit.
+func (r *Runtime) AcceptedRunStatus(ctx context.Context, space, session, id string) (run.View, error) {
+	s, err := r.acceptedSession(ctx, space, session)
+	if err != nil {
+		return run.View{}, err
+	}
+	defer s.Unlock()
+	state := s.runs[id]
+	if state == nil {
+		return run.View{}, identity.ErrNotFound
+	}
+	return state.view, nil
+}
+
+// Active experiments and their accepted conversations share a process.
+// Look in the live archive without loading or reconciling another session.
+func (r *Runtime) acceptedSession(ctx context.Context, space, session string) (*conversation, error) {
+	value, ok := r.sessions.Load(space + "/" + session)
+	if !ok {
+		return nil, identity.ErrNotFound
+	}
+	s := value.(*conversation)
+	s.Lock()
+	if err := ctx.Err(); err != nil {
+		s.Unlock()
+		return nil, err
+	}
+	if !s.loaded || s.session.SpaceID != space || s.session.ID != session {
+		s.Unlock()
+		return nil, identity.ErrNotFound
+	}
+	return s, nil
+}
+
 func view(s *conversation, id string) (run.View, error) {
 	state := s.runs[id]
 	if state == nil {
@@ -222,11 +257,39 @@ func (r *Runtime) Diagnostics(ctx context.Context, actor, session, id string) ([
 	if err != nil {
 		return nil, err
 	}
-	records, err := r.Log.ReadRemote(ctx, space, session)
+	records, err := r.readDiagnosticRecords(ctx, space, session)
 	if err != nil {
-		return nil, notFound(err)
+		return nil, err
 	}
 	return sessionlog.Diagnostic(records, id)
+}
+
+// AcceptedRunDiagnostics exposes only the accepted Runs of the current case.
+func (r *Runtime) AcceptedRunDiagnostics(ctx context.Context, space, session string, ids []string) ([]json.RawMessage, error) {
+	if len(ids) == 0 {
+		return []json.RawMessage{}, nil
+	}
+	s, err := r.acceptedSession(ctx, space, session)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		if s.runs[id] == nil {
+			s.Unlock()
+			return nil, identity.ErrNotFound
+		}
+	}
+	s.Unlock()
+	records, err := r.readDiagnosticRecords(ctx, space, session)
+	if err != nil {
+		return nil, err
+	}
+	return sessionlog.DiagnosticForRuns(records, ids)
+}
+
+func (r *Runtime) readDiagnosticRecords(ctx context.Context, space, session string) ([]json.RawMessage, error) {
+	records, err := r.Log.ReadRemote(ctx, space, session)
+	return records, notFound(err)
 }
 
 func (r *Runtime) DiagnosticScope(ctx context.Context, actor, session, id string) (string, string, error) {

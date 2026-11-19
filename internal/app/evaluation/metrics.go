@@ -76,7 +76,7 @@ func Aggregate(records []json.RawMessage, ids []string) (Metrics, error) {
 func (s *Service) metrics(t *task, ids []string, session string) Metrics {
 	ctx, stop := context.WithTimeout(t.ctx, s.callTimeout)
 	defer stop()
-	records, err := s.Calls.Diagnostics(ctx, t.experiment.ActorID, session, "")
+	records, err := s.Calls.Diagnostics(ctx, t.experiment.SpaceID, session, ids)
 	if err == nil {
 		var m Metrics
 		m, err = Aggregate(records, ids)
