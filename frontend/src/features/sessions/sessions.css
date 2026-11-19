@@ -124,6 +124,7 @@
 .composer-version { width: auto; max-width: 100%; color: #365e51; font-size: 12px; padding: 6px 8px; }
 .composer-tools > button { flex: none; }
 .composer-tools button, .jump-to-latest { padding: 6px 10px; font-size: 13px; min-height: 34px; }
+.readonly-replay { margin: 0; padding: 12px; color: #626f6a; text-align: center; font-size: 12px; }
 .composer-hint { margin: 6px 0 0; color: #626f6a; text-align: center; font-size: 11px; }
 .stop-button { display: flex; align-items: center; gap: 7px; }
 .stop-icon { display: inline-block; width: 9px; height: 9px; background: currentColor; border-radius: 1px; }

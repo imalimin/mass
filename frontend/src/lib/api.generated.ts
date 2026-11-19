@@ -951,6 +951,134 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/spaces/{space_id}/evaluation/datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listEvaluationDatasets"];
+        put?: never;
+        post: operations["createEvaluationDataset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/evaluation/datasets/{dataset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getEvaluationDataset"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/evaluation/datasets/{dataset_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["saveEvaluationDatasetVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/evaluation/datasets/{dataset_id}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getEvaluationDatasetVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/evaluation/experiments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listEvaluationExperiments"];
+        put?: never;
+        post: operations["createEvaluationExperiment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/evaluation/experiments/{experiment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getEvaluationExperiment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/evaluation/experiments/{experiment_id}/cases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listEvaluationExperimentCases"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/evaluation/experiments/{experiment_id}/cases/{ordinal}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getEvaluationExperimentCase"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1417,6 +1545,8 @@ export interface components {
             usage: components["schemas"]["RuntimeUsage"];
         };
         RuntimeSession: {
+            /** @default false */
+            hide: boolean;
             id: components["schemas"]["ShortResourceID"];
             space_id: components["schemas"]["ShortResourceID"];
             /** Format: uuid */
@@ -1524,6 +1654,8 @@ export interface components {
             next_cursor: string | null;
         };
         SessionCreateInput: {
+            /** @default false */
+            hide: boolean;
             idempotency_key: string;
             agent_id: components["schemas"]["ShortResourceID"];
             version_id?: string;
@@ -1578,6 +1710,122 @@ export interface components {
         RuntimePlan: {
             revision: number;
             steps: components["schemas"]["RuntimePlanStep"][];
+        };
+        EvaluationPart: {
+            /** @constant */
+            type: "text";
+            text: string;
+        } | {
+            /** @constant */
+            type: "image_url";
+            image_url: {
+                url: string;
+            };
+        } | {
+            /** @constant */
+            type: "video_url";
+            video_url: {
+                url: string;
+            };
+        };
+        EvaluationTurn: {
+            content: components["schemas"]["EvaluationPart"][];
+        };
+        EvaluationCase: {
+            turns: components["schemas"]["EvaluationTurn"][];
+        };
+        EvaluationDatasetInput: {
+            name: string;
+            cases: components["schemas"]["EvaluationCase"][];
+        };
+        EvaluationDataset: {
+            id: components["schemas"]["ShortResourceID"];
+            space_id: components["schemas"]["ShortResourceID"];
+            version: number;
+            name: string;
+            /** Format: date-time */
+            saved_at: string;
+            case_count: number;
+            cases?: components["schemas"]["EvaluationCase"][];
+        };
+        EvaluationProgress: {
+            /** @enum {string} */
+            status: "pending" | "active" | "succeeded" | "failed" | "unavailable";
+            session_id?: components["schemas"]["ShortResourceID"];
+            run_ids: components["schemas"]["ShortResourceID"][];
+            /** @enum {string} */
+            failure_stage?: "create_session" | "submit_run" | "run";
+            failure_code?: string;
+            input_tokens: number | null;
+            input_cached_tokens: number | null;
+            output_tokens: number | null;
+            reasoning_tokens: number | null;
+            duration_ms: number | null;
+            step_count: number | null;
+        };
+        EvaluationCaseView: {
+            ordinal: number;
+            turns: components["schemas"]["EvaluationTurn"][];
+            /** @enum {string} */
+            status: "pending" | "active" | "succeeded" | "failed" | "unavailable";
+            session_id?: components["schemas"]["ShortResourceID"];
+            run_ids: components["schemas"]["ShortResourceID"][];
+            /** @enum {string} */
+            failure_stage?: "create_session" | "submit_run" | "run";
+            failure_code?: string;
+            input_tokens: number | null;
+            input_cached_tokens: number | null;
+            output_tokens: number | null;
+            reasoning_tokens: number | null;
+            duration_ms: number | null;
+            step_count: number | null;
+        };
+        EvaluationExperimentInput: {
+            dataset_id: components["schemas"]["ShortResourceID"];
+            agent_id: components["schemas"]["ShortResourceID"];
+            /** Format: uuid */
+            agent_version_id: string;
+            concurrency: number;
+            idempotency_key: string;
+        };
+        EvaluationExperiment: {
+            id: components["schemas"]["ShortResourceID"];
+            space_id: components["schemas"]["ShortResourceID"];
+            /** Format: uuid */
+            actor_id: string;
+            /** Format: date-time */
+            created_at: string;
+            dataset_id: components["schemas"]["ShortResourceID"];
+            dataset_version: number;
+            agent_id: components["schemas"]["ShortResourceID"];
+            /** Format: uuid */
+            agent_version_id: string;
+            concurrency: number;
+            result: null | {
+                [key: string]: components["schemas"]["EvaluationProgress"];
+            };
+            /** Format: date-time */
+            completed_at: string | null;
+            /** @enum {string} */
+            status: "queued" | "running" | "completed" | "interrupted";
+            case_count: number;
+            succeeded: number;
+            failed: number;
+            case_progress?: {
+                [key: string]: components["schemas"]["EvaluationProgress"];
+            };
+        };
+        EvaluationDatasetPage: {
+            items: components["schemas"]["EvaluationDataset"][];
+            next_cursor: string | null;
+        };
+        EvaluationExperimentPage: {
+            items: components["schemas"]["EvaluationExperiment"][];
+            next_cursor: string | null;
+        };
+        EvaluationCasePage: {
+            items: components["schemas"]["EvaluationCaseView"][];
+            next_cursor: string | null;
         };
     };
     responses: never;
@@ -5569,6 +5817,345 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RuntimePlan"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listEvaluationDatasets: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationDatasetPage"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createEvaluationDataset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvaluationDatasetInput"];
+            };
+        };
+        responses: {
+            /** @description Successful operation. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationDataset"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getEvaluationDataset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                dataset_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationDataset"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    saveEvaluationDatasetVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                dataset_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvaluationDatasetInput"];
+            };
+        };
+        responses: {
+            /** @description Successful operation. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationDataset"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getEvaluationDatasetVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                dataset_id: components["schemas"]["ShortResourceID"];
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationDataset"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listEvaluationExperiments: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationExperimentPage"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createEvaluationExperiment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvaluationExperimentInput"];
+            };
+        };
+        responses: {
+            /** @description Successful operation. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationExperiment"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getEvaluationExperiment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                experiment_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationExperiment"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listEvaluationExperimentCases: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                experiment_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationCasePage"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getEvaluationExperimentCase: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                experiment_id: components["schemas"]["ShortResourceID"];
+                ordinal: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvaluationCaseView"];
                 };
             };
             /** @description Request rejected or dependency unavailable. */

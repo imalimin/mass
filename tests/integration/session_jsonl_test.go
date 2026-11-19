@@ -70,7 +70,7 @@ func TestSessionJSONLSchemaReset(t *testing.T) {
 	err = rows.Err()
 	rows.Close()
 	slices.Sort(tables)
-	expected := []string{"audit_logs", "auth_sessions", "goose_db_version", "model_configs", "runs", "sessions", "space_members", "spaces", "users"}
+	expected := []string{"audit_logs", "auth_sessions", "evaluation_datasets", "evaluation_experiments", "goose_db_version", "model_configs", "runs", "sessions", "space_members", "spaces", "users"}
 	if err != nil || !slices.Equal(tables, expected) {
 		t.Fatalf("unexpected schema tables: %v (%v)", tables, err)
 	}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/imalimin/mass/internal/app/catalog"
+	"github.com/imalimin/mass/internal/app/evaluation"
 	"github.com/imalimin/mass/internal/app/identity"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
@@ -24,6 +25,7 @@ import (
 
 type endpoint func(http.ResponseWriter, *http.Request, identity.User) error
 type IdentityOptions struct {
+	Evaluation     *evaluation.Service
 	Catalog        *catalog.Service
 	Runtime        *RuntimeOptions
 	Storage        *StorageOptions
@@ -236,6 +238,7 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 		return q, limit, scope, err
 	}
 	registerCatalog(register, registerMedia, options, query)
+	registerEvaluation(register, options, query)
 	registerRuntime(mux, register, options, query, token, logger)
 	register("GET /api/v1/spaces", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		q, n, scope, err := query(r, u)

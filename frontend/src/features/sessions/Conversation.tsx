@@ -52,6 +52,7 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
     queryFn: ({ signal }) => request<Schema['RuntimeSession']>(sessionURL, 'GET', undefined, signal),
     enabled: !!sessionID,
   })
+  const readOnly = !!session.data?.hide
   const ownsSession = session.data?.definition_id === agent.id
   const versions = useQuery({
     queryKey: ['private', space, 'run-agent-versions', agent.id],
@@ -307,7 +308,7 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
         {pending && <ChatMessage role="user" text={pending.text} space={space} pending />}
       </div>
     </div>
-    <div className="composer-dock">
+    {!readOnly && <div className="composer-dock">
       {showJump && <button type="button" className="secondary jump-to-latest" onClick={jumpToLatest}>↓ 回到最新消息</button>}
       {session.data?.workspace_error && !busy && <div className="error workspace-notice">
         <p role="alert">工作目录尚未确认持久化，已阻止下一轮运行。</p>
@@ -369,6 +370,8 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
       </form>
       <p className="composer-hint">Enter 发送 · Shift + Enter 换行</p>
     </div>
+    }
+    {readOnly && <p className="readonly-replay">测评会话 · 只读回放</p>}
     {showDetails && session.data && <RunDetails space={space} session={session.data} runs={sorted} current={currentRun}
       chosenRun={chosenRun} onSelect={id => setParams({ run: id })} onClose={closeDetails} />}
   </section>

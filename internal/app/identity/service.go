@@ -10,6 +10,7 @@ import (
 	"errors"
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -246,7 +247,8 @@ func (s *Service) Query(scope, cursor string, limit int) (Query, error) {
 		return q, ErrInvalid
 	}
 	id, signature := b[:len(b)-sha256.Size], b[len(b)-sha256.Size:]
-	if !storage.ValidShortID(string(id)) && !validID(string(id)) {
+	ordinal, ordinalErr := strconv.Atoi(string(id))
+	if !storage.ValidShortID(string(id)) && !validID(string(id)) && (ordinalErr != nil || ordinal < 1 || ordinal > 100 || strconv.Itoa(ordinal) != string(id)) {
 		return q, ErrInvalid
 	}
 	mac := hmac.New(sha256.New, s.cursorKey)

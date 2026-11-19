@@ -29,7 +29,7 @@ func (r *Runtime) RuntimeSessions(ctx context.Context, actor, space, agent strin
 	if err := r.access(ctx, actor, space); err != nil {
 		return nil, err
 	}
-	query := "SELECT id FROM sessions WHERE space_id=? AND id>?"
+	query := "SELECT id FROM sessions WHERE space_id=? AND hide=FALSE AND id>?"
 	args := []any{space, q.After}
 	if agent != "" {
 		query += " AND agent_id=?"

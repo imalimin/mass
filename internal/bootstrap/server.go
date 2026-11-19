@@ -18,6 +18,7 @@ import (
 	"github.com/imalimin/mass/internal/adapter/tos"
 	"github.com/imalimin/mass/internal/adapter/workspace"
 	"github.com/imalimin/mass/internal/app/catalog"
+	"github.com/imalimin/mass/internal/app/evaluation"
 	"github.com/imalimin/mass/internal/app/identity"
 	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/storage"
@@ -84,6 +85,35 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 			logger.Error("runtime shutdown incomplete", "code", "interrupted")
 		}
 	}()
+
+	evaluations := &evaluation.Service{Repo: store, MaxPerSpace: min(c.Runtime.MaxConcurrentRuns, 2), SnapshotTimeout: c.Runtime.SnapshotTimeout, Logger: logger, Calls: evaluation.Calls{
+		CheckAgent: func(ctx context.Context, actor, space, agent, version string) error {
+			d, err := catalogue.Draft(ctx, actor, space, "agent", agent)
+			if err != nil {
+				return err
+			}
+			v, err := catalogue.Version(ctx, actor, space, "agent", agent, version)
+			if err != nil {
+				return err
+			}
+			if d.Archived || v.Archived || v.Debug {
+				return catalog.ErrConfig
+			}
+			return nil
+		},
+		Create:      runtimeOptions.Service.Create,
+		Submit:      runtimeOptions.Service.Submit,
+		Run:         runtimeOptions.Repo.RuntimeRun,
+		Diagnostics: sessions.Diagnostics,
+	}}
+	evaluations.Start(ctx)
+	defer func() {
+		shutdown, cancel := context.WithTimeout(context.Background(), c.HTTP.ShutdownTimeout)
+		defer cancel()
+		if err := evaluations.Close(shutdown); err != nil {
+			logger.Error("evaluation shutdown incomplete", "error", err)
+		}
+	}()
 	listener, err := net.Listen("tcp", c.HTTP.Listen)
 	if err != nil {
 		return err
@@ -92,7 +122,7 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 	listeners := []net.Listener{listener}
 	identityOptions := httptransport.IdentityOptions{
 		Service: service, Origin: strings.TrimSuffix(c.HTTP.PublicURL, "/"), Secure: c.Auth.CookieSecure,
-		Storage: storageOptions, Catalog: catalogue, Runtime: runtimeOptions,
+		Storage: storageOptions, Catalog: catalogue, Runtime: runtimeOptions, Evaluation: evaluations,
 	}
 	if c.lanLoopback != "" {
 		loopback, err := net.Listen("tcp", c.lanLoopback)

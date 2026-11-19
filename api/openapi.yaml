@@ -3475,6 +3475,334 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/evaluation/datasets:
+    get:
+      operationId: listEvaluationDatasets
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationDatasetPage'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: createEvaluationDataset
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+      responses:
+        '201':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationDataset'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluationDatasetInput'
+  /api/v1/spaces/{space_id}/evaluation/datasets/{dataset_id}:
+    get:
+      operationId: getEvaluationDataset
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: dataset_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationDataset'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/evaluation/datasets/{dataset_id}/versions:
+    post:
+      operationId: saveEvaluationDatasetVersion
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: dataset_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+      responses:
+        '201':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationDataset'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluationDatasetInput'
+  /api/v1/spaces/{space_id}/evaluation/datasets/{dataset_id}/versions/{version}:
+    get:
+      operationId: getEvaluationDatasetVersion
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: dataset_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationDataset'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/evaluation/experiments:
+    post:
+      operationId: createEvaluationExperiment
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+      responses:
+        '202':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationExperiment'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluationExperimentInput'
+    get:
+      operationId: listEvaluationExperiments
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationExperimentPage'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/evaluation/experiments/{experiment_id}:
+    get:
+      operationId: getEvaluationExperiment
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: experiment_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationExperiment'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/evaluation/experiments/{experiment_id}/cases:
+    get:
+      operationId: listEvaluationExperimentCases
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: experiment_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationCasePage'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/evaluation/experiments/{experiment_id}/cases/{ordinal}:
+    get:
+      operationId: getEvaluationExperimentCase
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: experiment_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: ordinal
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Successful operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationCaseView'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   schemas:
     Definition:
@@ -4791,6 +5119,9 @@ components:
         - last_sequence
         - created_at
       properties:
+        hide:
+          type: boolean
+          default: false
         id:
           $ref: '#/components/schemas/ShortResourceID'
         space_id:
@@ -5088,6 +5419,9 @@ components:
         - idempotency_key
         - agent_id
       properties:
+        hide:
+          type: boolean
+          default: false
         idempotency_key:
           type: string
           pattern: ^[A-Za-z0-9._:-]{1,128}$
@@ -5248,6 +5582,407 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RuntimePlanStep'
+    EvaluationPart:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required:
+            - type
+            - text
+          properties:
+            type:
+              const: text
+              type: string
+            text:
+              type: string
+              minLength: 1
+              maxLength: 262144
+        - type: object
+          additionalProperties: false
+          required:
+            - type
+            - image_url
+          properties:
+            type:
+              const: image_url
+              type: string
+            image_url:
+              type: object
+              additionalProperties: false
+              required:
+                - url
+              properties:
+                url:
+                  type: string
+        - type: object
+          additionalProperties: false
+          required:
+            - type
+            - video_url
+          properties:
+            type:
+              const: video_url
+              type: string
+            video_url:
+              type: object
+              additionalProperties: false
+              required:
+                - url
+              properties:
+                url:
+                  type: string
+    EvaluationTurn:
+      type: object
+      additionalProperties: false
+      required:
+        - content
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvaluationPart'
+          minItems: 1
+    EvaluationCase:
+      type: object
+      additionalProperties: false
+      required:
+        - turns
+      properties:
+        turns:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvaluationTurn'
+          minItems: 1
+          maxItems: 10
+    EvaluationDatasetInput:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - cases
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvaluationCase'
+          maxItems: 100
+    EvaluationDataset:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - space_id
+        - version
+        - name
+        - saved_at
+        - case_count
+      properties:
+        id:
+          $ref: '#/components/schemas/ShortResourceID'
+        space_id:
+          $ref: '#/components/schemas/ShortResourceID'
+        version:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+        saved_at:
+          type: string
+          format: date-time
+        case_count:
+          type: integer
+          minimum: 0
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvaluationCase'
+    EvaluationProgress:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - run_ids
+        - input_tokens
+        - input_cached_tokens
+        - output_tokens
+        - reasoning_tokens
+        - duration_ms
+        - step_count
+      properties:
+        status:
+          type: string
+          enum:
+            - pending
+            - active
+            - succeeded
+            - failed
+            - unavailable
+        session_id:
+          $ref: '#/components/schemas/ShortResourceID'
+        run_ids:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShortResourceID'
+        failure_stage:
+          type: string
+          enum:
+            - create_session
+            - submit_run
+            - run
+        failure_code:
+          type: string
+        input_tokens:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+        input_cached_tokens:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+        output_tokens:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+        reasoning_tokens:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+        duration_ms:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+        step_count:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+    EvaluationCaseView:
+      type: object
+      additionalProperties: false
+      required:
+        - ordinal
+        - turns
+        - status
+        - run_ids
+        - input_tokens
+        - input_cached_tokens
+        - output_tokens
+        - reasoning_tokens
+        - duration_ms
+        - step_count
+      properties:
+        ordinal:
+          type: integer
+          minimum: 1
+        turns:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvaluationTurn'
+        status:
+          type: string
+          enum:
+            - pending
+            - active
+            - succeeded
+            - failed
+            - unavailable
+        session_id:
+          $ref: '#/components/schemas/ShortResourceID'
+        run_ids:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShortResourceID'
+        failure_stage:
+          type: string
+          enum:
+            - create_session
+            - submit_run
+            - run
+        failure_code:
+          type: string
+        input_tokens:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+        input_cached_tokens:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+        output_tokens:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+        reasoning_tokens:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+        duration_ms:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+        step_count:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+    EvaluationExperimentInput:
+      type: object
+      additionalProperties: false
+      required:
+        - dataset_id
+        - agent_id
+        - agent_version_id
+        - concurrency
+        - idempotency_key
+      properties:
+        dataset_id:
+          $ref: '#/components/schemas/ShortResourceID'
+        agent_id:
+          $ref: '#/components/schemas/ShortResourceID'
+        agent_version_id:
+          type: string
+          format: uuid
+        concurrency:
+          type: integer
+          minimum: 1
+          maximum: 2
+        idempotency_key:
+          type: string
+          pattern: ^[A-Za-z0-9._:-]{1,128}$
+    EvaluationExperiment:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - space_id
+        - actor_id
+        - created_at
+        - dataset_id
+        - dataset_version
+        - agent_id
+        - agent_version_id
+        - concurrency
+        - result
+        - completed_at
+        - status
+        - case_count
+        - succeeded
+        - failed
+      properties:
+        id:
+          $ref: '#/components/schemas/ShortResourceID'
+        space_id:
+          $ref: '#/components/schemas/ShortResourceID'
+        actor_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        dataset_id:
+          $ref: '#/components/schemas/ShortResourceID'
+        dataset_version:
+          type: integer
+          minimum: 1
+        agent_id:
+          $ref: '#/components/schemas/ShortResourceID'
+        agent_version_id:
+          type: string
+          format: uuid
+        concurrency:
+          type: integer
+          minimum: 1
+          maximum: 2
+        result:
+          anyOf:
+            - type: 'null'
+            - type: object
+              additionalProperties:
+                $ref: '#/components/schemas/EvaluationProgress'
+        completed_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        status:
+          type: string
+          enum:
+            - queued
+            - running
+            - completed
+            - interrupted
+        case_count:
+          type: integer
+          minimum: 0
+        succeeded:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        case_progress:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/EvaluationProgress'
+    EvaluationDatasetPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvaluationDataset'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+    EvaluationExperimentPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvaluationExperiment'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+    EvaluationCasePage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvaluationCaseView'
+        next_cursor:
+          type:
+            - string
+            - 'null'
   parameters:
     IdempotencyKey:
       name: Idempotency-Key

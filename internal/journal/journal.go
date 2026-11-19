@@ -99,6 +99,7 @@ func (j *Journal) ReadRun(ctx context.Context, actor, space, session, runID stri
 }
 
 type SessionData struct {
+	Hide             bool         `json:"hide,omitempty"`
 	SourceSnapshotID string       `json:"source_snapshot_id,omitempty"`
 	DefinitionRef    *storage.Ref `json:"definition_ref,omitempty"`
 	DefinitionID     string       `json:"definition_id,omitempty"`

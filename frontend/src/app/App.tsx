@@ -4,6 +4,7 @@ import { Link, NavLink, Navigate, Route, Routes, useLocation, useMatch, useNavig
 import { APIError, list, request, type Schema } from '../lib/api'
 import { SessionWorkspace, LegacySession } from '../features/sessions/Sessions'
 import { Catalog } from '../features/catalog/Catalog'
+import { Evaluation } from '../features/evaluation/Evaluation'
 import { Members, Models } from '../features/spaces/SpaceDetail'
 import { sortSpacesByCreation } from '../features/spaces/spaces'
 import { workspaceHomePath, legacySpacePath, spacePath, workspaceSections } from './routes'
@@ -17,8 +18,8 @@ export function App() {
   const me = useQuery({ queryKey: ['me'], queryFn: ({ signal }) => request<Schema['User']>('/auth/me', 'GET', undefined, signal), retry: false, refetchInterval: q => q.state.error ? false : 30000 })
   const spaces = useQuery({ queryKey: ['spaces'], queryFn: ({ signal }) => list<Schema['Space']>('/spaces', signal), enabled: me.isSuccess, select: sortSpacesByCreation, refetchInterval: q => q.state.error ? false : 5000 })
   const space = spaces.data?.find(s => s.id === spaceID)
-  const section = match?.params['*']?.split('/')[0] ?? ''
-  const page = workspaceSections.find(s => s.path === section)
+  const section = match?.params['*'] ?? ''
+  const page = workspaceSections.find(s => s.path === section || s.path !== '' && section.startsWith(s.path + '/'))
   const sessionPage = !!useMatch(agentConversationRoute)
   useEffect(() => {
     if (!spaceID) return
@@ -63,7 +64,7 @@ export function App() {
   </main>
   return <div className="layout"><aside className="app-sidebar"><Link className="brand" to={workspaceHomePath}>M<span className="brand-dot">A</span>SS<span className="brand-sub">AGENT WORKSPACE</span></Link>
     <nav aria-label="主导航"><label className="workspace-picker">空间<select aria-label="切换空间" value={space?.id ?? spaces.data?.[0]?.id ?? ''} disabled={!spaces.data?.length} onChange={event => navigate(spacePath(event.target.value))}>{!spaces.data?.length && <option value="" disabled>{spaces.isPending ? '正在读取空间…' : '暂无空间'}</option>}{spaces.data?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label></nav>
-    {space && <nav aria-label="空间导航">{['工作空间', '定义与资源', '空间管理'].map(group => <div key={group}><div className="nav-caption">{group}</div>{workspaceSections.filter(s => s.group === group).map(s => <NavLink key={s.path} to={spacePath(space.id, s.path)} end={!s.path}>{s.label}</NavLink>)}</div>)}</nav>}
+    {space && <nav aria-label="空间导航">{['工作空间', '定义与资源', '评测', '空间管理'].map(group => <div key={group}><div className="nav-caption">{group}</div>{workspaceSections.filter(s => s.group === group).map(s => <NavLink key={s.path} to={spacePath(space.id, s.path)} end={!s.path}>{s.label}</NavLink>)}</div>)}</nav>}
     <AccountSettings username={me.data.username} pending={logout.isPending} onLogout={() => logout.mutate()} /></aside>
     <main id="main-content"><nav className="breadcrumbs" aria-label="面包屑"><Link to={space ? spacePath(space.id) : workspaceHomePath}>{space?.name ?? '工作台'}</Link>{space && <>{section && <><span aria-hidden="true">/</span><span aria-current="page">{page?.label ?? '页面未找到'}</span></>}</>}</nav>
       <header><div><div className="eyebrow">{space ? space.name : 'WORKSPACE'}</div><h1>{space ? page?.label ?? '页面未找到' : '工作台'}</h1></div><span className="service-status">已连接 MASS 服务</span></header>
@@ -151,6 +152,7 @@ function SpaceWorkspace({ space, user, pending, error }: { space?: Schema['Space
     <Route path="agents/:definitionId" element={<Catalog key={`${space.id}-agents`} space={space} kind="agent" />} />
     <Route path="skills" element={<Catalog key={`${space.id}-skills`} space={space} kind="skill" />} />
     <Route path="skills/:definitionId" element={<Catalog key={`${space.id}-skills`} space={space} kind="skill" />} />
+    <Route path="evaluation/*" element={<Evaluation key={space.id} space={space.id} />} />
     <Route path="sessions" element={<Navigate to={spacePath(space.id, 'agents')} replace />} />
     <Route path="sessions/:sessionId" element={<LegacySession space={space.id} />} />
     <Route path="*" element={<NotFound />} /></Routes>
@@ -158,6 +160,6 @@ function SpaceWorkspace({ space, user, pending, error }: { space?: Schema['Space
 function SpaceUnavailable() { return <section className="panel"><h2>空间不存在或无权访问</h2><Link className="text-link" to={workspaceHomePath}>返回工作台</Link></section> }
 function SpaceOverview({ space }: { space: Schema['Space'] }) {
   return <><section className="panel overview-welcome"><div className="eyebrow">{space.is_owner ? '管理员' : '空间成员'}</div><h2>{space.name}</h2><p className="muted">在 Agents 中选择助手开始对话，在空间管理中配置协作环境。</p><Link className="primary-link" to={spacePath(space.id, 'agents')}>查看 Agents →</Link></section>
-    {['定义与资源', '空间管理'].map(group => <section className="overview-group" key={group}><h2>{group}</h2><div className="overview-grid">{workspaceSections.filter(s => s.group === group).map(s => <Link className="overview-card" key={s.path} to={spacePath(space.id, s.path)}><h3>{s.label}</h3><p>{s.description}</p><span className="card-link">进入 →</span></Link>)}</div></section>)}</>
+    {['定义与资源', '评测', '空间管理'].map(group => <section className="overview-group" key={group}><h2>{group}</h2><div className="overview-grid">{workspaceSections.filter(s => s.group === group).map(s => <Link className="overview-card" key={s.path} to={spacePath(space.id, s.path)}><h3>{s.label}</h3><p>{s.description}</p><span className="card-link">进入 →</span></Link>)}</div></section>)}</>
 }
 function NotFound() { return <section className="panel"><h2>页面未找到</h2><p className="muted">请从导航选择功能，或返回空间概览。</p><Link className="text-link" to={workspaceHomePath}>返回工作台</Link></section> }

@@ -48,7 +48,7 @@ func run() error {
 	if build["platform"] != runtime.GOOS+"/"+runtime.GOARCH {
 		return fmt.Errorf("release currently supports the build host platform only")
 	}
-	files := []string{"bin/mass", "configs/mass.example.yaml", "README.md", "docs/architecture.md", "docs/design-guide.md", "docs/technical-design.md", "docs/engineering.md"}
+	files := []string{"bin/mass", "configs/mass.example.yaml", "README.md", "docs/architecture.md", "docs/design-guide.md", "docs/technical-design.md", "docs/engineering.md", "docs/evaluation-design.md"}
 	// Include documentation images referenced by the four existing documents.
 	err = filepath.WalkDir("docs/images", func(path string, d os.DirEntry, err error) error {
 		if err != nil {

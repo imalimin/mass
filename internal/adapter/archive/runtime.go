@@ -529,12 +529,16 @@ func (r *Runtime) memberSession(ctx context.Context, actor, space, id string) (*
 	if err := r.access(ctx, actor, space); err != nil {
 		return nil, err
 	}
-	var present string
-	err := r.DB.DB.QueryRowContext(ctx, "SELECT id FROM sessions WHERE space_id=? AND id=?", space, id).Scan(&present)
+	var hide bool
+	err := r.DB.DB.QueryRowContext(ctx, "SELECT hide FROM sessions WHERE space_id=? AND id=?", space, id).Scan(&hide)
 	if err != nil {
 		return nil, notFound(err)
 	}
-	return r.lock(ctx, space, id)
+	s, err := r.lock(ctx, space, id)
+	if err == nil {
+		s.session.Hide = hide
+	}
+	return s, err
 }
 
 func (r *Runtime) locateRun(ctx context.Context, runID string) (space, session string, err error) {

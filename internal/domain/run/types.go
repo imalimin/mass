@@ -74,6 +74,7 @@ type Definition struct {
 	TimeoutSeconds  int         `json:"timeout_seconds"`
 }
 type Session struct {
+	Hide             bool        `json:"hide"`
 	ID               string      `json:"id"`
 	SpaceID          string      `json:"space_id"`
 	ActorID          string      `json:"actor_id"`

@@ -96,8 +96,8 @@ func (r *Runtime) AcceptRuntimeRequest(ctx context.Context, actor, space, operat
 		if err := r.commit(ctx, s, "", created); err != nil {
 			return "", "", err
 		}
-		_, err = r.DB.DB.ExecContext(ctx, "INSERT INTO sessions(id,space_id,agent_id,actor_id,created_at,request_key,request_digest) VALUES(?,?,?,?,?,?,?)",
-			batch.SessionID, space, d.DefinitionID, actor, e.OccurredAt, key, digest)
+		_, err = r.DB.DB.ExecContext(ctx, "INSERT INTO sessions(id,space_id,agent_id,actor_id,created_at,request_key,request_digest,hide) VALUES(?,?,?,?,?,?,?,?)",
+			batch.SessionID, space, d.DefinitionID, actor, e.OccurredAt, key, digest, d.Hide)
 		if err != nil {
 			return "", "", err
 		}

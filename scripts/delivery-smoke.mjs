@@ -26,7 +26,7 @@ try {
   const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'))
   for (const [name, digest] of Object.entries(manifest.sha256)) assert.equal(hash(await readFile(join(directory, name))), digest, name)
   const binary = join(directory, 'bin/mass'), info = JSON.parse(execFileSync(binary, ['build-info'], { env: { PATH: '' } }))
-  assert.equal(info.schema, 16); assert.equal(info.revision, execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim())
+  assert.equal(info.schema, 17); assert.equal(info.revision, execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim())
   assert.equal((await readFile(archive+'.sha256', 'utf8')).split(' ')[0], originalHash)
   server = await startFixtureServer({ storage: true, model: true, binary, template: join(directory, 'mass.yaml'), emptyDatabase: true })
   const m = server.maintenance

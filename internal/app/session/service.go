@@ -47,6 +47,7 @@ type Service struct {
 	Notify        func()
 }
 type CreateInput struct {
+	Hide             bool   `json:"hide,omitempty"`
 	Key              string `json:"idempotency_key"`
 	AgentID          string `json:"agent_id"`
 	VersionID        string `json:"version_id"`
@@ -145,7 +146,7 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 	if title == "" {
 		title = id
 	}
-	event := journal.New(actor, "session.created", "", journal.SessionData{SourceSnapshotID: in.SourceSnapshotID, DefinitionRef: &defRef, DefinitionID: in.AgentID, VersionID: version.ID, Title: title}, refs...)
+	event := journal.New(actor, "session.created", "", journal.SessionData{Hide: in.Hide, SourceSnapshotID: in.SourceSnapshotID, DefinitionRef: &defRef, DefinitionID: in.AgentID, VersionID: version.ID, Title: title}, refs...)
 	batch, err := journal.Prepare(actor, journal.Request{SpaceID: space, SessionID: id, AppendKey: uuid.NewString(), Events: []journal.Proposed{event}})
 	if err != nil {
 		return run.Session{}, err

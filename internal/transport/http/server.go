@@ -127,6 +127,8 @@ func isUIRoute(urlPath string) bool {
 	case "agents":
 		return len(parts) == 3 || len(parts) >= 4 && parts[3] != "" &&
 			(len(parts) == 4 || parts[4] == "sessions" && (len(parts) == 5 || len(parts) == 6 && parts[5] != ""))
+	case "evaluation":
+		return len(parts) == 3 || (len(parts) == 4 || len(parts) == 5) && (parts[3] == "datasets" || parts[3] == "experiments")
 	case "sessions", "skills":
 		return len(parts) == 3 || len(parts) == 4 && parts[3] != ""
 	default:
