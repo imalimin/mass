@@ -1,5 +1,5 @@
 # mass
-
+一站式Agent创意制作 → 调试 → 发布 → 运行 → 观测 → 运维/管理
 Multi-use Agent Systems：支持空间协作、Agent/Skill 定义、版本管理与连续任务执行的单服务应用。
 
 当前 D00—D10 的 MVP 建设及验收已完成，D07 真实模型与 D10 真实 TOS 恢复证据已补齐：可配置模型、发布 Agent/Skill、创建连续对话，使用内置工具处理文件、已接受附件和固定版本 Skill 资源。支持 Python、JavaScript 和 Go 文件/HTTP/CSV 操作、计划展示、产物下载、Trace、取消和快照恢复；支持阶段摘要复用和原始事件和投影 Manifest 的来源检查。

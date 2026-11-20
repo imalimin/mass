@@ -1,0 +1,137 @@
+<style>
+  #mass-authoring-flow {
+    color-scheme: light dark;
+    --mass-paper: light-dark(#fff, #1a1e24);
+    --mass-subtle: light-dark(#f4f6f9, #21272f);
+    --mass-ink: light-dark(#202833, #eef2f7);
+    --mass-muted: light-dark(#536173, #aebaca);
+    --mass-line: light-dark(#d6dce6, #434c5a);
+    --mass-accent: light-dark(#2357a5, #a7c9ff);
+    --mass-tint: light-dark(#eaf2ff, #25374f);
+    --mass-on-accent: light-dark(#fff, #162236);
+    --mass-success: light-dark(#256048, #9ad9bd);
+    font: 14px/1.45 system-ui, sans-serif;
+    color: var(--mass-ink);
+    margin: 0;
+    padding: 4px 6px 4px 0;
+    overflow-wrap: anywhere;
+  }
+  #mass-authoring-flow * { box-sizing: border-box; }
+  #mass-authoring-flow :is(h2,h3,p,ol,ul) { margin: 0; padding: 0; }
+  #mass-authoring-flow .journey { list-style: none; display: grid; gap: 14px; }
+  #mass-authoring-flow .step { display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 12px; }
+  #mass-authoring-flow .rail { position: relative; padding-top: 9px; }
+  #mass-authoring-flow .step:not(:last-child) .rail::after {
+    content: ''; position: absolute; inset: 42px auto -17px 13px; border-left: 1px solid var(--mass-line);
+  }
+  #mass-authoring-flow .number {
+    display: grid; place-items: center; height: 28px; width: 28px; border: 1px solid var(--mass-line);
+    border-radius: 50%; color: var(--mass-accent); background: var(--mass-paper); font-weight: 650;
+  }
+  #mass-authoring-flow .screen { background: var(--mass-paper); border: 1px solid var(--mass-line); border-radius: 12px; overflow: hidden; }
+  #mass-authoring-flow .focus { border-color: var(--mass-accent); }
+  #mass-authoring-flow .top, #mass-authoring-flow .foot {
+    display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 10px 14px;
+    background: var(--mass-subtle);
+  }
+  #mass-authoring-flow .top { border-bottom: 1px solid var(--mass-line); }
+  #mass-authoring-flow .foot { border-top: 1px solid var(--mass-line); }
+  #mass-authoring-flow .top h2 { font-size: 15px; font-weight: 650; }
+  #mass-authoring-flow .colhead { font-size: 14px; font-weight: 650; }
+  #mass-authoring-flow .quiet { color: var(--mass-muted); font-size: 12px; }
+  #mass-authoring-flow .split { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); }
+  #mass-authoring-flow .col { min-width: 0; padding: 12px 14px; display: grid; gap: 8px; align-content: start; }
+  #mass-authoring-flow .col + .col { border-left: 1px solid var(--mass-line); }
+  #mass-authoring-flow .rows { list-style: none; display: grid; gap: 3px; }
+  #mass-authoring-flow .row, #mass-authoring-flow .pair, #mass-authoring-flow .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; }
+  #mass-authoring-flow .pair { justify-content: space-between; }
+  #mass-authoring-flow .row { padding: 4px 0; }
+  #mass-authoring-flow .check { color: var(--mass-accent); font-size: 16px; }
+  #mass-authoring-flow .field, #mass-authoring-flow .bubble, #mass-authoring-flow .file {
+    border-radius: 7px; background: var(--mass-subtle); padding: 7px 9px;
+  }
+  #mass-authoring-flow .field { border: 1px solid var(--mass-line); }
+  #mass-authoring-flow .user, #mass-authoring-flow .selected { background: var(--mass-tint); }
+  #mass-authoring-flow .pill, #mass-authoring-flow .action {
+    display: inline-block; width: fit-content; padding: 3px 7px; border-radius: 6px; font-size: 12px; font-weight: 550;
+  }
+  #mass-authoring-flow .pill { color: var(--mass-accent); background: var(--mass-tint); }
+  #mass-authoring-flow .action { padding: 5px 10px; color: var(--mass-ink); background: var(--mass-paper); border: 1px solid var(--mass-line); }
+  #mass-authoring-flow .primary { color: var(--mass-on-accent); background: var(--mass-accent); border-color: var(--mass-accent); }
+  #mass-authoring-flow .test { padding-left: 8px; border-left: 2px solid var(--mass-success); }
+  #mass-authoring-flow .test b { color: var(--mass-success); font-weight: 650; }
+  #mass-authoring-flow .release { padding: 8px 14px; }
+  #mass-authoring-flow .release .row { justify-content: space-between; padding: 5px 0; }
+  #mass-authoring-flow .release .row + .row { border-top: 1px solid var(--mass-line); }
+  #mass-authoring-flow code { font: 12px/1.35 ui-monospace, monospace; white-space: normal; }
+  @media (max-width: 520px) {
+    #mass-authoring-flow .step { grid-template-columns: 24px minmax(0,1fr); gap: 7px; }
+    #mass-authoring-flow .number { height: 24px; width: 24px; }
+    #mass-authoring-flow .step:not(:last-child) .rail::after { left: 11px; }
+    #mass-authoring-flow .split { grid-template-columns: minmax(0,1fr); }
+    #mass-authoring-flow .col + .col { border-left: 0; border-top: 1px solid var(--mass-line); }
+  }
+</style>
+<figure id="mass-authoring-flow" lang="zh-CN" aria-label="MASS 创作 Agent 三步线框原型">
+  <ol class="journey">
+    <li class="step">
+      <div class="rail" aria-hidden="true"><span class="number">1</span></div>
+      <article class="screen" aria-labelledby="mass-start-title">
+        <header class="top"><h2 id="mass-start-title">选 Skills，一句话创建</h2><span class="quiet">Agents / 创作 Agent</span></header>
+        <div class="split">
+          <section class="col" aria-label="选择已有 Skill">
+            <h3 class="colhead">已有 Skills <span class="quiet">· 可不选</span></h3>
+            <ul class="rows">
+              <li class="row"><span class="check" aria-label="已选">☑</span> 网页摘要 <code>v1.2</code></li>
+              <li class="row"><span class="check" aria-label="已选">☑</span> 资讯整理 <code>v2.0</code></li>
+            </ul>
+          </section>
+          <section class="col" aria-label="描述新 Agent">
+            <h3 class="colhead">你想做什么？</h3>
+            <p class="field">做一个把本周产品动态整理成简报的 Agent。</p>
+            <span class="action primary">生成候选</span>
+          </section>
+        </div>
+      </article>
+    </li>
+    <li class="step">
+      <div class="rail" aria-hidden="true"><span class="number">2</span></div>
+      <article class="screen focus" aria-labelledby="mass-workbench-title">
+        <header class="top"><h2 id="mass-workbench-title">对话改稿、整包试跑</h2><span class="pill">候选 B · 未发布</span></header>
+        <div class="split">
+          <section class="col" aria-label="创作对话">
+            <h3 class="colhead">创作对话</h3>
+            <p class="bubble user">把「资讯整理」复制一份，改成三栏周报模板。</p>
+            <p class="bubble">已生成候选 B，新增 Skill「周报模板」。</p>
+            <p class="field quiet">继续对话修改 Agent 或 Skills…</p>
+          </section>
+          <section class="col" aria-label="候选预览">
+            <div class="pair"><h3 class="colhead">产品简报 Agent</h3><span class="quiet">候选 A / <strong>候选 B</strong></span></div>
+            <p class="row"><span>Agent</span><code>AGENTS.md</code><code>agent.yaml</code></p>
+            <ul class="rows" aria-label="绑定的 Skills">
+              <li class="row">网页摘要 <span class="quiet">复用 v1.2</span></li>
+              <li class="row">周报模板 <span class="pill">待发布</span></li>
+            </ul>
+            <p class="file selected"><code>SKILL.md</code> <span class="quiet">· 资源</span> <code>template.md</code></p>
+          </section>
+        </div>
+        <footer class="foot">
+          <p class="test quiet"><b>试跑 B 已完成</b> · 已用未发布的周报模板生成简报</p>
+          <div class="actions"><span class="action">试跑此候选</span><span class="action primary">去确认发布</span></div>
+        </footer>
+      </article>
+    </li>
+    <li class="step">
+      <div class="rail" aria-hidden="true"><span class="number">3</span></div>
+      <article class="screen" aria-labelledby="mass-release-title">
+        <header class="top"><h2 id="mass-release-title">确认发布</h2><span class="pill">候选 B</span></header>
+        <ul class="release rows" aria-label="发布清单">
+          <li class="row"><span>产品简报 <span class="quiet">· Agent</span></span><span class="pill">新发布</span></li>
+          <li class="row"><span>周报模板 <span class="quiet">· Skill</span></span><span class="pill">新发布</span></li>
+          <li class="row"><span>网页摘要 <code>v1.2</code> <span class="quiet">· Skill</span></span><span class="quiet">仅引用，不重发</span></li>
+        </ul>
+        <footer class="foot"><span class="quiet">发布成功后可开始普通会话</span><div class="actions"><span class="action">返回改稿</span><span class="action primary">确认发布</span></div></footer>
+      </article>
+    </li>
+  </ol>
+</figure>
