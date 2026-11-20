@@ -135,7 +135,7 @@
 3. 按 Eino 契约在 adapter/eino 实现可编程 FakeChatModel；接通 runtime/modelgateway 的 attempt、聚合、完整性、失败记录和 control 接口。摘要与任务共用调用契约，假模型记录注明来源；将 D00 验证过的实际 Eino 组件和 HTTP 原文捕获接到同一 Gateway，以本地 HTTP 供应商验证真实序列化路径；具备授权凭证后立即完成最小真实文本冒烟，D07 不再承担首次模型接入。
 4. 先实现 context/projector 的固定边界最小只读投影，再实现 context/planner 的容量拒绝、投影内容保存与事件登记。此阶段不做隐式摘要或静默截断；Projector 不依赖 Gateway。
 5. 实现 runtime/executor 的窄接口及唯一 ReAct 循环，文本回复只返回 Outcome，不写 Run 终态。先接通 read_file/write_file/publish_artifact 的最小真实路径及鉴权下载；尚未实现的工具拒绝执行，不假造成功。
-6. 实现 runtime/supervisor：Run context、取消/心跳、成功与失败统一收尾、工作目录快照保存、panic 恢复、权限撤销报错停止、取消与成功竞态、有界收尾及名额释放；随后接入 runtime/scheduler 的单实例锁、并发准入、事务认领、交接和轮询补漏。
+6. 实现 runtime/supervisor：Run context、取消/心跳、成功与失败统一收尾、工作目录快照保存、panic 恢复、权限撤销报错停止、取消与成功竞态、有界收尾；随后接入 runtime/scheduler 的单实例锁、事务认领、交接和轮询补漏。
 7. 在 bootstrap 完成具体实现注入与启停；实现 AguiProjector、agui_streams/agui_events、映射版本、UI 序号和事务检查点，提供 Trace/Run 查询、SSE 及基础页面。AG-UI 不反向驱动执行。
 8. 由 Supervisor 实现异常退出识别、operation.reconciled 与中断终结；实现连续 Run 复用目录、重启恢复及新 Session 指定快照复制，快照保存失败阻止新 Run，并提供只重试保存的 API。建立离线视图重建入口，不重放动作。
 

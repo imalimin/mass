@@ -253,7 +253,6 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 	j := &journal.Journal{Repo: db.Store}
 	snapshots := &resource.SnapshotStore{Repo: db.Store, Content: content, Journal: j, Workspaces: manager, Timeout: 30 * time.Second}
 	c := bootstrap.Config{}
-	c.Runtime.MaxConcurrentRuns = 2
 	c.Runtime.SnapshotTimeout = 30 * time.Second
 	c.Storage.MaxObjectBytes = 1 << 20
 	c.Storage.MaxWorkspaceBytes = limits.MaxTotalBytes

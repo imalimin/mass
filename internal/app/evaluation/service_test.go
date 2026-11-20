@@ -152,7 +152,7 @@ func TestExperimentReadsDuringCompletion(t *testing.T) {
 			worker := &task{experiment: exp, ctx: taskCtx, cancel: cancel, finishing: true, progress: map[string]Progress{
 				"1": {Status: "succeeded", RunIDs: []string{storage.NewShortID()}},
 			}}
-			s := &Service{MaxPerSpace: 1, callTimeout: time.Second, ctx: ctx, tasks: map[string]*task{id: worker}}
+			s := &Service{callTimeout: time.Second, ctx: ctx, tasks: map[string]*task{id: worker}}
 			s.Repo = completionDuringRead{memoryRepository: repo, complete: func() {
 				// Save the result and remove the task after taking the first
 				// storage snapshot, before the request consults memory.
@@ -240,7 +240,7 @@ func TestMultiTurnIsolationFailureAndIdempotency(t *testing.T) {
 		},
 		Diagnostics: func(context.Context, string, string, []string) ([]json.RawMessage, error) { return nil, nil },
 	}
-	s := &Service{Repo: repo, Calls: calls, MaxPerSpace: 2, pollInterval: time.Millisecond, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &Service{Repo: repo, Calls: calls, pollInterval: time.Millisecond, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	s.Start(context.Background())
 	defer s.Close(context.Background())
 	in := ExperimentInput{DatasetID: repo.dataset.ID, AgentID: storage.NewShortID(), AgentVersionID: uuid.NewString(), Concurrency: 2, Key: "experiment"}
@@ -274,7 +274,7 @@ func TestWaitDeadlineInterruptsWithoutChangingRun(t *testing.T) {
 		submitted++
 		return run.View{Snapshot: run.Snapshot{ID: storage.NewShortID(), CreatedAt: time.Now().Add(-time.Hour)}, Status: "queued"}, nil
 	}}
-	s := &Service{Repo: repo, Calls: calls, MaxPerSpace: 1, pollInterval: time.Millisecond, queueTimeout: time.Millisecond}
+	s := &Service{Repo: repo, Calls: calls, pollInterval: time.Millisecond, queueTimeout: time.Millisecond}
 	s.Start(context.Background())
 	defer s.Close(context.Background())
 	v, err := s.CreateExperiment(context.Background(), actor, space, ExperimentInput{DatasetID: repo.dataset.ID, AgentID: storage.NewShortID(), AgentVersionID: uuid.NewString(), Concurrency: 1, Key: "interrupt"})
@@ -285,7 +285,7 @@ func TestWaitDeadlineInterruptsWithoutChangingRun(t *testing.T) {
 	if done.Result != nil || submitted != 1 {
 		t.Fatalf("interrupted task was replayed: %+v %d", done, submitted)
 	}
-	restarted := &Service{Repo: repo, MaxPerSpace: 1}
+	restarted := &Service{Repo: repo}
 	restarted.Start(context.Background())
 	defer restarted.Close(context.Background())
 	after, err := restarted.Experiment(context.Background(), actor, space, v.ID)
@@ -294,16 +294,16 @@ func TestWaitDeadlineInterruptsWithoutChangingRun(t *testing.T) {
 	}
 }
 
-func TestExperimentsShareSpaceConcurrency(t *testing.T) {
+func TestExperimentsInSameSpaceUseTheirOwnConcurrency(t *testing.T) {
 	repo := newMemoryRepository()
 	repo.dataset.Cases = []Case{}
-	for range 3 {
+	for range 4 {
 		repo.dataset.Cases = append(repo.dataset.Cases, Case{Turns: []Turn{{Content: []Part{{Type: "text", Text: "work"}}}}})
 	}
 	actor, space := uuid.NewString(), storage.NewShortID()
 	var mu sync.Mutex
 	active, peak, submitted := 0, 0, 0
-	ready := make(chan struct{}, 2)
+	ready := make(chan struct{}, 5)
 	release := make(chan struct{})
 	calls := Calls{
 		CheckAgent: func(context.Context, string, string, string, string) error { return nil },
@@ -338,20 +338,21 @@ func TestExperimentsShareSpaceConcurrency(t *testing.T) {
 		},
 		Diagnostics: func(context.Context, string, string, []string) ([]json.RawMessage, error) { return nil, nil },
 	}
-	s := &Service{Repo: repo, Calls: calls, MaxPerSpace: 2, pollInterval: time.Millisecond}
+	s := &Service{Repo: repo, Calls: calls, pollInterval: time.Millisecond}
 	s.Start(context.Background())
 	defer s.Close(context.Background())
-	input := ExperimentInput{DatasetID: repo.dataset.ID, AgentID: storage.NewShortID(), AgentVersionID: uuid.NewString(), Concurrency: 2, Key: "one"}
+	input := ExperimentInput{DatasetID: repo.dataset.ID, AgentID: storage.NewShortID(), AgentVersionID: uuid.NewString(), Concurrency: 3, Key: "one"}
 	first, err := s.CreateExperiment(context.Background(), actor, space, input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	input.Key = "two"
+	input.Concurrency = 2
 	second, err := s.CreateExperiment(context.Background(), actor, space, input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range 2 {
+	for range 5 {
 		select {
 		case <-ready:
 		case <-time.After(time.Second):
@@ -362,15 +363,15 @@ func TestExperimentsShareSpaceConcurrency(t *testing.T) {
 	mu.Lock()
 	before := submitted
 	mu.Unlock()
-	if before != 2 {
-		t.Fatalf("submitted %d runs while space had two active cases", before)
+	if before != 5 {
+		t.Fatalf("submitted %d runs with per-experiment concurrency of 3 and 2", before)
 	}
 	close(release)
 	awaitExperiment(t, s, actor, space, first.ID, "completed")
 	awaitExperiment(t, s, actor, space, second.ID, "completed")
 	mu.Lock()
 	defer mu.Unlock()
-	if peak != 2 || submitted != 6 || active != 0 {
+	if peak != 5 || submitted != 8 || active != 0 {
 		t.Fatalf("wrong concurrency: peak=%d submitted=%d active=%d", peak, submitted, active)
 	}
 }
@@ -403,7 +404,7 @@ func TestMultiTurnFailurePosition(t *testing.T) {
 				},
 				Diagnostics: func(context.Context, string, string, []string) ([]json.RawMessage, error) { return nil, nil },
 			}
-			s := &Service{Repo: repo, Calls: calls, MaxPerSpace: 1, pollInterval: time.Millisecond}
+			s := &Service{Repo: repo, Calls: calls, pollInterval: time.Millisecond}
 			s.Start(context.Background())
 			defer s.Close(context.Background())
 			actor, space := uuid.NewString(), storage.NewShortID()

@@ -53,7 +53,15 @@ try {
   await page.getByLabel('评测集', { exact: true }).selectOption(dataset.id)
   await page.getByLabel('Agent', { exact: true }).selectOption(agent.id)
   await page.getByLabel('发布版本', { exact: true }).selectOption(version.id)
-  await page.getByLabel('并发用例数', { exact: true }).selectOption('2')
+  const concurrency = page.getByLabel('并发用例数', { exact: true })
+  for (const invalid of ['0', '-1', '1.5', '1e3', '']) {
+    await concurrency.fill(invalid)
+    assert.equal(await concurrency.evaluate(input => input.validity.valid), false, `accepted invalid concurrency ${invalid}`)
+  }
+  const largeConcurrency = '90071992547409931234567890'
+  await concurrency.fill(largeConcurrency)
+  await expect(concurrency).toHaveValue(largeConcurrency)
+  assert.ok(await concurrency.evaluate(input => input.validity.valid))
   const launchURL = server.url + '/api/v1' + root + '/evaluation/experiments'
   let firstLaunch
   await page.route(launchURL, async route => {
@@ -77,6 +85,7 @@ try {
   await expect(page.getByRole('heading', { name: '实验 · 已结束' })).toBeVisible({ timeout: 30000 })
   await expect(page.getByRole('status')).toContainText('成功 2 · 失败 0')
   const result = await api('GET', `${root}/evaluation/experiments/${experiment.id}`)
+  assert.equal(result.concurrency, 65535)
   assert.equal(result.dataset_version, 2)
   assert.equal(result.result['1'].run_ids.length, 2)
   assert.notEqual(result.result['1'].session_id, result.result['2'].session_id)

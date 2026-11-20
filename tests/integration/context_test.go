@@ -113,7 +113,6 @@ func TestContextStages(t *testing.T) {
 	j := &journal.Journal{Repo: db.Store}
 	snapshots := &resource.SnapshotStore{Repo: db.Store, Content: content, Journal: j, Workspaces: manager, Timeout: 10 * time.Second}
 	cfg := bootstrap.Config{}
-	cfg.Runtime.MaxConcurrentRuns = 1
 	cfg.Runtime.SnapshotTimeout = 10 * time.Second
 	cfg.Storage.MaxObjectBytes = limits.MaxArchiveFileBytes
 	cfg.Storage.MaxWorkspaceBytes = limits.MaxTotalBytes

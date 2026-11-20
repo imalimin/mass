@@ -37,8 +37,9 @@ func ValidateDataset(in DatasetInput) error {
 	}
 	return nil
 }
-func validateExperiment(in ExperimentInput, max int) error {
-	if !storage.ValidShortID(in.DatasetID) || !storage.ValidShortID(in.AgentID) || !storage.ValidID(in.AgentVersionID) || !keyPattern.MatchString(in.Key) || in.Concurrency < 1 || in.Concurrency > max {
+func validateExperiment(in ExperimentInput) error {
+	const maxStoredConcurrency = 1<<16 - 1 // evaluation_experiments.concurrency is SMALLINT UNSIGNED.
+	if !storage.ValidShortID(in.DatasetID) || !storage.ValidShortID(in.AgentID) || !storage.ValidID(in.AgentVersionID) || !keyPattern.MatchString(in.Key) || in.Concurrency < 1 || in.Concurrency > maxStoredConcurrency {
 		return identity.ErrInvalid
 	}
 	return nil

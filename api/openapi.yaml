@@ -5859,7 +5859,7 @@ components:
         concurrency:
           type: integer
           minimum: 1
-          maximum: 2
+          maximum: 65535
         idempotency_key:
           type: string
           pattern: ^[A-Za-z0-9._:-]{1,128}$
@@ -5906,7 +5906,7 @@ components:
         concurrency:
           type: integer
           minimum: 1
-          maximum: 2
+          maximum: 65535
         result:
           anyOf:
             - type: 'null'

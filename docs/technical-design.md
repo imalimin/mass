@@ -133,7 +133,6 @@ llm:
 secrets:
   master_key_env: "MASS_MASTER_KEY"
 runtime:
-  max_concurrent_runs: 4 # 示例值，部署时配置
   workspace_temp_root: "/tmp/mass-workspaces" # 会话工作区根。如需跨宿主重启保留本地大文件，使用同一个持久卷。
   snapshot_timeout: "60s" # 收尾上限；不是数据保留期限
 tools:
@@ -341,9 +340,9 @@ HTTP 在 `/api/v1/spaces/{space_id}` 下提供 sessions 列表/创建/详情、�
 
 ## T05 M05 单进程调度、认领与停止
 
-依赖：MariaDB/InnoDB、database/sql、context、sync、time。调度器与 API、前端资源服务在同一个 Go 进程中。runs 表是任务来源，内存通知用于唤醒，轮询补漏；平台与空间并发由进程内准入器限制。
+依赖：MariaDB/InnoDB、database/sql、context、sync、time。调度器与 API、前端资源服务在同一个 Go 进程中。runs 表是任务来源，内存通知用于唤醒，轮询补漏。
 
-MVP 由一个 dispatcher 串行认领，再交给受限 goroutine 执行。不要求队列 SKIP LOCKED 能力。先在事务外读取候选 Run/Session ID，再按“Session → Run → 其他视图/引用”的固定锁顺序，在短事务中复核并认领；没有候选或复核失败则释放并发名额。事件追加、提交和取消也遵循相同锁顺序。
+一个 dispatcher 串行认领，再交给各 Run 的 goroutine 并行执行。不要求队列 SKIP LOCKED 能力。先在事务外读取候选 Run/Session ID，再按“Session → Run → 其他视图/引用”的固定锁顺序，在短事务中复核并认领。事件追加、提交和取消也遵循相同锁顺序。
 
 ```sql
 START TRANSACTION;
@@ -360,7 +359,7 @@ WHERE space_id = ? AND id = ? AND status = 'queued';
 COMMIT;
 ```
 
-增加 `(space_id, status, created_at, id)` 索引，先获得并发名额再认领。事务不跨模型或 TOS 请求持有行锁。`FOR UPDATE` 必须运行在有效事务内。[MariaDB 行锁文档](https://mariadb.com/docs/server/reference/sql-statements/data-manipulation/selecting-data/for-update)
+增加 `(space_id, status, created_at, id)` 索引支持认领查询。事务不跨模型或 TOS 请求持有行锁。`FOR UPDATE` 必须运行在有效事务内。[MariaDB 行锁文档](https://mariadb.com/docs/server/reference/sql-statements/data-manipulation/selecting-data/for-update)
 
 服务启动用独立 `*sql.Conn` 持有 `GET_LOCK('mass:<database>:runtime', 0)`，返回 1 才成为执行实例，退出在同连接 RELEASE_LOCK 并关闭。该连接不能借出到连接池；锁随连接而非事务生命周期存在。持锁连接异常时停止接单和后续动作，不能宣称它提供自动故障切换或副作用恰好一次。[MariaDB GET_LOCK](https://mariadb.com/docs/server/reference/sql-functions/secondary-functions/miscellaneous-functions/get_lock)
 
@@ -388,7 +387,7 @@ Finisher 的系统身份是一个绑定已认领 Run、主体、空间/Session �
 
 | 子包（相对于 internal/） | 归属 | 输入 → 输出与独占职责 | 不承担的职责 |
 | --- | --- | --- | --- |
-| runtime/scheduler | M05 | queued 候选、并发配额 → 已认领 Run 与准入名额；串行 dispatcher、唤醒/轮询、单实例锁监测、认领后交接 | 不创建用户消息、不执行 ReAct、不写运行终态 |
+| runtime/scheduler | M05 | queued 候选 → 已认领 Run；串行 dispatcher、唤醒/轮询、单实例锁监测、认领后交接 | 不创建用户消息、不执行 ReAct、不写运行终态 |
 | runtime/supervisor | M05 | 已认领 Run 与名额 → 启动校验、有界执行、终态和资源释放 | 不组装消息、不解析模型响应、不实现工具 |
 | runtime/executor | M06 | RunSnapshot → Outcome 或 error；唯一 ReAct 循环、步骤推进、串行派发一组工具、选择最终响应 | 不更新 Run 状态、不持有 SQL/TOS/SDK、不做摘要算法 |
 | runtime/control | M06 | Run 限额、操作类型、已记录用量 → 允许执行或停止原因；统一次数、时限与预算检查/预留/结算 | 不管理队列并发、不组装上下文、不独立保存计费事实 |
@@ -401,7 +400,7 @@ Finisher 的系统身份是一个绑定已认领 Run、主体、空间/Session �
 
 包内再按实现职责拆文件：supervisor 分为 supervise/cancel/recover，planner 分为 prepare/epoch/summary，projector 分为 history/units/render/manifest，modelgateway 分为 attempt/stream/retry/usage，dispatcher 分为 authorize/validate/execute/commit；文件共享该包的内部类型，不再为每个函数增加子包。供应商帧解码属于 adapter/eino。
 
-拆分仍是同一个 Go 进程内的方法调用，不引入 RPC、消息队列或插件系统。`scheduler` 的并发名额与 `control` 的 Run 调用/用量预算是两类资源，不能用同一个计数器代替。
+拆分仍是同一个 Go 进程内的方法调用。各 Run 的调用和用量预算由 `control` 执行。
 
 共用能力的代码归属如下：
 
@@ -504,7 +503,7 @@ func (e *Executor) Execute(ctx context.Context, run RunSnapshot) (Outcome, error
 
 Supervisor 区分 cancelled、deadline、模型失败、持久化失败及 panic，使用独立且有超时的收尾 context 保存终态；不能复用已取消的执行 context，也不能无限等待数据库恢复。Finish 事务最后复核 Run 主体的成员权限并与成员变更串行裁决；已撤销则 failed/forbidden，保留已完成响应与快照，不被普通 context cancelled 覆盖。权限仍有效时再裁决取消：锁内已存在取消请求则 cancelled，成功终态先提交则后来取消/撤权不改写旧终态。收尾期间撤权也遵循此规则。
 
-scheduler 取得并发名额，认领失败自行释放；认领成功后 Supervisor 接收 Run 与名额并承担一次性释放责任。交接失败由 scheduler 调用 Supervisor 的启动失败收尾入口；认领成功后不重新入队重放。取消后必须等待执行栈和子调用退出才能释放执行名额；会话占用仅随终态事务释放。收尾持久化失败时可以释放已停止执行的内存名额，但 Run/会话仍保持待恢复状态，停止继续认领并暴露运行子系统异常，不能假报结束。
+scheduler 认领 Run 后交给 Supervisor；交接失败停止继续认领。认领成功的 Run 由运行时负责执行或恢复。取消后须等待执行栈和子调用退出，会话占用随终态提交释放。收尾持久化失败时，Run 和会话保持待恢复状态，运行子系统报告故障并停止继续认领。
 
 Run context 由 Supervisor 从服务生命周期派生；模型流、摘要和工具获得其子 context。scheduler 和 Trace 归档是服务级后台任务，Run 内 goroutine 由启动它的组件负责等待退出；不得在取消后遗留未跟踪的工具工作。无法停止的动作等待进程退出并在恢复时标记中断。
 

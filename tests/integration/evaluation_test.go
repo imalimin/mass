@@ -125,7 +125,7 @@ func TestEvaluationRevokedMemberResult(t *testing.T) {
 		}
 		return auth.CheckAccess(ctx, actor, space)
 	}
-	eval := &evaluation.Service{Repo: db.Store, MaxPerSpace: 2, Calls: evaluation.Calls{
+	eval := &evaluation.Service{Repo: db.Store, Calls: evaluation.Calls{
 		CheckAgent: func(ctx context.Context, actor, space, _, _ string) error {
 			return checkAccess(ctx, actor, space)
 		},
@@ -345,7 +345,10 @@ func TestEvaluationHTTPMultiTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls atomic.Int64
-	fake := &einoadapter.ModelTransport{Fake: &einoadapter.FakeChatModel{Respond: func(_ context.Context, messages []*schema.Message) ([]*schema.Message, error) {
+	const parallelCases = 5
+	started := make(chan struct{}, parallelCases)
+	release := make(chan struct{})
+	fake := &einoadapter.ModelTransport{Fake: &einoadapter.FakeChatModel{Respond: func(ctx context.Context, messages []*schema.Message) ([]*schema.Message, error) {
 		calls.Add(1)
 		latest := ""
 		last := 0
@@ -369,6 +372,14 @@ func TestEvaluationHTTPMultiTurn(t *testing.T) {
 		if latest == "independent" && len(users) != 1 {
 			t.Errorf("cases share history: %v", users)
 		}
+		if tools == 0 && (latest == "remember" || latest == "independent") {
+			started <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 		reply := &schema.Message{Role: schema.Assistant, Content: "bluebird", ResponseMeta: &schema.ResponseMeta{FinishReason: "stop", Usage: &schema.TokenUsage{PromptTokens: 100, CompletionTokens: 10}}}
 		if tools == 0 && (latest == "remember" || latest == "recall") {
 			name, args := "write_file", `{"path":"memory.txt","content":"bluebird","media_type":"text/plain","expected_sha256":"missing"}`
@@ -383,7 +394,6 @@ func TestEvaluationHTTPMultiTurn(t *testing.T) {
 	}}}
 	snapshots := &resource.SnapshotStore{Repo: sessions, Content: content, Journal: &journal.Journal{Repo: sessions}, Workspaces: manager, Timeout: 5 * time.Second}
 	cfg := bootstrap.Config{}
-	cfg.Runtime.MaxConcurrentRuns = 4
 	cfg.Runtime.SnapshotTimeout = 5 * time.Second
 	cfg.Runtime.WorkspaceTempRoot = t.TempDir()
 	cfg.LLM.MaxAttempts = 1
@@ -392,7 +402,7 @@ func TestEvaluationHTTPMultiTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lifecycle.Close(ctx)
-	eval := &evaluation.Service{Repo: db.Store, MaxPerSpace: 2, SnapshotTimeout: 5 * time.Second, Logger: logger, Calls: evaluation.Calls{CheckAgent: func(ctx context.Context, actor, space, agent, version string) error {
+	eval := &evaluation.Service{Repo: db.Store, SnapshotTimeout: 5 * time.Second, Logger: logger, Calls: evaluation.Calls{CheckAgent: func(ctx context.Context, actor, space, agent, version string) error {
 		_, e := catalogue.Version(ctx, actor, space, "agent", agent, version)
 		return e
 	}, Create: runtime.Service.Create, Submit: runtime.Service.Submit, Run: sessions.AcceptedRunStatus, Diagnostics: sessions.AcceptedRunDiagnostics}}
@@ -418,14 +428,17 @@ func TestEvaluationHTTPMultiTurn(t *testing.T) {
 	turn := func(text string) evaluation.Turn {
 		return evaluation.Turn{Content: []evaluation.Part{{Type: "text", Text: text}}}
 	}
-	input := evaluation.DatasetInput{Name: "memory", Cases: []evaluation.Case{{Turns: []evaluation.Turn{turn("remember"), turn("recall")}}, {Turns: []evaluation.Turn{turn("independent")}}}}
+	input := evaluation.DatasetInput{Name: "memory", Cases: []evaluation.Case{{Turns: []evaluation.Turn{turn("remember"), turn("recall")}}}}
+	for range parallelCases - 1 {
+		input.Cases = append(input.Cases, evaluation.Case{Turns: []evaluation.Turn{turn("independent")}})
+	}
 	out := request("POST", base+"/datasets", input)
 	if out.Code != 201 {
 		t.Fatal(out.Body.String())
 	}
 	var d evaluation.Dataset
 	json.Unmarshal(out.Body.Bytes(), &d)
-	in := evaluation.ExperimentInput{DatasetID: d.ID, AgentID: draft.ID, AgentVersionID: version.ID, Concurrency: 2, Key: "run"}
+	in := evaluation.ExperimentInput{DatasetID: d.ID, AgentID: draft.ID, AgentVersionID: version.ID, Concurrency: parallelCases, Key: "run"}
 	out = request("POST", base+"/experiments", in)
 	if out.Code != 202 {
 		t.Fatal(out.Body.String())
@@ -437,6 +450,16 @@ func TestEvaluationHTTPMultiTurn(t *testing.T) {
 	if out = request("POST", base+"/datasets/"+d.ID+"/versions", changed); out.Code != 201 {
 		t.Fatal(out.Body.String())
 	}
+	barrier := time.NewTimer(10 * time.Second)
+	defer barrier.Stop()
+	for i := range parallelCases {
+		select {
+		case <-started:
+		case <-barrier.C:
+			t.Fatalf("only %d of %d Runs entered the model concurrently in one space", i, parallelCases)
+		}
+	}
+	close(release)
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		out = request("GET", base+"/experiments/"+experiment.ID, nil)
@@ -446,7 +469,7 @@ func TestEvaluationHTTPMultiTurn(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if experiment.Status != "completed" || experiment.Succeeded != 2 || experiment.DatasetVersion != 1 {
+	if experiment.Status != "completed" || experiment.Succeeded != parallelCases || experiment.DatasetVersion != 1 {
 		t.Fatalf("experiment failed: %s", out.Body.String())
 	}
 	p := experiment.Result["1"]
@@ -511,7 +534,7 @@ func TestEvaluationHTTPMultiTurn(t *testing.T) {
 	out = request("GET", base+"/datasets/"+d.ID+"/versions/1", nil)
 	var original evaluation.Dataset
 	json.Unmarshal(out.Body.Bytes(), &original)
-	if original.Name != "memory" || len(original.Cases) != 2 {
+	if original.Name != "memory" || len(original.Cases) != parallelCases {
 		t.Fatal("frozen inputs changed")
 	}
 	large := evaluation.DatasetInput{Name: "large", Cases: []evaluation.Case{{Turns: []evaluation.Turn{turn(strings.Repeat("x", 20<<10))}}}}

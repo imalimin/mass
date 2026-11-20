@@ -60,7 +60,6 @@ type Config struct {
 		MasterKeyEnv string `yaml:"master_key_env"`
 	} `yaml:"secrets"`
 	Runtime struct {
-		MaxConcurrentRuns int           `yaml:"max_concurrent_runs"`
 		WorkspaceTempRoot string        `yaml:"workspace_temp_root"`
 		SnapshotTimeout   time.Duration `yaml:"snapshot_timeout"`
 	} `yaml:"runtime"`
@@ -155,8 +154,8 @@ func (c Config) ValidateService(getenv func(string) string) error {
 	if c.Auth.CookieSecure && u.Scheme != "https" {
 		return errors.New("secure cookies require HTTPS public_url")
 	}
-	if c.HTTP.ShutdownTimeout <= 0 || c.Auth.SessionTTL < time.Second || c.Runtime.SnapshotTimeout <= 0 || c.Runtime.MaxConcurrentRuns < 1 {
-		return errors.New("timeouts and concurrency limits must be positive")
+	if c.HTTP.ShutdownTimeout <= 0 || c.Auth.SessionTTL < time.Second || c.Runtime.SnapshotTimeout <= 0 {
+		return errors.New("timeouts must be positive")
 	}
 	if !filepath.IsAbs(c.Runtime.WorkspaceTempRoot) || filepath.Clean(c.Runtime.WorkspaceTempRoot) == string(filepath.Separator) {
 		return errors.New("workspace_temp_root must be an absolute dedicated directory")

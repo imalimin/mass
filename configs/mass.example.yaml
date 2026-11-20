@@ -29,7 +29,6 @@ llm:
 secrets:
   master_key_env: "MASS_MASTER_KEY"
 runtime:
-  max_concurrent_runs: 4
   workspace_temp_root: "/tmp/mass-workspaces"
   snapshot_timeout: "60s"
 tools:

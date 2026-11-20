@@ -28,13 +28,11 @@ type task struct {
 type Service struct {
 	Repo            Repository
 	Calls           Calls
-	MaxPerSpace     int
 	SnapshotTimeout time.Duration
 	Logger          *slog.Logger
 	mu              sync.Mutex
 	createMu        sync.Mutex
 	tasks           map[string]*task
-	spaces          map[string]int
 	ctx             context.Context
 	cancel          context.CancelFunc
 	stopped         bool
@@ -61,7 +59,6 @@ func (s *Service) Start(parent context.Context) {
 	}
 	s.ctx, s.cancel = context.WithCancel(parent)
 	s.tasks = map[string]*task{}
-	s.spaces = map[string]int{}
 	s.wake = make(chan struct{}, 1)
 	s.wg.Add(1)
 	go s.loop()
@@ -99,7 +96,7 @@ func (s *Service) CreateExperiment(ctx context.Context, actor, space string, in 
 	if !storage.ValidShortID(space) {
 		return Experiment{}, identity.ErrInvalid
 	}
-	if err := validateExperiment(in, s.MaxPerSpace); err != nil {
+	if err := validateExperiment(in); err != nil {
 		return Experiment{}, err
 	}
 	s.createMu.Lock()
@@ -294,7 +291,7 @@ func (s *Service) loop() {
 				continue
 			}
 			for i := range t.dataset.Cases {
-				if t.active >= t.experiment.Concurrency || s.spaces[t.experiment.SpaceID] >= s.MaxPerSpace {
+				if t.active >= t.experiment.Concurrency {
 					break
 				}
 				key := strconv.Itoa(i + 1)
@@ -303,7 +300,6 @@ func (s *Service) loop() {
 				}
 				t.progress[key] = Progress{Status: "active", RunIDs: []string{}}
 				t.active++
-				s.spaces[t.experiment.SpaceID]++
 				s.wg.Add(1)
 				go s.runCase(t, i)
 			}

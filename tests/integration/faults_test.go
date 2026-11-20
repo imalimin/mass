@@ -251,7 +251,6 @@ func (r *faultRig) start() {
 	snapshots := &resource.SnapshotStore{Repo: r.db.Store, Content: r.content, Journal: j, Workspaces: r.manager, Timeout: 2 * time.Second}
 	c := bootstrap.Config{}
 	c.LLM.MaxAttempts = 2
-	c.Runtime.MaxConcurrentRuns = 1
 	c.Runtime.SnapshotTimeout = 2 * time.Second
 	c.Storage.MaxObjectBytes = 2 << 20
 	c.Storage.MaxWorkspaceBytes = 8 << 20
@@ -583,14 +582,9 @@ func TestCodeNetworkTimeoutKeepsCauseAndEffect(t *testing.T) {
 
 func TestFaultQueuedCancellationAndDatabaseLoss(t *testing.T) {
 	r := newFaultRig(t)
+	queuedSession, cancelledSession := r.session(), r.session()
 	first := r.submit(r.session(), "wait for database fault")
 	r.entered()
-	queued := r.submit(r.session(), "queued survives fault")
-	cancelled := r.submit(r.session(), "queued cancel")
-	if _, err := r.db.Store.CancelRuntimeRun(context.Background(), r.actor, r.space, cancelled.ID); err != nil {
-		t.Fatal(err)
-	}
-	r.runtime.Cancel(cancelled.ID)
 	// Close only this randomly scoped application's pool. The test server and
 	// other databases are untouched; the admin observes facts independently.
 	if err := r.db.Store.DB.Close(); err != nil {
@@ -619,6 +613,24 @@ func TestFaultQueuedCancellationAndDatabaseLoss(t *testing.T) {
 	}
 	r.db.Store = store
 	r.bind()
+	// Seed the durable queue before restarting the dispatcher. An executing Run
+	// no longer keeps other sessions queued.
+	offline := *r.runtime.Service
+	offline.Repo, offline.Identity, offline.Content = store, r.auth, r.content
+	offline.Ready, offline.Notify = nil, nil
+	queue := func(session run.Session, text string) run.View {
+		t.Helper()
+		v, err := offline.Submit(context.Background(), r.actor, r.space, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: text})
+		if err != nil || v.Status != "queued" {
+			t.Fatalf("could not seed queued Run: %v, status=%s", err, v.Status)
+		}
+		return v
+	}
+	queued := queue(queuedSession, "queued survives fault")
+	cancelled := queue(cancelledSession, "queued cancel")
+	if _, err := store.CancelRuntimeRun(context.Background(), r.actor, r.space, cancelled.ID); err != nil {
+		t.Fatal(err)
+	}
 	before := r.model.calls.Load()
 	r.start()
 	recovered := r.wait(first.ID)

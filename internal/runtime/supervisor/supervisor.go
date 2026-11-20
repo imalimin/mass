@@ -44,7 +44,7 @@ type Supervisor struct {
 	Fault          func(error)
 }
 
-func (s *Supervisor) Start(parent context.Context, v run.View, release func()) bool {
+func (s *Supervisor) Start(parent context.Context, v run.View) bool {
 	s.mu.Lock()
 	if s.active == nil {
 		s.active = map[string]context.CancelCauseFunc{}
@@ -59,7 +59,6 @@ func (s *Supervisor) Start(parent context.Context, v run.View, release func()) b
 	s.mu.Unlock()
 	go func() {
 		defer s.wg.Done()
-		defer release()
 		defer func() { s.mu.Lock(); delete(s.active, v.ID); s.mu.Unlock(); cancel(nil) }()
 		s.run(ctx, v)
 	}()

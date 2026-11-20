@@ -42,7 +42,7 @@ func TestConfig(t *testing.T) {
 		{"global_model_url_removed", strings.Replace(string(data), "  framework: \"eino\"", "  base_url_env: MODEL_URL\n  framework: \"eino\"", 1), fixtureEnv},
 		{"multiple_documents", string(data) + "---\nhttp: {}\n", fixtureEnv},
 		{"duplicate", string(data) + "http: {}\n", fixtureEnv},
-		{"nonpositive_limit", strings.Replace(string(data), "max_concurrent_runs: 4", "max_concurrent_runs: 0", 1), fixtureEnv},
+		{"run_concurrency_removed", strings.Replace(string(data), "runtime:\n", "runtime:\n  max_concurrent_runs: 4\n", 1), fixtureEnv},
 		{"nonpositive_model_timeout", strings.Replace(string(data), `timeout: "30m"`, `timeout: "0s"`, 1), fixtureEnv},
 		{"insecure_remote_cookie", strings.Replace(string(data), "http://127.0.0.1:8080", "http://example.com", 1), fixtureEnv},
 		{"relative_workspace", strings.Replace(string(data), "/tmp/mass-workspaces", "relative", 1), fixtureEnv},

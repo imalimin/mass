@@ -97,7 +97,7 @@ func (s *Service) failed(t *task, key string, p Progress, stage string, err erro
 }
 func (s *Service) runCase(t *task, index int) {
 	defer s.wg.Done()
-	defer func() { s.mu.Lock(); t.active--; s.spaces[t.experiment.SpaceID]--; s.mu.Unlock(); s.notify() }()
+	defer func() { s.mu.Lock(); t.active--; s.mu.Unlock(); s.notify() }()
 	e := t.experiment
 	key := fmt.Sprint(index + 1)
 	p := Progress{Status: "active", RunIDs: []string{}}

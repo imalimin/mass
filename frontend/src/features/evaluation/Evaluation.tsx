@@ -14,6 +14,7 @@ const labels: Record<string, string> = { queued: '排队中', running: '执行�
 const newTurn = () => ({ content: [{ type: 'text' as const, text: '' }] })
 const newCase = (): Case => ({ turns: [newTurn()] })
 const newRequestKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
+const maxPersistedConcurrency = 65_535
 const countTurns = (cases?: Case[]) => (cases ?? []).reduce((n, c) => n + c.turns.length, 0)
 const errorText = (error: unknown) => error instanceof Error ? error.message : ''
 const caseText = (c: Case, turn: number) => c.turns[turn].content.map(part => part.type === 'text' ? part.text : '').join('')
@@ -83,19 +84,37 @@ function Experiments({ space }: { space: string }) {
   const datasets = useQuery({ queryKey: ['private', space, 'evaluation', 'datasets'], queryFn: ({ signal }) => list<Dataset>(`${base}/datasets`, signal) })
   const agents = useQuery({ queryKey: ['private', space, 'evaluation', 'agents'], queryFn: ({ signal }) => list<Schema['Definition']>(`/spaces/${space}/agents`, signal) })
   const experiments = useQuery({ queryKey: ['private', space, 'evaluation', 'experiments'], queryFn: ({ signal }) => list<Experiment>(`${base}/experiments`, signal), refetchInterval: q => q.state.error ? false : 3000 })
-  const [datasetID, setDatasetID] = useState(''), [agentID, setAgentID] = useState(''), [versionID, setVersionID] = useState(''), [concurrency, setConcurrency] = useState(1)
+  const [datasetID, setDatasetID] = useState(''), [agentID, setAgentID] = useState(''), [versionID, setVersionID] = useState(''), [concurrency, setConcurrency] = useState('1')
   const versions = useQuery({ queryKey: ['private', space, 'evaluation', 'versions', agentID], queryFn: ({ signal }) => list<Schema['DefinitionVersion']>(`/spaces/${space}/agents/${agentID}/versions`, signal), enabled: !!agentID })
   const selected = datasets.data?.find(d => d.id === datasetID)
   const preview = useQuery({ queryKey: ['private', space, 'evaluation', 'dataset', datasetID, null], queryFn: ({ signal }) => request<Dataset>(`${base}/datasets/${datasetID}`, 'GET', undefined, signal), enabled: !!datasetID })
   const requestKey = useRef<string | null>(null)
-  const launch = useMutation({ mutationFn: () => { requestKey.current ??= newRequestKey(); return request<Experiment>(`${base}/experiments`, 'POST', { dataset_id: datasetID, agent_id: agentID, agent_version_id: versionID, concurrency, idempotency_key: requestKey.current }) }, onSuccess: v => { requestKey.current = null; void client.invalidateQueries({ queryKey: ['private', space, 'evaluation', 'experiments'] }); navigate(`${path}/${v.id}`) } })
+  const launch = useMutation({
+    mutationFn: () => {
+      requestKey.current ??= newRequestKey()
+      // The API value fits the existing storage type. This ceiling exceeds the
+      // maximum dataset size, so larger inputs still run every case in parallel.
+      return request<Experiment>(`${base}/experiments`, 'POST', {
+        dataset_id: datasetID,
+        agent_id: agentID,
+        agent_version_id: versionID,
+        concurrency: Math.min(Number(concurrency), maxPersistedConcurrency),
+        idempotency_key: requestKey.current,
+      })
+    },
+    onSuccess: experiment => {
+      requestKey.current = null
+      void client.invalidateQueries({ queryKey: ['private', space, 'evaluation', 'experiments'] })
+      navigate(`${path}/${experiment.id}`)
+    },
+  })
   const change = () => { requestKey.current = null; launch.reset() }
   return <><section className="panel"><h2>发起实验</h2><form onSubmit={e => { e.preventDefault(); launch.mutate() }}><fieldset disabled={launch.isPending}><div className="evaluation-form-grid">
     <label>评测集<select aria-label="评测集" required value={datasetID} onChange={e => { change(); setDatasetID(e.target.value) }}><option value="">选择评测集</option>{datasets.data?.map(d => <option key={d.id} value={d.id} disabled={d.case_count === 0}>{d.name} · v{d.version} · {d.case_count} 条用例</option>)}</select></label>
     <label>Agent<select aria-label="Agent" required value={agentID} onChange={e => { change(); setAgentID(e.target.value); setVersionID('') }}><option value="">选择 Agent</option>{agents.data?.filter(a => !a.archived).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
     <label>发布版本<select aria-label="发布版本" required value={versionID} onChange={e => { change(); setVersionID(e.target.value) }} disabled={!agentID || versions.isPending}><option value="">选择发布版本</option>{versions.data?.filter(v => !v.archived && !v.debug).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}</select></label>
-    <label>并发用例数<select aria-label="并发用例数" value={concurrency} onChange={e => { change(); setConcurrency(Number(e.target.value)) }}><option value={1}>1</option><option value={2}>2</option></select></label></div>
-    {selected && <p className="muted">使用发起时的最新保存版本 · {selected.case_count} 条用例 · {countTurns(preview.data?.cases)} 轮输入。实际并发与普通对话共享空间配额。</p>}
+    <label>并发用例数<input inputMode="numeric" pattern="0*[1-9][0-9]*" title="请输入大于 0 的整数" required value={concurrency} onChange={e => { change(); setConcurrency(e.target.value) }} /></label></div>
+    {selected && <p className="muted">使用发起时的最新保存版本 · {selected.case_count} 条用例 · {countTurns(preview.data?.cases)} 轮输入。</p>}
     <button disabled={!datasetID || !agentID || !versionID || launch.isPending}>{launch.isPending ? '正在发起…' : '发起实验'}</button>
   </fieldset></form>{[datasets.error, agents.error, versions.error, preview.error, launch.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}</section>
     <section className="panel"><h2>实验记录</h2>{experiments.error && <p role="alert">{experiments.error.message}</p>}{experiments.isPending && <p role="status">正在读取实验…</p>}

@@ -125,7 +125,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	finisher := &resource.Finisher{Scope: scope, Content: content, Workspaces: workspaces, Timeout: c.Runtime.SnapshotTimeout, DiagnosticLog: diagnosticLog}
 	snapshots.DiagnosticLog = diagnosticLog
 	supervisorService := &supervisor.Supervisor{Guard: auth, Coordinator: coordinator, Workspaces: workspaceService, Finisher: finisher, CleanupTimeout: c.Runtime.SnapshotTimeout + 5*time.Second, DiagnosticLog: diagnosticLog}
-	schedulerService := &scheduler.Scheduler{Repo: coordinator, Launcher: supervisorService, MaxConcurrent: c.Runtime.MaxConcurrentRuns, MaxPerSpace: min(c.Runtime.MaxConcurrentRuns, 2)}
+	schedulerService := &scheduler.Scheduler{Repo: coordinator, Launcher: supervisorService}
 	fault := func(err error) {
 		schedulerService.Fault(err)
 		cancel()

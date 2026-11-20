@@ -392,7 +392,6 @@ return input.(float64) + float64(len(rows))`}
 		return toolReply(name, args), nil
 	}}}
 	c := bootstrap.Config{}
-	c.Runtime.MaxConcurrentRuns = 2
 	c.Runtime.SnapshotTimeout = 60 * time.Second
 	c.Storage.MaxObjectBytes = limits.MaxArchiveFileBytes
 	c.Storage.MaxWorkspaceBytes = limits.MaxTotalBytes
