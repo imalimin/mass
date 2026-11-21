@@ -34,7 +34,6 @@ import (
 	transport "github.com/imalimin/mass/internal/transport/http"
 	"github.com/imalimin/mass/tests/fakes"
 	"github.com/imalimin/mass/tests/testdb"
-	"go.yaml.in/yaml/v4"
 )
 
 type sharedModelTransport struct {
@@ -174,7 +173,7 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	newAgentConfig := conf
 	newAgentConfig.Name, newAgentConfig.Skills = "agent-from-creativity", nil
 	newAgentConfig.Model = ""
-	legacyAgentYAML, err := yaml.Marshal(newAgentConfig)
+	newAgentJSON, err := json.MarshalIndent(newAgentConfig, "", "  ")
 	must(err)
 	var draftBinding atomic.Value
 	fake := &einoadapter.ModelTransport{Fake: &einoadapter.FakeChatModel{Respond: func(_ context.Context, messages []*schema.Message) ([]*schema.Message, error) {
@@ -224,7 +223,9 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 		case createAgent && len(toolMessages) == 0:
 			tool, args = "write_file", `{"path":"AGENTS.md","content":"Created in Creativity","media_type":"text/plain","expected_sha256":"missing"}`
 		case createAgent && len(toolMessages) == 1:
-			tool, args = "write_file", fmt.Sprintf(`{"path":"agent.yaml","content":%q,"media_type":"text/plain","expected_sha256":"missing"}`, string(legacyAgentYAML))
+			tool, args = "write_file", fmt.Sprintf(`{"path":"agent.json","content":%q,"media_type":"application/json","expected_sha256":"missing"}`, string(newAgentJSON))
+		case createAgent && len(toolMessages) == 2:
+			tool, args = "write_file", `{"path":"proj.yaml","content":"unexpected: true","media_type":"text/plain","expected_sha256":"missing"}`
 		case createAgent:
 		case iteration && len(toolMessages) == 0:
 			tool, args = "write_file", `{"path":"result.txt","content":"iteration result","media_type":"text/plain","expected_sha256":"missing"}`
@@ -359,7 +360,8 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	assertFile("AGENTS.md", "Follow the published instructions.")
 	assertFile("agent.json", model.ID)
 	request("GET", iterationPath+"/workspace/files?path=agent.yaml", ownerCookie, nil, 404)
-	assertFile("proj.yaml", latestSkill.ID)
+	assertFile("proj.json", latestSkill.ID)
+	request("GET", iterationPath+"/workspace/files?path=proj.yaml", ownerCookie, nil, 404)
 	assertFile("skills/source-skill/SKILL.md", "Read the bound resource.")
 	assertFile("skills/source-skill/guide.txt", "latest skill resource")
 	reloaded, err = cold.RuntimeSession(ctx, owner.ID, source.ID, iteration.ID)
@@ -777,9 +779,9 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 		t.Fatal(duplicatePublish.Body.String())
 	}
 	var projectFile resource.WorkspaceEntryView
-	must(json.Unmarshal(request("GET", source.ID+"/sessions/"+createSession.ID+"/workspace/files?path=agent.yaml", ownerCookie, nil, 200).Body.Bytes(), &projectFile))
-	if projectFile.Text != string(legacyAgentYAML) {
-		t.Fatal("publishing modified the legacy workspace file")
+	must(json.Unmarshal(request("GET", source.ID+"/sessions/"+createSession.ID+"/workspace/files?path=agent.json", ownerCookie, nil, 200).Body.Bytes(), &projectFile))
+	if projectFile.Text != string(newAgentJSON) {
+		t.Fatal("publishing modified the workspace config")
 	}
 	newIterationInput := inputs()
 	newIterationInput["target_agent_id"] = newAgent.ID

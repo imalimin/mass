@@ -23,31 +23,35 @@ context: {max_input_tokens: 1000, max_tokens: 1000, compression: summary}
 limits: {max_steps: 5, timeout_seconds: 30}
 `
 
+const reporterJSON = `{
+  "schema_version": 1,
+  "name": "reporter",
+  "model": "877406ec-a526-485e-a0b6-dcff188c191b",
+  "context": {"max_input_tokens": 1000, "max_tokens": 1000, "compression": "summary"},
+  "limits": {"max_steps": 5, "timeout_seconds": 30}
+}`
+
 func TestPublishAgentConfigFileSelection(t *testing.T) {
-	const newModel = "af84a2d7-412f-487c-8525-e00b719d975f"
-	doc := Document{Markdown: "Generate reports", ConfigYAML: reporterYAML}
+	doc := Document{Markdown: "Generate reports", ConfigYAML: reporterJSON}
 	config, err := ValidateDocument("agent", "reporter", doc, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldModel := config.Model
-	config.Model = newModel
 	raw, err := json.Marshal(config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct {
-		name, jsonFile, yamlFile, model string
-		local, oversized                []string
-		invalid                         bool
+		name, jsonFile, yamlFile string
+		local, oversized         []string
+		invalid                  bool
 	}{
-		{name: "legacy YAML", yamlFile: reporterYAML, model: oldModel},
-		{name: "legacy JSON", yamlFile: string(raw), model: newModel},
-		{name: "prefer JSON", jsonFile: string(raw), yamlFile: reporterYAML, model: newModel},
-		{name: "ignore oversized legacy file", jsonFile: string(raw), oversized: []string{resource.LegacyAgentConfigPath}, model: newModel},
-		{name: "require JSON syntax", jsonFile: reporterYAML, yamlFile: reporterYAML, invalid: true},
+		{name: "JSON", jsonFile: string(raw)},
+		{name: "reject legacy filename even with JSON content", yamlFile: string(raw), invalid: true},
+		{name: "require JSON syntax", jsonFile: reporterYAML, invalid: true},
 		{name: "reject duplicate JSON fields", jsonFile: `{"schema_version":1,` + string(raw[1:]), invalid: true},
-		{name: "JSON only on host", yamlFile: reporterYAML, local: []string{resource.AgentConfigPath}, invalid: true},
+		{name: "JSON only on host", local: []string{resource.AgentConfigPath}, invalid: true},
+		{name: "oversized JSON", oversized: []string{resource.AgentConfigPath}, invalid: true},
 		{name: "missing config", invalid: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -58,7 +62,7 @@ func TestPublishAgentConfigFileSelection(t *testing.T) {
 				files.Files[resource.AgentConfigPath] = []byte(test.jsonFile)
 			}
 			if test.yamlFile != "" {
-				files.Files[resource.LegacyAgentConfigPath] = []byte(test.yamlFile)
+				files.Files["agent.yaml"] = []byte(test.yamlFile)
 			}
 			ctx := context.Background()
 			svc := &Service{}
@@ -70,8 +74,8 @@ func TestPublishAgentConfigFileSelection(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || project.Manifest().ModelID != test.model {
-				t.Fatalf("expected model %q, got %+v, %v", test.model, project.Manifest(), err)
+			if err != nil || project.Manifest().ModelID != config.Model {
+				t.Fatalf("expected model %q, got %+v, %v", config.Model, project.Manifest(), err)
 			}
 			if _, err := svc.ScanPublishSkills(ctx, "", "", files, project, nil); err != nil {
 				t.Fatal(err)
@@ -83,10 +87,11 @@ func TestPublishAgentConfigFileSelection(t *testing.T) {
 	}
 }
 
-func TestIterationRestoresAndPublishesLegacyAgentAsJSON(t *testing.T) {
+func TestIterationRequiresJSONAgentConfig(t *testing.T) {
 	ctx := context.Background()
 	legacy := Document{Markdown: "Generate reports", ConfigYAML: reporterYAML}
-	config, err := ValidateDocument("agent", "reporter", legacy, true)
+	current := Document{Markdown: legacy.Markdown, ConfigYAML: reporterJSON}
+	config, err := ValidateDocument("agent", "reporter", current, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,39 +111,46 @@ func TestIterationRestoresAndPublishesLegacyAgentAsJSON(t *testing.T) {
 	svc := &Service{Repo: repo, Content: &resource.ContentStore{Inline: content}}
 	base := run.Creativity{TargetAgentID: "agent", TargetVersionID: "legacy", TargetDraftRevision: 1}
 	files := resource.ProjectFiles{Files: make(map[string][]byte)}
-	if err := svc.RestoreIteration(ctx, "", "", base, func(name string, data []byte) error {
+	write := func(name string, data []byte) error {
 		files.Files[name] = data
 		return nil
-	}); err != nil {
+	}
+	if _, err := svc.ResolveIteration(ctx, "", "", base.TargetAgentID); !errors.Is(err, ErrConfig) {
+		t.Fatalf("expected YAML target to be rejected before iteration, got %v", err)
+	}
+	if err := svc.RestoreIteration(ctx, "", "", base, write); !errors.Is(err, ErrConfig) || len(files.Files) != 0 {
+		t.Fatalf("expected YAML restore to fail before writing files, got %v and %v", err, files.Files)
+	}
+	draftBase := base
+	draftBase.TargetVersionID = ""
+	if err := svc.RestoreIteration(ctx, "", "", draftBase, write); !errors.Is(err, ErrConfig) || len(files.Files) != 0 {
+		t.Fatalf("expected YAML draft restore to fail before writing files, got %v and %v", err, files.Files)
+	}
+	if sameAgent(legacy, current) {
+		t.Fatal("YAML configuration matched a JSON version")
+	}
+	storeVersion("current", current)
+	base.TargetVersionID = "current"
+	if err := svc.RestoreIteration(ctx, "", "", base, write); err != nil {
 		t.Fatal(err)
 	}
-	if _, exists := files.Files[resource.LegacyAgentConfigPath]; exists || !json.Valid(files.Files[resource.AgentConfigPath]) {
+	if _, exists := files.Files["agent.yaml"]; exists || string(files.Files[resource.AgentConfigPath]) != reporterJSON {
 		t.Fatalf("expected agent.json in restored workspace, got %v", files.Files)
+	}
+	if _, exists := files.Files["proj.yaml"]; exists || !json.Valid(files.Files[resource.ProjectBindingsPath]) {
+		t.Fatalf("expected proj.json in restored workspace, got %v", files.Files)
 	}
 	project, err := svc.PreparePublishAgent(ctx, "", "", base, files, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	desired := project.agentDocument(nil)
-	if !sameAgent(legacy, desired) {
-		t.Fatal("Agent config changed during migration")
-	}
-	target := run.PublishTarget{ID: base.TargetAgentID, Version: base.TargetVersionID, Revision: base.TargetDraftRevision}
-	matches := func(doc Document) bool { return sameAgent(doc, desired) }
-	state, err := svc.inspectProjectTarget(ctx, repo, "", "", "agent", "reporter", target, matches, true)
-	if err != nil || state.done.ID != "" {
-		t.Fatalf("legacy YAML version was treated as already published: %+v, %v", state.done, err)
-	}
-	storeVersion("successor", desired)
-	state, err = svc.inspectProjectTarget(ctx, repo, "", "", "agent", "reporter", target, matches, true)
-	if err != nil || state.done.ID != "successor" {
-		t.Fatalf("retry did not reuse the JSON version: %+v, %v", state.done, err)
+	if !sameAgent(current, project.agentDocument(nil)) {
+		t.Fatal("restoring the project changed the Agent configuration")
 	}
 }
 
 type iterationRepository struct {
 	Repository
-	projectCatalog
 	draft   Draft
 	version Version
 }
@@ -169,9 +181,14 @@ func TestPublishAgentModelBeforeSkills(t *testing.T) {
 	const model = "877406ec-a526-485e-a0b6-dcff188c191b"
 	files := resource.ProjectFiles{
 		Files: map[string][]byte{
-			"AGENTS.md":  []byte("Generate reports"),
-			"agent.yaml": []byte("schema_version: 1\nname: reporter\ncontext: {max_input_tokens: 1000, max_tokens: 1000, compression: summary}\nlimits: {max_steps: 5, timeout_seconds: 30}"),
-			"proj.yaml":  []byte("unexpected: true"),
+			"AGENTS.md": []byte("Generate reports"),
+			resource.AgentConfigPath: []byte(`{
+				"schema_version": 1,
+				"name": "reporter",
+				"context": {"max_input_tokens": 1000, "max_tokens": 1000, "compression": "summary"},
+				"limits": {"max_steps": 5, "timeout_seconds": 30}
+			}`),
+			resource.ProjectBindingsPath: []byte(`{"unexpected": true}`),
 		},
 	}
 	svc := &Service{}
@@ -183,36 +200,69 @@ func TestPublishAgentModelBeforeSkills(t *testing.T) {
 	if err != nil || project.Manifest().ModelID != model {
 		t.Fatalf("expected selected model, got %+v, %v", project.Manifest(), err)
 	}
-	if _, err := svc.ScanPublishSkills(ctx, "", "", files, project, nil); err == nil || !strings.Contains(err.Error(), "proj.yaml") {
+	if _, err := svc.ScanPublishSkills(ctx, "", "", files, project, nil); err == nil || !strings.Contains(err.Error(), resource.ProjectBindingsPath) {
 		t.Fatalf("expected Skill validation after selecting a model, got %v", err)
+	}
+}
+
+func TestProjectBindingsFileSelection(t *testing.T) {
+	const current = resource.ProjectBindingsPath
+	for _, test := range []struct {
+		name, jsonFile                string
+		local, oversized, directories []string
+		invalid                       bool
+	}{
+		{name: "optional"},
+		{name: "JSON", jsonFile: `{"skills":[]}`},
+		{name: "reject YAML in JSON file", jsonFile: "skills: []", invalid: true},
+		{name: "reject duplicate JSON fields", jsonFile: `{"skills":[],"skills":[]}`, invalid: true},
+		{name: "reject JSON only on host", local: []string{current}, invalid: true},
+		{name: "reject oversized JSON", oversized: []string{current}, invalid: true},
+		{name: "reject JSON directory", directories: []string{current}, invalid: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			files := resource.ProjectFiles{
+				Files: map[string][]byte{}, LocalFiles: test.local, Oversized: test.oversized, Directories: test.directories,
+			}
+			if test.jsonFile != "" {
+				files.Files[current] = []byte(test.jsonFile)
+			}
+			_, err := (&Service{}).ScanPublishSkills(context.Background(), "", "", files, PublishProject{}, nil)
+			if !test.invalid && err == nil {
+				return
+			}
+			var fileErr *resource.ProjectFileError
+			if !test.invalid || !errors.As(err, &fileErr) || fileErr.Path != current {
+				t.Fatalf("invalid=%t, got %v", test.invalid, err)
+			}
+		})
 	}
 }
 
 func TestProjectSkillPath(t *testing.T) {
 	const skill = "877406ec-a526-485e-a0b6-dcff188c191b"
 	const version = "af84a2d7-412f-487c-8525-e00b719d975f"
-	base := fmt.Sprintf("skills:\n  - skill_id: %s\n    version_id: %s\n", skill, version)
+	base := fmt.Sprintf(`"skill_id": %q, "version_id": %q`, skill, version)
 	tests := []struct {
 		name, field, want string
 		invalid           bool
 	}{
 		{name: "reference when omitted"},
-		{name: "local directory", field: "skills/report-writer", want: "skills/report-writer"},
+		{name: "local directory", field: `"skills/report-writer"`, want: "skills/report-writer"},
 		{name: "empty string", field: `""`, invalid: true},
-		{name: "empty value", field: " ", invalid: true},
 		{name: "explicit null", field: "null", invalid: true},
-		{name: "nested directory", field: "skills/report-writer/scripts", invalid: true},
-		{name: "not a string", field: "[skills/report-writer]", invalid: true},
+		{name: "nested directory", field: `"skills/report-writer/scripts"`, invalid: true},
+		{name: "not a string", field: `["skills/report-writer"]`, invalid: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			raw := base
 			if test.field != "" {
-				raw += "    path: " + test.field + "\n"
+				raw += `, "path": ` + test.field
 			}
-			bindings, err := parseProjectSkills([]byte(raw))
+			bindings, err := parseProjectSkills([]byte(`{"skills":[{` + raw + `}]}`))
 			if test.invalid {
-				if err == nil || !strings.Contains(err.Error(), "proj.yaml") || !strings.Contains(err.Error(), "skills[0].path") || !strings.Contains(err.Error(), skill) {
+				if err == nil || !strings.Contains(err.Error(), resource.ProjectBindingsPath) || !strings.Contains(err.Error(), "skills[0].path") || !strings.Contains(err.Error(), skill) {
 					t.Fatalf("expected a Skill path error, got %v", err)
 				}
 				return
@@ -223,8 +273,7 @@ func TestProjectSkillPath(t *testing.T) {
 		})
 	}
 	t.Run("duplicate directory", func(t *testing.T) {
-		raw := base + "    path: skills/report-writer\n" +
-			"  - skill_id: 63a7748b-a6ce-4b87-8cdc-bacafde92fc7\n    version_id: " + version + "\n    path: skills/report-writer\n"
+		raw := fmt.Sprintf(`{"skills":[{%s,"path":"skills/report-writer"},{"skill_id":"63a7748b-a6ce-4b87-8cdc-bacafde92fc7","version_id":%q,"path":"skills/report-writer"}]}`, base, version)
 		if _, err := parseProjectSkills([]byte(raw)); err == nil || !strings.Contains(err.Error(), "skills[1].path") {
 			t.Fatalf("expected duplicate path error, got %v", err)
 		}

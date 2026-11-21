@@ -253,7 +253,6 @@ func (c *Catalog) prepare(ctx context.Context, actor, space string, d *definitio
 	if !cfg.SupportsModel(model) {
 		return catalog.Bundle{}, identity.ErrCapability
 	}
-	draft.Document.NormalizeAgentConfig(cfg)
 	b := catalog.Bundle{FormatVersion: 1, Kind: d.Kind, DefinitionID: d.ID, Name: d.Name, Revision: d.Revision, Document: draft.Document,
 		Config: cfg, Model: &model, Bindings: []catalog.Binding{}}
 	for _, ref := range cfg.Skills {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -12,7 +13,6 @@ import (
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/resource"
-	"go.yaml.in/yaml/v4"
 )
 
 var ErrIterationDraft = errors.New("iteration_draft_changed")
@@ -52,6 +52,9 @@ func (s *Service) ResolveIteration(ctx context.Context, actor, space, id string)
 		if err := s.loadVersion(ctx, actor, space, "agent", &version); err != nil {
 			return nil, err
 		}
+		if !json.Valid([]byte(version.Bundle.Document.ConfigYAML)) {
+			return nil, ErrConfig
+		}
 		for _, binding := range version.Bundle.Bindings {
 			skills = append(skills, binding.SkillID)
 		}
@@ -86,13 +89,12 @@ func (s *Service) ResolveIteration(ctx context.Context, actor, space, id string)
 }
 
 type projectSkill struct {
-	run.SkillBase `yaml:",inline"`
-	Path          string `yaml:"path"`
+	run.SkillBase
+	Path string `json:"path,omitempty"`
 }
 
 func (s *Service) RestoreIteration(ctx context.Context, actor, space string, base run.Creativity, write func(string, []byte) error) error {
 	var document Document
-	var config *Config
 	if base.TargetVersionID == "" {
 		draft, err := s.Draft(ctx, actor, space, "agent", base.TargetAgentID)
 		if err != nil {
@@ -102,8 +104,7 @@ func (s *Service) RestoreIteration(ctx context.Context, actor, space string, bas
 			return ErrIterationDraft
 		}
 		document = draft.Document
-		config, err = ValidateDocument("agent", draft.Name, document, false)
-		if err != nil {
+		if _, err := ValidateDocument("agent", draft.Name, document, false); err != nil {
 			return err
 		}
 	} else {
@@ -112,9 +113,10 @@ func (s *Service) RestoreIteration(ctx context.Context, actor, space string, bas
 			return err
 		}
 		document = version.Bundle.Document
-		config = version.Bundle.Config
+		if !json.Valid([]byte(document.ConfigYAML)) {
+			return ErrConfig
+		}
 	}
-	document.NormalizeAgentConfig(config)
 	if err := write("AGENTS.md", []byte(document.Markdown)); err != nil {
 		return err
 	}
@@ -122,7 +124,7 @@ func (s *Service) RestoreIteration(ctx context.Context, actor, space string, bas
 		return err
 	}
 	project := struct {
-		Skills []projectSkill `yaml:"skills"`
+		Skills []projectSkill `json:"skills"`
 	}{Skills: make([]projectSkill, 0, len(base.SkillBases))}
 	for _, skill := range base.SkillBases {
 		folder, err := s.restoreIterationSkill(ctx, actor, space, skill, write)
@@ -131,11 +133,11 @@ func (s *Service) RestoreIteration(ctx context.Context, actor, space string, bas
 		}
 		project.Skills = append(project.Skills, projectSkill{SkillBase: skill, Path: folder})
 	}
-	data, err := yaml.Marshal(project)
+	data, err := json.MarshalIndent(project, "", "  ")
 	if err != nil {
 		return err
 	}
-	return write("proj.yaml", data)
+	return write(resource.ProjectBindingsPath, data)
 }
 
 func (s *Service) restoreIterationSkill(ctx context.Context, actor, space string, base run.SkillBase, write func(string, []byte) error) (string, error) {

@@ -12,7 +12,6 @@ import (
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/resource"
-	"go.yaml.in/yaml/v4"
 )
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
@@ -85,62 +84,58 @@ func ValidateDocument(kind, name string, doc Document, publish bool) (*Config, e
 		return nil, nil
 	}
 	var c Config
-	if strictYAML(doc.ConfigYAML, &c) != nil || c.SchemaVersion != 1 || c.Name != name || !storage.ValidID(c.Model) || len(c.Skills) > 32 || len(c.Tools) > len(Tools) {
+	if strictJSON(doc.ConfigYAML, &c) != nil || c.SchemaVersion != 1 || c.Name != name || !storage.ValidID(c.Model) || len(c.Skills) > 32 || len(c.Tools) > len(Tools) {
 		return nil, ErrConfig
 	}
 	c.Context.Normalize()
 	return validateConfig(c, !publish)
 }
 
-// NormalizeAgentConfig converts validated legacy text while preserving JSON edits.
-func (doc *Document) NormalizeAgentConfig(config *Config) {
-	if config != nil && !json.Valid([]byte(doc.ConfigYAML)) {
-		raw, _ := json.MarshalIndent(config, "", "  ")
-		doc.ConfigYAML = string(raw)
+func strictJSON(raw string, value any) error {
+	if !utf8.ValidString(raw) {
+		return ErrConfig
 	}
+	check := json.NewDecoder(strings.NewReader(raw))
+	check.UseNumber()
+	first, err := check.Token()
+	if err != nil || first != json.Delim('{') || !uniqueJSONKeys(check, '{', 1) {
+		return ErrConfig
+	}
+	if _, err := check.Token(); err != io.EOF {
+		return ErrConfig
+	}
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	return dec.Decode(value)
 }
 
-func strictYAML(raw string, value any) error {
-	var tree yaml.Node
-	dec := yaml.NewDecoder(strings.NewReader(raw))
-	if err := dec.Decode(&tree); err != nil {
-		return ErrConfig
+func uniqueJSONKeys(dec *json.Decoder, open json.Delim, depth int) bool {
+	if depth > 12 {
+		return false
 	}
-	if len(tree.Content) != 1 || tree.Content[0].Kind != yaml.MappingNode {
-		return ErrConfig
-	}
-	var walk func(*yaml.Node, int) bool
-	walk = func(n *yaml.Node, depth int) bool {
-		if depth > 12 || n.Kind == yaml.AliasNode || n.Anchor != "" {
-			return false
-		}
-		if n.Kind == yaml.MappingNode {
-			keys := map[string]bool{}
-			for i := 0; i < len(n.Content); i += 2 {
-				k := n.Content[i]
-				if k.Tag != "!!str" || k.Value == "<<" || keys[k.Value] {
-					return false
-				}
-				keys[k.Value] = true
-			}
-		}
-		for _, c := range n.Content {
-			if !walk(c, depth+1) {
+	keys := map[string]bool{}
+	for dec.More() {
+		if open == '{' {
+			token, err := dec.Token()
+			key, ok := token.(string)
+			// Agent and project schema keys are lowercase ASCII.
+			if err != nil || !ok || keys[key] || strings.IndexFunc(key, func(r rune) bool {
+				return r >= utf8.RuneSelf || 'A' <= r && r <= 'Z'
+			}) >= 0 {
 				return false
 			}
+			keys[key] = true
 		}
-		return true
+		token, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		if nested, ok := token.(json.Delim); ok && !uniqueJSONKeys(dec, nested, depth+1) {
+			return false
+		}
 	}
-	if !walk(&tree, 0) {
-		return ErrConfig
-	}
-	var extra yaml.Node
-	if dec.Decode(&extra) != io.EOF {
-		return ErrConfig
-	}
-	dec = yaml.NewDecoder(strings.NewReader(raw))
-	dec.KnownFields(true)
-	return dec.Decode(value)
+	_, err := dec.Token()
+	return err == nil
 }
 
 func validateConfig(c Config, allowLatest bool) (*Config, error) {

@@ -2,7 +2,6 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { agentSessionsPath, creativitySessionPath } from '../../app/routes'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CORE_SCHEMA, load } from 'js-yaml'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { APIError, list, newRequestKey, request, type Schema } from '../../lib/api'
@@ -26,10 +25,7 @@ const displayVersion = (v: Version) => v.debug ? `调试快照 ${v.id.slice(0, 8
 const parseConfig = (value: string) => {
   if (!value.trim()) return undefined
   try {
-    const parsed = load(value, {
-      schema: CORE_SCHEMA,
-      listener: (event, node) => { if (event === 'close' && node.anchor) throw new Error('YAML anchors are not supported') },
-    })
+    const parsed: unknown = JSON.parse(value)
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Schema['DefinitionConfig'] : undefined
   } catch { return undefined }
 }
@@ -135,8 +131,6 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
   const references = useQuery({ queryKey: ['private', space, kind, id, 'refs', versionID], queryFn: ({ signal }) => list<Schema['DefinitionReference']>(`${base}/versions/${versionID}/references`, signal), enabled: kind === 'skill' && !!versionID })
   const diff = useQuery({ queryKey: ['private', space, kind, id, 'diff', fromID, versionID], queryFn: ({ signal }) => request<Schema['DefinitionDiff']>(`${base}/diff?from=${fromID}&to=${versionID}`, 'GET', undefined, signal), enabled: !!fromID && !!versionID })
   const documentChanged = JSON.stringify(doc) !== JSON.stringify(draft.document)
-  const savedConfig = draft.document.config_yaml.trim()
-  const configLanguage = savedConfig && !savedConfig.startsWith('{') ? 'yaml' : 'json'
   const changed = documentChanged || resourceEdits.size > 0 || builderDirty
   useEffect(() => {
     if (kind !== 'skill' || !changed) return
@@ -158,9 +152,9 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
   const failed = async (e: Error) => { if (e instanceof APIError && e.code === 'draft_conflict') { try { setConflict(await request<Draft>(`${base}/draft`)) } catch { /* request handles revoked access */ } } }
   const saveDocument = (document: Doc) => request<Draft>(`${base}/draft`, 'PUT', { expected_revision: draft.revision, document })
   const save = useMutation({
-    mutationFn: ({ directory, configYaml }: { directory?: string; configYaml?: string } = {}) => saveDocument(directory
+    mutationFn: ({ directory, configJSON }: { directory?: string; configJSON?: string } = {}) => saveDocument(directory
       ? { ...draft.document, directories: [...(draft.document.directories ?? []), directory] }
-      : { ...doc, config_yaml: configYaml ?? doc.config_yaml }),
+      : { ...doc, config_yaml: configJSON ?? doc.config_yaml }),
     onSuccess: (d, options) => {
       const directory = options?.directory
       if (directory) {
@@ -175,10 +169,10 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
     onError: failed,
   })
   const publish = useMutation({
-    mutationFn: async ({ debug = false, configYaml }: { debug?: boolean; configYaml?: string } = {}) => {
+    mutationFn: async ({ debug = false, configJSON }: { debug?: boolean; configJSON?: string } = {}) => {
       let revision = draft.revision
-      if (kind === 'agent' && (documentChanged || (configYaml ?? doc.config_yaml) !== doc.config_yaml)) {
-        const saved = await saveDocument({ ...doc, config_yaml: configYaml ?? doc.config_yaml })
+      if (kind === 'agent' && (documentChanged || (configJSON ?? doc.config_yaml) !== doc.config_yaml)) {
+        const saved = await saveDocument({ ...doc, config_yaml: configJSON ?? doc.config_yaml })
         accept(saved)
         setNotice('草稿已保存')
         revision = saved.revision
@@ -280,9 +274,9 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
       {previewContent}
       <ConfigBuilder key={draft.revision} space={space} name={draft.name} config={doc.config_yaml} disabled={pending || draft.archived}
         onDirtyChange={setBuilderDirty}
-        onAction={(action, configYaml) => action === 'draft' ? save.mutate({ configYaml }) : publish.mutate({ debug: action === 'debug', configYaml })} />
+        onAction={(action, configJSON) => action === 'draft' ? save.mutate({ configJSON }) : publish.mutate({ debug: action === 'debug', configJSON })} />
       <details className="config-builder"><summary>高级配置</summary>
-        <Suspense fallback={<p>正在载入编辑器…</p>}><CodeEditor label="agent.json" language={configLanguage} value={doc.config_yaml}
+        <Suspense fallback={<p>正在载入编辑器…</p>}><CodeEditor label="agent.json" language="json" value={doc.config_yaml}
           onChange={config_yaml => setDoc(d => ({ ...d, config_yaml }))} readOnly={pending || draft.archived} /></Suspense>
       </details>
     </>}
@@ -314,7 +308,7 @@ function ConfigBuilder({ space, name, config, disabled, onDirtyChange, onAction 
   const [edits, setEdits] = useState<{ base: string; selection: Partial<Selection> }>()
   const existing = useMemo(() => parseConfig(config), [config])
   const previous = useMemo(() => parseConfig(edits?.base ?? ''), [edits?.base])
-  // Apply pending selections only where the raw YAML did not change the same field afterwards.
+  // Apply pending selections only where the raw JSON did not change the same field afterwards.
   const overrides = useMemo<Overrides | undefined>(() => {
     if (!edits) return undefined
     const sel = edits.selection, before = previous, raw = existing
@@ -387,7 +381,7 @@ function ConfigBuilder({ space, name, config, disabled, onDirtyChange, onAction 
   }
   return <details className="config-builder" open>
     <summary>模型、Skill、工具与运行限制</summary>
-    {!valid && <p className="muted" role="alert">Agent 配置无效，请先在高级配置中修复。</p>}
+    {!valid && <p className="muted" role="alert">Agent 配置必须是 JSON 对象，请在高级配置中修复。</p>}
     <div className="form-grid">
       <label>绑定模型<select disabled={builderDisabled} value={state.model} onChange={e => select({ model: e.target.value })}>
         <option value="">选择可用模型</option>{models.data?.map(m => <option value={m.id} key={m.id}>{m.name}</option>)}

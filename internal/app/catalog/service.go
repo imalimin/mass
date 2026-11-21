@@ -38,12 +38,11 @@ func (s *Service) Draft(ctx context.Context, actor, space, kind, id string) (Dra
 }
 
 func (s *Service) createDraft(ctx context.Context, actor, space string, d Draft) (Draft, error) {
-	config, err := ValidateDocument(d.Kind, d.Name, d.Document, false)
-	if err != nil {
+	if _, err := ValidateDocument(d.Kind, d.Name, d.Document, false); err != nil {
 		return d, err
 	}
-	d.Document.NormalizeAgentConfig(config)
 	if d.Kind == "skill" {
+		var err error
 		d, err = s.packSkill(ctx, actor, space, d, d.Revision, nil, nil)
 		if err != nil {
 			return d, err
@@ -79,12 +78,11 @@ func (s *Service) saveDraft(ctx context.Context, actor, space string, d Draft, r
 	if d.Kind == "skill" && d.Document.Assets == nil {
 		d.Document.Assets = []Asset{}
 	}
-	config, err := ValidateDocument(d.Kind, d.Name, d.Document, false)
-	if err != nil {
+	if _, err := ValidateDocument(d.Kind, d.Name, d.Document, false); err != nil {
 		return d, err
 	}
-	d.Document.NormalizeAgentConfig(config)
 	if d.Kind == "skill" {
+		var err error
 		d, err = s.packSkill(ctx, actor, space, d, d.Revision+1, replacement, data)
 		if err != nil {
 			return d, err

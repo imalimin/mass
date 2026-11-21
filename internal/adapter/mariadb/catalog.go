@@ -140,7 +140,6 @@ func prepareCatalog(ctx context.Context, tx *sql.Tx, space, id string, revision 
 	if err != nil {
 		return b, err
 	}
-	d.Document.NormalizeAgentConfig(c)
 	b = catalog.Bundle{FormatVersion: 1, DefinitionID: id, Kind: d.Kind, Name: d.Name, Revision: revision, Document: d.Document, Config: c, Bindings: []catalog.Binding{}}
 	m, err := scanModel(tx.QueryRowContext(ctx, "SELECT "+modelColumns+" FROM model_configs m WHERE m.space_id=? AND m.id=? AND m.enabled=TRUE", space, c.Model).Scan)
 	if err != nil {

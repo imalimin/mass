@@ -86,8 +86,8 @@ type Creativity struct {
 }
 
 type SkillBase struct {
-	SkillID   string `json:"skill_id" yaml:"skill_id"`
-	VersionID string `json:"version_id" yaml:"version_id"`
+	SkillID   string `json:"skill_id"`
+	VersionID string `json:"version_id"`
 }
 
 type PublishTarget struct {

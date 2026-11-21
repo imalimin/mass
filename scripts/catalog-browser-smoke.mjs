@@ -172,16 +172,21 @@ try {
   await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByRole('link', { name: assistantName, exact: true }).click()
   await expect(maxSteps).toHaveValue('60')
   await expect(runTimeout).toHaveValue('1800')
-  const yaml = Object.entries({ ...agent1.bundle.config, limits: { max_steps: 75, timeout_seconds: 2400 } })
-    .map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join('\n')
+  const agentConfig = { ...agent1.bundle.config, limits: { max_steps: 75, timeout_seconds: 2400 } }
+  const yaml = Object.entries(agentConfig).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join('\n')
   const agentBase = server.url + '/api/v1' + new URL(page.url()).pathname
   const rawDraft = await (await context.request.get(agentBase + '/draft')).json()
-  const yamlSaved = await context.request.put(agentBase + '/draft', {
+  const rejected = await context.request.put(agentBase + '/draft', {
     headers: { Origin: server.url },
     data: { expected_revision: rawDraft.revision, document: { ...rawDraft.document, config_yaml: yaml } },
   })
-  assert.equal(yamlSaved.status(), 200, await yamlSaved.text())
-  assert.deepEqual(JSON.parse((await yamlSaved.json()).document.config_yaml).limits, { max_steps: 75, timeout_seconds: 2400 })
+  assert.equal(rejected.status(), 400, await rejected.text())
+  const jsonSaved = await context.request.put(agentBase + '/draft', {
+    headers: { Origin: server.url },
+    data: { expected_revision: rawDraft.revision, document: { ...rawDraft.document, config_yaml: JSON.stringify(agentConfig) } },
+  })
+  assert.equal(jsonSaved.status(), 200, await jsonSaved.text())
+  assert.deepEqual(JSON.parse((await jsonSaved.json()).document.config_yaml).limits, { max_steps: 75, timeout_seconds: 2400 })
   await page.reload()
   await expect(maxSteps).toHaveValue('75')
   await expect(runTimeout).toHaveValue('2400')

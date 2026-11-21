@@ -391,7 +391,7 @@ func exerciseCatalog(t *testing.T, blobs storage.BlobStore, prefix string) {
 	api("POST", path(agent)+"/versions", map[string]any{"expected_revision": agent.Revision, "label": "missing"}, 404)
 	agent = save(agent, agent.Document.Markdown, config("latest"))
 	if !json.Valid([]byte(agent.Document.ConfigYAML)) {
-		t.Fatal("saving legacy YAML did not produce JSON")
+		t.Fatal("saved Agent configuration is not JSON")
 	}
 	api("POST", path(agent)+"/versions", map[string]any{"expected_revision": agent.Revision, "label": "moving-skill"}, 400)
 	agent = save(agent, agent.Document.Markdown, config("v2"))

@@ -18,7 +18,6 @@ import (
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/resource"
-	"go.yaml.in/yaml/v4"
 )
 
 type PublishEntry struct {
@@ -102,10 +101,6 @@ func (p PublishProject) SupportsModel(model identity.Model) bool {
 
 func (s *Service) PreparePublishAgent(ctx context.Context, actor, space string, session run.Creativity, files resource.ProjectFiles, modelID string) (PublishProject, error) {
 	project := PublishProject{}
-	present := func(name string) bool {
-		_, archived := files.Files[name]
-		return archived || slices.Contains(files.Directories, name) || slices.Contains(files.Oversized, name) || slices.Contains(files.LocalFiles, name)
-	}
 	required := func(name string) ([]byte, error) {
 		if slices.Contains(files.Oversized, name) {
 			return nil, projectError(name, "超出发布文件大小限制")
@@ -119,16 +114,12 @@ func (s *Service) PreparePublishAgent(ctx context.Context, actor, space string, 
 		}
 		return raw, nil
 	}
-	configPath := resource.AgentConfigPath
-	if !present(configPath) && present(resource.LegacyAgentConfigPath) {
-		configPath = resource.LegacyAgentConfigPath
-	}
+	const configPath = resource.AgentConfigPath
 	config, err := required(configPath)
 	if err != nil {
 		return project, err
 	}
-	invalidJSON := configPath == resource.AgentConfigPath && !json.Valid(config)
-	if len(config) > 64<<10 || invalidJSON || strictYAML(string(config), &project.config) != nil {
+	if len(config) > 64<<10 || strictJSON(string(config), &project.config) != nil {
 		return project, projectError(configPath, "Agent 配置无效")
 	}
 	if project.config.Model == "" {
@@ -163,29 +154,26 @@ func (s *Service) PreparePublishAgent(ctx context.Context, actor, space string, 
 }
 
 func (s *Service) ScanPublishSkills(ctx context.Context, actor, space string, files resource.ProjectFiles, project PublishProject, published []run.PublishedSkill) (PublishProject, error) {
-	for _, name := range files.Oversized {
-		// PreparePublishAgent already checked the selected config. An unused legacy
-		// file may coexist with agent.json in a workspace created before migration.
-		if name != resource.LegacyAgentConfigPath {
-			return project, projectError(name, "超出发布文件大小限制")
-		}
+	const bindingsPath = resource.ProjectBindingsPath
+	if len(files.Oversized) > 0 {
+		return project, projectError(files.Oversized[0], "超出发布文件大小限制")
 	}
 	for _, local := range files.LocalFiles {
 		parent := path.Dir(local)
-		if local == "proj.yaml" || parent == "skills" || path.Base(local) == "SKILL.md" && skillFolder(parent) {
+		if local == bindingsPath || parent == "skills" || path.Base(local) == "SKILL.md" && skillFolder(parent) {
 			return project, projectError(local, "文件只保存在宿主，未进入 Run 快照")
 		}
 	}
+	if slices.Contains(files.Directories, bindingsPath) {
+		return project, projectError(bindingsPath, "必须是文件")
+	}
 	var bindings []projectSkill
-	if raw, found := files.Files["proj.yaml"]; found {
+	if raw, found := files.Files[bindingsPath]; found {
 		var err error
 		bindings, err = parseProjectSkills(raw)
 		if err != nil {
 			return project, err
 		}
-	}
-	if slices.Contains(files.Directories, "proj.yaml") {
-		return project, projectError("proj.yaml", "必须是文件")
 	}
 	byPath := make(map[string]run.PublishedSkill, len(published))
 	byID := make(map[string]run.PublishedSkill, len(published))
@@ -196,7 +184,7 @@ func (s *Service) ScanPublishSkills(ctx context.Context, actor, space string, fi
 	load := func(ref projectSkill, sourceVersion string, revision int64) error {
 		base, err := s.Version(ctx, actor, space, "skill", ref.SkillID, ref.VersionID)
 		if errors.Is(err, identity.ErrNotFound) || err == nil && (base.Archived || base.Debug) {
-			return projectError("proj.yaml", "Skill 版本不可用："+ref.SkillID)
+			return projectError(bindingsPath, "Skill 版本不可用："+ref.SkillID)
 		}
 		if err != nil {
 			return err
@@ -206,7 +194,7 @@ func (s *Service) ScanPublishSkills(ctx context.Context, actor, space string, fi
 			return err
 		}
 		if draft.Archived {
-			return projectError("proj.yaml", "Skill 已归档："+draft.Name)
+			return projectError(bindingsPath, "Skill 已归档："+draft.Name)
 		}
 		skill := projectSkillDraft{entry: PublishEntry{Name: draft.Name, Action: publishReference, ID: ref.SkillID, VersionID: base.ID, Label: base.Label},
 			base: base, baseRevision: revision, sourceVersion: sourceVersion}
@@ -268,34 +256,34 @@ func (s *Service) ScanPublishSkills(ctx context.Context, actor, space string, fi
 		project.skills = append(project.skills, projectSkillDraft{entry: PublishEntry{Name: name, Action: publishNew}, path: folder, document: document, files: resources})
 	}
 	if len(project.skills) > 32 {
-		return project, projectError("proj.yaml", "Agent 最多可绑定 32 个 Skill")
+		return project, projectError(bindingsPath, "Agent 最多可绑定 32 个 Skill")
 	}
 	return project, nil
 }
 
 func parseProjectSkills(raw []byte) ([]projectSkill, error) {
+	const name = resource.ProjectBindingsPath
 	var manifest struct {
 		Skills []struct {
-			run.SkillBase `yaml:",inline"`
-			Path          yaml.Node `yaml:"path"`
-		} `yaml:"skills"`
+			run.SkillBase
+			Path json.RawMessage `json:"path"`
+		} `json:"skills"`
 	}
-	if len(raw) > 64<<10 || strictYAML(string(raw), &manifest) != nil {
-		return nil, projectError("proj.yaml", "Skill 绑定格式无效")
+	if len(raw) > 64<<10 || strictJSON(string(raw), &manifest) != nil {
+		return nil, projectError(name, "Skill 绑定格式无效")
 	}
 	bindings := make([]projectSkill, 0, len(manifest.Skills))
 	usedID, usedPath := map[string]bool{}, map[string]bool{}
 	for index, ref := range manifest.Skills {
 		if !storage.ValidID(ref.SkillID) || !storage.ValidID(ref.VersionID) || usedID[ref.SkillID] {
-			return nil, projectError("proj.yaml", "Skill ID、版本 ID 无效或绑定重复")
+			return nil, projectError(name, "Skill ID、版本 ID 无效或绑定重复")
 		}
 		usedID[ref.SkillID] = true
 		binding := projectSkill{SkillBase: ref.SkillBase}
-		if ref.Path.Kind != 0 {
-			if ref.Path.Kind != yaml.ScalarNode || ref.Path.Tag != "!!str" || !skillFolder(ref.Path.Value) || usedPath[ref.Path.Value] {
-				return nil, projectError("proj.yaml", fmt.Sprintf("skills[%d].path 无效或重复（Skill %s）；仅引用时请省略 path", index, ref.SkillID))
+		if ref.Path != nil {
+			if json.Unmarshal(ref.Path, &binding.Path) != nil || !skillFolder(binding.Path) || usedPath[binding.Path] {
+				return nil, projectError(name, fmt.Sprintf("skills[%d].path 无效或重复（Skill %s）；仅引用时请省略 path", index, ref.SkillID))
 			}
-			binding.Path = ref.Path.Value
 			usedPath[binding.Path] = true
 		}
 		bindings = append(bindings, binding)
@@ -383,7 +371,7 @@ func (p PublishProject) agentDocument(skills []PublishEntry) Document {
 
 func sameAgent(left, right Document) bool {
 	var first, second Config
-	if left.Markdown != right.Markdown || strictYAML(left.ConfigYAML, &first) != nil || strictYAML(right.ConfigYAML, &second) != nil {
+	if left.Markdown != right.Markdown || strictJSON(left.ConfigYAML, &first) != nil || strictJSON(right.ConfigYAML, &second) != nil {
 		return false
 	}
 	first.Context.Normalize()

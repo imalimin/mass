@@ -10,43 +10,40 @@ import (
 )
 
 func TestStrictDefinitionValidation(t *testing.T) {
-	good := `schema_version: 1
-name: test-agent
-model: 00000000-0000-4000-8000-000000000001
-skills: []
-tools: [read_file]
-context: {max_input_tokens: 2000, max_tokens: 100, compression: summary}
-limits: {max_steps: 30, timeout_seconds: 300}
-`
-	if _, e := ValidateDocument("agent", "test-agent", Document{Markdown: "hello", ConfigYAML: good}, true); e != nil {
+	if _, e := ValidateDocument("agent", "reporter", Document{Markdown: "hello", ConfigYAML: reporterJSON}, true); e != nil {
 		t.Fatal(e)
 	}
-	for _, input := range []string{good + "unknown: true\n", good + "---\nname: other\n", strings.Replace(good, "name: test-agent", "name: test-agent\nname: other", 1), strings.Replace(good, "[read_file]", "[run_shell]", 1), strings.Replace(good, "[read_file]", "[read_file, read_file]", 1), strings.Replace(good, "max_steps: 30", "max_steps: 0", 1), strings.Replace(good, "skills: []", "skills: &a []\ncopy: *a", 1), strings.Replace(good, "schema_version: 1", "schema_version: 2", 1), strings.Replace(good, "skills: []", "skills: [{id: 00000000-0000-4000-8000-000000000002, version: latest}]", 1)} {
-		if _, e := ValidateDocument("agent", "test-agent", Document{Markdown: "hello", ConfigYAML: input}, true); e == nil {
-			t.Fatal("invalid configuration accepted")
+	for name, input := range map[string]string{
+		"YAML":                   reporterYAML,
+		"unknown field":          `{"unknown":true,` + reporterJSON[1:],
+		"multiple objects":       reporterJSON + "{}",
+		"duplicate field":        `{"name":"reporter",` + reporterJSON[1:],
+		"duplicate nested field": strings.Replace(reporterJSON, `"max_steps": 5`, `"max_steps": 5, "max_steps": 5`, 1),
+		"wrong key case":         strings.Replace(reporterJSON, `"name"`, `"Name"`, 1),
+		"unknown tool":           `{"tools":["run_shell"],` + reporterJSON[1:],
+		"duplicate tool":         `{"tools":["read_file","read_file"],` + reporterJSON[1:],
+		"invalid limit":          strings.Replace(reporterJSON, `"max_steps": 5`, `"max_steps": 0`, 1),
+		"invalid schema version": strings.Replace(reporterJSON, `"schema_version": 1`, `"schema_version": 2`, 1),
+		"moving skill":           `{"skills":[{"id":"00000000-0000-4000-8000-000000000002","version":"latest"}],` + reporterJSON[1:],
+	} {
+		if _, e := ValidateDocument("agent", "reporter", Document{Markdown: "hello", ConfigYAML: input}, true); e == nil {
+			t.Errorf("accepted %s", name)
 		}
 	}
 }
 
 func TestContextMaxTokensDefaultAndRemovedKey(t *testing.T) {
-	base := `schema_version: 1
-name: test-agent
-model: 00000000-0000-4000-8000-000000000001
-skills: []
-tools: [read_file]
-context: {max_input_tokens: 2000%s, compression: summary}
-limits: {max_steps: 30, timeout_seconds: 300}
-`
+	base := strings.Replace(reporterJSON, `, "max_tokens": 1000`, "%s", 1)
 	for _, tc := range []struct {
 		name   string
 		suffix string
 		want   int
 	}{
 		{"default", "", DefaultMaxTokens},
-		{"explicit", ", max_tokens: 8000", 8000},
+		{"explicit", `, "max_tokens": 8000`, 8000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := ValidateDocument("agent", "test-agent", Document{Markdown: "hello", ConfigYAML: fmt.Sprintf(base, tc.suffix)}, true)
+			cfg, err := ValidateDocument("agent", "reporter", Document{Markdown: "hello", ConfigYAML: fmt.Sprintf(base, tc.suffix)}, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -55,8 +52,8 @@ limits: {max_steps: 30, timeout_seconds: 300}
 			}
 		})
 	}
-	if _, err := ValidateDocument("agent", "test-agent", Document{Markdown: "hello", ConfigYAML: fmt.Sprintf(base, ", reserved_output_tokens: 512")}, true); err == nil {
-		t.Fatal("draft YAML accepted the removed field")
+	if _, err := ValidateDocument("agent", "reporter", Document{Markdown: "hello", ConfigYAML: fmt.Sprintf(base, `, "reserved_output_tokens": 512`)}, true); err == nil {
+		t.Fatal("Agent configuration accepted the removed field")
 	}
 	var stored ContextConfig
 	if err := json.Unmarshal([]byte(`{"max_input_tokens":2000,"compression":"summary"}`), &stored); err != nil {

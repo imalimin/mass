@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 
 	"github.com/google/uuid"
@@ -123,8 +122,7 @@ func (s *Service) inspectProjectTarget(ctx context.Context, repo projectCatalog,
 		if err := s.loadVersion(ctx, actor, space, kind, &latest); err != nil {
 			return state, err
 		}
-		// An equivalent YAML Agent version still needs a JSON successor.
-		if matches(latest.Bundle.Document) && (kind != "agent" || json.Valid([]byte(latest.Bundle.Document.ConfigYAML))) {
+		if matches(latest.Bundle.Document) {
 			state.done = latest
 			return state, nil
 		}
