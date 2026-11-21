@@ -1,14 +1,11 @@
 package einoadapter
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/cloudwego/eino-ext/components/model/ark"
@@ -124,16 +121,15 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 	}
 	stage = "stream"
 	defer stream.Close()
-	chunks := make([]*schema.Message, 0, 32)
-	var text, reasoning strings.Builder
+	var message streamedMessage
 	defer func() {
-		if reasoning.Len() != 0 {
-			value := reasoning.String()
+		if value := message.reasoning.String(); value != "" {
 			reply.Trace.Reasoning = &value
 		}
 		if retErr != nil {
-			reply.Message.Content = text.String()
-			if partial, err := schema.ConcatMessages(chunks); err == nil && partial != nil {
+			reply.Message.Content = message.content.String()
+			if !message.invalid {
+				partial := message.result()
 				reply.Trace.ToolCalls = nativeToolCalls(partial.ToolCalls)
 				if partial.ResponseMeta != nil {
 					reply.FinishReason = partial.ResponseMeta.FinishReason
@@ -141,8 +137,6 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 			}
 		}
 	}()
-	const maxChunks, maxBytes = 10000, 4 << 20
-	size := 0
 	for {
 		chunk, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -156,24 +150,7 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 			stage = "protocol"
 			return reply, run.ErrProtocol
 		}
-		raw, _ := json.Marshal(chunk)
-		size += len(raw)
-		count := len(chunks) + 1
-		if count > maxChunks || size > maxBytes {
-			trigger := "chunks"
-			if size > maxBytes {
-				trigger = "bytes"
-				if count > maxChunks {
-					trigger = "both"
-				}
-			}
-			return reply, diagnostic.Failure(ctx, "model.stream_limit_exceeded", run.ErrOverflow,
-				"attempt_id=%s received_chunks=%d max_chunks=%d serialized_chunk_bytes=%d max_serialized_chunk_bytes=%d trigger=%s",
-				diagnostic.Attempt(ctx), count, maxChunks, size, maxBytes, trigger)
-		}
-		chunks = append(chunks, chunk)
-		text.WriteString(chunk.Content)
-		reasoning.WriteString(chunk.ReasoningContent)
+		message.add(chunk)
 		if t.Fake != nil {
 			observation.HTTPStatus = 200
 		}
@@ -192,10 +169,10 @@ func (t *ModelTransport) Stream(ctx context.Context, s run.Snapshot, p run.Prepa
 	if t.Fake == nil && !wire.complete() {
 		return reply, run.ErrProtocol
 	}
-	combined, err := schema.ConcatMessages(chunks)
-	if err != nil || combined == nil || combined.ResponseMeta == nil {
+	if message.invalid || message.metadata.ResponseMeta == nil {
 		return reply, run.ErrProtocol
 	}
+	combined := message.result()
 	if combined.Role == "" {
 		combined.Role = schema.Assistant
 	}
@@ -233,67 +210,4 @@ func nativeToolCalls(calls []schema.ToolCall) []run.NativeToolCall {
 		}})
 	}
 	return result
-}
-
-func wireComplete(raw []byte) bool {
-	scanner := bufio.NewScanner(bytes.NewReader(raw))
-	scanner.Buffer(make([]byte, 8192), 8<<20)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "data:") && strings.TrimSpace(strings.TrimPrefix(line, "data:")) == "[DONE]" {
-			return true
-		}
-	}
-	return false
-}
-func wireUsage(raw []byte) run.Usage {
-	usage, _, _ := wireTraceUsage(raw)
-	return usage
-}
-
-func wireTraceUsage(raw []byte) (result run.Usage, present bool, reasoning *int64) {
-	scanner := bufio.NewScanner(bytes.NewReader(raw))
-	scanner.Buffer(make([]byte, 8192), 8<<20)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		var item map[string]json.RawMessage
-		if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &item) != nil {
-			continue
-		}
-		var usage map[string]json.RawMessage
-		if json.Unmarshal(item["usage"], &usage) != nil || usage == nil {
-			continue
-		}
-		present = true
-		value := func(m map[string]json.RawMessage, key string) *int64 {
-			raw, ok := m[key]
-			if !ok || string(raw) == "null" {
-				return nil
-			}
-			var n int64
-			if json.Unmarshal(raw, &n) != nil || n < 0 {
-				return nil
-			}
-			return &n
-		}
-		merge := func(target **int64, n *int64) {
-			if n != nil {
-				*target = n
-			}
-		}
-		merge(&result.Input, value(usage, "prompt_tokens"))
-		merge(&result.Output, value(usage, "completion_tokens"))
-		merge(&result.CacheWrite, value(usage, "cache_creation_input_tokens"))
-		var prompt, completion map[string]json.RawMessage
-		if json.Unmarshal(usage["prompt_tokens_details"], &prompt) == nil {
-			merge(&result.CacheRead, value(prompt, "cached_tokens"))
-		}
-		if json.Unmarshal(usage["completion_tokens_details"], &completion) == nil {
-			merge(&reasoning, value(completion, "reasoning_tokens"))
-		}
-	}
-	return
 }

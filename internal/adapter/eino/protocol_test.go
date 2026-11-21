@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"github.com/imalimin/mass/internal/diagnostic"
 	"github.com/imalimin/mass/internal/domain/run"
@@ -83,6 +82,9 @@ func TestActualProtocolMatrix(t *testing.T) {
 			if tc.name == "usage then broken" && (reply.Usage.Input == nil || *reply.Usage.Input != 12) {
 				t.Fatal("lost failed attempt usage")
 			}
+			if (tc.name == "missing sentinel" || tc.name == "usage then broken") && (text != "partial" || reply.Message.Content != text) {
+				t.Fatal("lost failed attempt text")
+			}
 			if !tc.valid {
 				entry := readModelLog(t, logPath)
 				for _, want := range []string{"attempt_id=attempt-fixture", "purpose=task", fmt.Sprintf("http_status=%d", tc.status), "request_id=fixture-request-123"} {
@@ -98,45 +100,43 @@ func TestActualProtocolMatrix(t *testing.T) {
 	}
 }
 
-type chunkModel struct {
-	model.ToolCallingChatModel
-	chunks []*schema.Message
-}
-
-func (m chunkModel) Stream(context.Context, []*schema.Message, ...model.Option) (*schema.StreamReader[*schema.Message], error) {
-	return schema.StreamReaderFromArray(m.chunks), nil
-}
-
-func TestStreamLimitRecordsBothMeasuredCounters(t *testing.T) {
-	for _, tc := range []struct {
-		trigger string
-		count   int
-		large   bool
-	}{{"chunks", 10001, false}, {"bytes", 1, true}, {"both", 10001, true}} {
-		t.Run(tc.trigger, func(t *testing.T) {
-			s, ctx, logPath := modelLog(t)
-			small := &schema.Message{Role: schema.Assistant}
-			chunks := make([]*schema.Message, tc.count)
-			for i := range chunks {
-				chunks[i] = small
+func TestStreamMergesPastFormerChunkLimits(t *testing.T) {
+	const count = 10001
+	part := strings.Repeat("r", 512)
+	frame := fmt.Sprintf("data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":%q}}]}\n\n", part)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for range count {
+			if _, err := io.WriteString(w, frame); err != nil {
+				return
 			}
-			if tc.large {
-				chunks[len(chunks)-1] = &schema.Message{Role: schema.Assistant, Content: strings.Repeat("x", 4<<20)}
-			}
-			smallJSON, _ := json.Marshal(small)
-			lastJSON, _ := json.Marshal(chunks[len(chunks)-1])
-			size := (tc.count-1)*len(smallJSON) + len(lastJSON)
-			transport := &ModelTransport{Fake: chunkModel{chunks: chunks}}
-			_, err := transport.Stream(ctx, s, run.Prepared{}, "fixture", func(string) error { return nil })
-			if !errors.Is(err, run.ErrOverflow) {
-				t.Fatalf("stream limit returned %v", err)
-			}
-			entry := readModelLog(t, logPath)
-			want := fmt.Sprintf("attempt_id=attempt-fixture received_chunks=%d max_chunks=10000 serialized_chunk_bytes=%d max_serialized_chunk_bytes=4194304 trigger=%s", tc.count, size, tc.trigger)
-			if entry.Event != "model.stream_limit_exceeded" || !strings.Contains(entry.Message, want) {
-				t.Fatalf("stream limit missing %q: %+v", want, entry)
-			}
-		})
+		}
+		io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+	s := run.Snapshot{Definition: run.Definition{OutputTokens: 16384, Model: run.ModelConfig{Endpoint: server.URL, ModelID: "fixture"}}}
+	p := run.Prepared{Messages: []run.Message{{Role: "user", Content: "hello"}}}
+	var text strings.Builder
+	reply, err := (&ModelTransport{}).Stream(context.Background(), s, p, "fixture", func(part string) error {
+		text.WriteString(part)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text.String() != "done" || reply.Message.Content != "done" || reply.FinishReason != "stop" {
+		t.Fatal("lost final response")
+	}
+	wantReasoning := strings.Repeat(part, count)
+	if reply.Trace.Reasoning == nil || *reply.Trace.Reasoning != wantReasoning {
+		t.Fatal("lost streamed reasoning")
+	}
+	var native schema.Message
+	if err := json.Unmarshal(reply.Message.Native, &native); err != nil {
+		t.Fatal(err)
+	}
+	if native.ReasoningContent != wantReasoning || native.Extra["ark-reasoning-content"] != wantReasoning {
+		t.Fatal("lost native reasoning")
 	}
 }
 
@@ -189,7 +189,9 @@ func TestModelTimeoutAppliesToStreamingBody(t *testing.T) {
 }
 func TestUsageUnknownAndRawProtocol(t *testing.T) {
 	raw := []byte("data: {\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":null,\"prompt_tokens_details\":{\"cached_tokens\":4},\"cache_creation_input_tokens\":0}}\n\n")
-	u := wireUsage(raw)
+	var wire responseWire
+	wire.observe(raw)
+	_, u, _, _, _ := wire.observation()
 	b, _ := json.Marshal(u)
 	if u.Output != nil || u.CacheRead == nil || *u.CacheRead != 4 || u.CacheWrite == nil || !bytes.Contains(b, []byte("null")) {
 		t.Fatal("usage presence", string(b))

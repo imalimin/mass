@@ -24,10 +24,10 @@ TOS 使用同一个会话目录。宿主在 `<runtime.workspace_temp_root>/.sess
 
 日志只记录诊断值，模型响应正文、凭证和工具载荷由各自的现有路径处理。
 
-以下计数仅作格式示例。
+以下事件仅作格式示例。
 
 ```jsonl
-{"timestamp":"2026-11-17T14:49:14.721Z","level":"warn","event":"model.stream_limit_exceeded","run_id":"bbbbbbbbbbbbbbbb","msg":"分片数 10001/10000，累计序列化字节 3251200/4194304，触发分片数上限"}
+{"timestamp":"2026-11-17T14:49:14.721Z","level":"warn","event":"model.attempt_failed","run_id":"bbbbbbbbbbbbbbbb","msg":"attempt_id=example purpose=task stage=stream http_status=200"}
 ```
 
 ## 首版日志清单
@@ -53,16 +53,15 @@ TOS 使用同一个会话目录。宿主在 `<runtime.workspace_temp_root>/.sess
 | `run.interrupted` | 执行中收到取消、撤权、执行期限或服务停止信号，或重启时将遗留 Run 判为中断 | 已确认的触发原因。重启恢复只记录恢复时观测到的 Run 状态，有证据时再注明退出原因 |
 | `context.prepare_failed` | 在发出模型请求前，上下文历史读取、投影或摘要准备失败时 | 阶段和错误码。输入超限时记录估算输入、有效输入上限和预留输出 |
 | `run.limit_exceeded` | Run 控制器或执行循环拒绝继续执行时 | 实际命中的限制，如模型调用次数、工具调用次数、累计 Token 预算或执行时间，以及当时的计数和门限 |
-| `model.stream_limit_exceeded` | Eino 适配器检测到单次模型响应超出分片限制时 | `attempt_id`、收到的分片数、累计序列化字节数、两个门限及实际触发项。两个计数都包含触发检查的分片，字节按 `json.Marshal(chunk)` 口径计算 |
 | `model.attempt_failed` | 模型凭证解析、请求、流读取或协议校验失败时，在返回通用错误码前记录 | `attempt_id`、失败阶段和分类后的实际错误。已收到 HTTP 状态或供应商请求 ID 时一并记录 |
 | `tool.execution_failed` | 工具失败将中止 Run、被归并为通用 `tool_failed`，或被判为 `side_effect: unknown` 时 | 工具名、`call_id`、失败阶段、可确认的错误原因和副作用分类。工具结果超限时记录实际字节数和门限 |
 | `tool.network_request_failed` | 代码工具内的 HTTP 请求未能取得可用响应时 | `call_id`、请求序号、方法、主机名、阶段、分类后的错误和副作用。工具结果中的 `network_failure` 保留最近一次失败的这些信息，投影截取长结果时仍会传给模型 |
 | `workspace.operation_failed` | 工作区恢复、文件写入配额检查、快照打包、归档上传、清单保存或快照提交失败时 | 操作阶段和实际错误码。工作区超限时在检查点记录参与归档的累计字节、触发条目的字节数和有效上限 |
 | `session.persist_failed` | 保存 `session.jsonl`、上传会话对象或更新 Run 终态索引失败时 | 失败环节、本次需要提交的会话记录位置，以及可取得的存储或数据库错误码 |
 
-同一个异常在能取得原始诊断值的边界记录一次。分片超限由 `model.stream_limit_exceeded` 说明，文件工具遇到工作区总量超限由 `workspace.operation_failed` 说明。摘要模型调用失败也按同一模型事件记录，借助日志中的用途区分。正常的工具拒绝、工具输出和成功结果沿用实时 Trace 与会话记录。未知的状态码、计数或故障原因直接省略。诊断日志自身的落盘或追加失败写入服务日志，避免再次进入会话日志上传链路。
+同一个异常在能取得原始诊断值的边界记录一次。文件工具遇到工作区总量超限由 `workspace.operation_failed` 说明。摘要模型调用失败也按同一模型事件记录，借助日志中的用途区分。正常的工具拒绝、工具输出和成功结果沿用实时 Trace 与会话记录。未知的状态码、计数或故障原因直接省略。诊断日志自身的落盘或追加失败写入服务日志，避免再次进入会话日志上传链路。
 
-排查时用 `run_id` 找到最后的进度记录和异常。遇到 `context_overflow`，用 `context.prepare_failed`、`model.stream_limit_exceeded` 或 `tool.execution_failed` 确定出错位置。遇到 `workspace_snapshot_failed`，用工作区事件区分打包超限、上传失败和提交失败。宿主已有终态而远端只看到接收记录时，用 `session.persist_failed` 或宿主服务日志定位持久化问题。
+排查时用 `run_id` 找到最后的进度记录和异常。遇到 `context_overflow`，用 `context.prepare_failed` 或 `tool.execution_failed` 确定出错位置。旧版本的 `model.stream_limit_exceeded` 记录原 Eino 适配器的分片数或分片序列化字节数超限。遇到 `workspace_snapshot_failed`，用工作区事件区分打包超限、上传失败和提交失败。宿主已有终态而远端只看到接收记录时，用 `session.persist_failed` 或宿主服务日志定位持久化问题。
 
 ## 本地追加与异步提交
 
