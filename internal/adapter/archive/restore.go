@@ -84,6 +84,24 @@ func (r *Runtime) CopySession(ctx context.Context, target storage.BlobStore, pre
 			return 0, err
 		}
 	}
+	if len(s.draftPackages) > 0 {
+		var created sessionlog.Created
+		if err := json.Unmarshal(lines[0], &created); err != nil {
+			return 0, err
+		}
+		for i, ref := range created.DraftSkillPackages {
+			object, err := copyObject(ctx, s.draftPackages[ref.ID].Metadata())
+			if err != nil {
+				return 0, err
+			}
+			created.DraftSkillPackages[i].Object, created.DraftSkillPackages[i].Key = object, object.Key
+		}
+		line, err := json.Marshal(created)
+		if err != nil {
+			return 0, err
+		}
+		lines[0] = line
+	}
 	var body strings.Builder
 	for _, line := range lines {
 		body.Write(line)
@@ -91,5 +109,5 @@ func (r *Runtime) CopySession(ctx context.Context, target storage.BlobStore, pre
 	}
 	key := Key(prefix, space, "sessions", session, "session.jsonl")
 	_, err = target.Overwrite(ctx, key, strings.NewReader(body.String()), int64(body.Len()), "application/x-ndjson")
-	return len(s.blobs) + 1, err
+	return len(s.blobs) + len(s.draftPackages) + 1, err
 }

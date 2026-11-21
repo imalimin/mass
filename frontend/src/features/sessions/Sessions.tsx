@@ -13,6 +13,8 @@ export function SessionWorkspace({ space }: { space: string }) {
 }
 
 function AgentConversations({ space, agentID, sessionID }: { space: string; agentID: string; sessionID: string }) {
+  const { state } = useLocation() as { state?: { creativitySessionID?: string } }
+  const creativitySessionID = sessionID ? state?.creativitySessionID : undefined
   const [startedSession, setStartedSession] = useState('')
   const [draftNumber, setDraftNumber] = useState(0)
   const startNew = () => {
@@ -32,18 +34,24 @@ function AgentConversations({ space, agentID, sessionID }: { space: string; agen
     queryFn: ({ signal }) => request<Schema['DefinitionDraft']>(`/spaces/${space}/agents/${agentID}/draft`, 'GET', undefined, signal),
     enabled: !sessionID || !!current.data && !sharedAgent,
   })
-  const conversationAgent = sharedAgent ?? agent.data
+  const fixedDraftAgent = current.data?.draft_revision
+    ? { id: agentID, name: current.data.agent_name ?? agentID, archived: false }
+    : undefined
+  const conversationAgent = sharedAgent ?? fixedDraftAgent ?? agent.data
   const sessions = useQuery({
     queryKey: ['private', space, 'sessions', agentID],
     queryFn: ({ signal }) => list<Schema['RuntimeSession']>(`/spaces/${space}/agents/${agentID}/sessions`, signal),
+    enabled: !creativitySessionID,
     refetchInterval: q => q.state.error ? false : 5000,
   })
   const recent = [...(sessions.data ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))
-  return <div className="session-workspace session-workspace--history">
+  return <div className={creativitySessionID ? 'session-workspace' : 'session-workspace session-workspace--history'}>
     <div className="session-toolbar">
-      <Link className="text-link" to={spacePath(space, 'agents')}>← Agents</Link>
+      {creativitySessionID
+        ? <Link className="text-link" to={creativitySessionPath(space, creativitySessionID)}>← 返回创意会话</Link>
+        : <Link className="text-link" to={spacePath(space, 'agents')}>← Agents</Link>}
     </div>
-    <nav aria-label="会话列表" className="session-rail">
+    {!creativitySessionID && <nav aria-label="会话列表" className="session-rail">
       <div className="session-rail-top">
         {!sharedAgent && agent.data && !agent.data.archived && <NavLink end to={agentSessionsPath(space, agentID)} aria-label="新建会话"
           onClick={startNew}><span aria-hidden="true">+</span> 新建会话</NavLink>}
@@ -52,13 +60,13 @@ function AgentConversations({ space, agentID, sessionID }: { space: string; agen
         <h2>会话</h2>
         {recent.map(s => <NavLink key={s.id} to={s.creativity ? creativitySessionPath(space, s.id) : agentSessionsPath(space, agentID, s.id)} end
           onClick={() => { if (s.id !== sessionID) setStartedSession('') }} title={s.id}>
-          {s.id}{s.workspace_error && <small>文件待恢复</small>}
+          {s.id}{s.draft_revision && <small>草稿调试</small>}{s.workspace_error && <small>文件待恢复</small>}
         </NavLink>)}
         {sessions.isPending && <p role="status">正在读取会话…</p>}
         {sessions.data?.length === 0 && <p>还没有会话</p>}
         {sessions.error && <p role="alert">{sessions.error.message}</p>}
       </div>
-    </nav>
+    </nav>}
     <WorkspaceFiles space={space} sessionID={sessionID}>
       {conversationAgent ? <Conversation key={!sessionID || sessionID === startedSession ? `draft-${draftNumber}` : sessionID} space={space}
         agent={conversationAgent} sessionID={sessionID} onCreated={setStartedSession} />

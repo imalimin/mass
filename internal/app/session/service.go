@@ -47,14 +47,16 @@ type Service struct {
 	Notify        func()
 }
 type CreateInput struct {
-	AgentSourceSpaceID string          `json:"agent_source_space_id,omitempty"`
-	Creativity         *run.Creativity `json:"-"`
-	Hide               bool            `json:"hide,omitempty"`
-	Key                string          `json:"idempotency_key"`
-	AgentID            string          `json:"agent_id"`
-	VersionID          string          `json:"version_id"`
-	SourceSnapshotID   string          `json:"source_workspace_snapshot_id"`
-	Title              string          `json:"title"`
+	AgentSourceSpaceID    string           `json:"agent_source_space_id,omitempty"`
+	Creativity            *run.Creativity  `json:"-"`
+	Hide                  bool             `json:"hide,omitempty"`
+	Key                   string           `json:"idempotency_key"`
+	AgentID               string           `json:"agent_id"`
+	VersionID             string           `json:"version_id"`
+	SourceSnapshotID      string           `json:"source_workspace_snapshot_id"`
+	Title                 string           `json:"title"`
+	ExpectedDraftRevision int64            `json:"expected_draft_revision,omitempty"`
+	ExpectedSkillDrafts   map[string]int64 `json:"-"`
 }
 type SubmitInput struct {
 	Key         string   `json:"idempotency_key"`
@@ -63,6 +65,8 @@ type SubmitInput struct {
 }
 
 var keyPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+
+func ValidRequestKey(key string) bool { return keyPattern.MatchString(key) }
 
 func Ref(o storage.Object, role string) storage.Ref {
 	return storage.Ref{Role: role, ObjectID: o.ID, SHA256: o.SHA256}
@@ -78,6 +82,10 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 		in.AgentSourceSpaceID = ""
 	}
 	shared := in.AgentSourceSpaceID != ""
+	draftRequested := in.VersionID == catalog.Latest
+	if (draftRequested && (shared || s.Content.Inline == nil || in.Creativity != nil)) || in.ExpectedDraftRevision < 0 || (in.ExpectedDraftRevision != 0 && !draftRequested) {
+		return run.Session{}, identity.ErrInvalid
+	}
 	if shared && (!storage.ValidShortID(in.AgentSourceSpaceID) || in.VersionID != "" || in.SourceSnapshotID != "") {
 		return run.Session{}, identity.ErrInvalid
 	}
@@ -87,7 +95,7 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 	if s.Content.Inline != nil && in.SourceSnapshotID != "" {
 		return run.Session{}, identity.ErrInvalid
 	}
-	if !keyPattern.MatchString(in.Key) || !storage.ValidShortID(in.AgentID) || len(in.Title) > 200 || !utf8.ValidString(in.Title) || (in.VersionID != "" && !storage.ValidID(in.VersionID)) || (in.SourceSnapshotID != "" && !storage.ValidID(in.SourceSnapshotID)) {
+	if !ValidRequestKey(in.Key) || !storage.ValidShortID(in.AgentID) || len(in.Title) > 200 || !utf8.ValidString(in.Title) || (in.VersionID != "" && !draftRequested && !storage.ValidID(in.VersionID)) || (in.SourceSnapshotID != "" && !storage.ValidID(in.SourceSnapshotID)) {
 		return run.Session{}, identity.ErrInvalid
 	}
 	digest := journal.Digest(in)
@@ -119,12 +127,24 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 	var agentName string
 	var version catalog.Version
 	var boundSkills []catalog.Bundle
+	var draftRevision int64
+	var draftPackages []run.DraftSkillPackage
 	if shared {
 		publicAgent, loadErr := s.Catalog.LoadPublicAgent(ctx, in.AgentSourceSpaceID, in.AgentID)
 		if loadErr != nil {
 			return run.Session{}, loadErr
 		}
 		agentName, version, boundSkills = publicAgent.Name, publicAgent.Version, publicAgent.Skills
+	} else if draftRequested {
+		var selection catalog.DraftAgentSelection
+		selection, boundSkills, draftPackages, err = s.Catalog.LoadDraftAgent(ctx, actor, space, in.AgentID, in.ExpectedDraftRevision, in.ExpectedSkillDrafts)
+		if err != nil {
+			return run.Session{}, err
+		}
+		version, draftRevision = selection.Version, selection.Revision
+		if draftRevision > 0 {
+			agentName = version.Bundle.Name
+		}
 	} else {
 		version, err = s.localAgentVersion(ctx, actor, space, in)
 		if err != nil {
@@ -139,12 +159,12 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 	c.Context.Normalize()
 	d := run.Definition{VersionID: version.ID, AgentID: in.AgentID, Debug: version.Debug, PlatformVersion: run.PlatformVersion, Platform: run.PlatformInstructions, Instructions: b.Document.Markdown, Skills: []run.Skill{}, Model: Model(*b.Model), Tools: []run.ToolSpec{}, Compression: c.Context.Compression, MaxInputTokens: c.Context.MaxInputTokens, OutputTokens: c.Context.MaxTokens, MaxSteps: c.Limits.MaxSteps, TimeoutSeconds: c.Limits.TimeoutSeconds}
 	var refs []storage.Ref
-	if !shared {
+	if !shared && draftRevision == 0 {
 		refs = append(refs, storage.Ref{Role: "agent_version", ObjectID: version.ContentID, SHA256: version.SHA256})
 	}
 	for i, binding := range b.Bindings {
 		var skillBundle catalog.Bundle
-		if shared {
+		if shared || draftRevision > 0 {
 			skillBundle = boundSkills[i]
 		} else {
 			skill, err := s.Catalog.Version(ctx, actor, space, "skill", binding.SkillID, binding.VersionID)
@@ -171,7 +191,7 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 	}
 	accept := func() error {
 		var acceptErr error
-		id, acceptErr = s.acceptSession(ctx, actor, space, in, d, refs, agentName, digest)
+		id, acceptErr = s.acceptSession(ctx, actor, space, in, d, refs, agentName, digest, draftRevision, draftPackages)
 		return acceptErr
 	}
 	if shared {
@@ -203,7 +223,7 @@ func (s *Service) localAgentVersion(ctx context.Context, actor, space string, in
 	return s.Catalog.Version(ctx, actor, space, "agent", in.AgentID, versionID)
 }
 
-func (s *Service) acceptSession(ctx context.Context, actor, space string, in CreateInput, d run.Definition, refs []storage.Ref, agentName, digest string) (string, error) {
+func (s *Service) acceptSession(ctx context.Context, actor, space string, in CreateInput, d run.Definition, refs []storage.Ref, agentName, digest string, draftRevision int64, draftPackages []run.DraftSkillPackage) (string, error) {
 	raw, _ := json.Marshal(d)
 	o, err := s.Content.Put(ctx, actor, space, uuid.NewString(), "session.definition", "application/json", bytes.NewReader(raw))
 	if err != nil {
@@ -216,7 +236,7 @@ func (s *Service) acceptSession(ctx context.Context, actor, space string, in Cre
 	if title == "" {
 		title = id
 	}
-	event := journal.New(actor, "session.created", "", journal.SessionData{Hide: in.Hide, Creativity: in.Creativity, SourceSnapshotID: in.SourceSnapshotID, DefinitionRef: &defRef, DefinitionID: in.AgentID, VersionID: d.VersionID, Title: title, AgentSourceSpaceID: in.AgentSourceSpaceID, AgentName: agentName}, refs...)
+	event := journal.New(actor, "session.created", "", journal.SessionData{Hide: in.Hide, Creativity: in.Creativity, SourceSnapshotID: in.SourceSnapshotID, DefinitionRef: &defRef, DefinitionID: in.AgentID, VersionID: d.VersionID, Title: title, AgentSourceSpaceID: in.AgentSourceSpaceID, AgentName: agentName, DraftRevision: draftRevision, DraftSkillPackages: draftPackages}, refs...)
 	batch, err := journal.Prepare(actor, journal.Request{SpaceID: space, SessionID: id, AppendKey: uuid.NewString(), Events: []journal.Proposed{event}})
 	if err != nil {
 		return "", err

@@ -19,6 +19,8 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 var versionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 var hashPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
+const Latest = "latest"
+
 const maxSkillEntries = 100
 
 var Tools = []string{"list_files", "glob_files", "search_files", "read_file", "write_file", "edit_file", "move_file", "delete_file", "list_skill_resources", "read_skill_resource", "read_attachment", run.PythonTool, run.JavaScriptTool, run.GoTool, run.CommandTool, "update_plan", "publish_artifact"}
@@ -87,7 +89,7 @@ func ValidateDocument(kind, name string, doc Document, publish bool) (*Config, e
 		return nil, ErrConfig
 	}
 	c.Context.Normalize()
-	return validateConfig(c)
+	return validateConfig(c, !publish)
 }
 
 func strictYAML(raw string, value any) error {
@@ -133,10 +135,10 @@ func strictYAML(raw string, value any) error {
 	return dec.Decode(value)
 }
 
-func validateConfig(c Config) (*Config, error) {
+func validateConfig(c Config, allowLatest bool) (*Config, error) {
 	ids := map[string]bool{}
 	for _, r := range c.Skills {
-		if !storage.ValidID(r.ID) || !ValidLabel(r.Version) || ids[r.ID] {
+		if !storage.ValidID(r.ID) || (!ValidLabel(r.Version) && (!allowLatest || r.Version != Latest)) || ids[r.ID] {
 			return nil, ErrConfig
 		}
 		ids[r.ID] = true

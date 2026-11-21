@@ -44,18 +44,20 @@ type Runtime struct {
 
 type conversation struct {
 	sync.Mutex
-	loaded       bool
-	records      []json.RawMessage
-	session      run.Session
-	definition   run.Definition
-	runs         map[string]*runState
-	events       []journal.Event
-	attachments  map[string]run.Attachment
-	blobs        map[string]Ref
-	snapshots    map[string]storage.Snapshot
-	publishPlans map[string]run.CreativityPublishPlan
-	maintenance  bool
-	active       string
+	loaded        bool
+	records       []json.RawMessage
+	session       run.Session
+	definition    run.Definition
+	runs          map[string]*runState
+	events        []journal.Event
+	attachments   map[string]run.Attachment
+	blobs         map[string]Ref
+	snapshots     map[string]storage.Snapshot
+	draftPackages map[string]Ref
+	publishPlans  map[string]run.CreativityPublishPlan
+	lastDebugPlan run.CreativityPublishPlan
+	maintenance   bool
+	active        string
 }
 
 type runState struct {
@@ -298,13 +300,20 @@ func orNil(value string) *string {
 }
 
 func (r *Runtime) restoreCreated(s *conversation, d sessionlog.Created) {
+	if len(d.DraftSkillPackages) > 0 {
+		s.draftPackages = make(map[string]Ref, len(d.DraftSkillPackages))
+		for _, asset := range d.DraftSkillPackages {
+			s.draftPackages[asset.ID] = Ref{Object: asset.Object, Key: asset.Key}
+		}
+	}
 	s.definition = d.Definition.Runtime(d.AgentID, d.VersionID)
 	ref := r.remember(d.SpaceID, stable(d.SessionID, "definition"), "session.definition", s.definition)
 	ref.Role = "definition"
-	s.session = run.Session{ID: d.SessionID, SpaceID: d.SpaceID, ActorID: d.ActorID, Title: d.Title, Creativity: d.Creativity,
+	s.session = run.Session{ID: d.SessionID, SpaceID: d.SpaceID, ActorID: d.ActorID, Title: d.Title, Creativity: d.Creativity, DraftRevision: d.DraftRevision,
 		AgentSourceSpaceID: d.AgentSourceSpaceID, AgentName: d.AgentName,
 		DefinitionID: d.AgentID, VersionID: d.VersionID, DefinitionRef: ref, CreatedAt: d.CreatedAt}
 	e := journal.New(d.ActorID, "session.created", "", journal.SessionData{DefinitionRef: &ref, Creativity: d.Creativity,
+		DraftRevision:      d.DraftRevision,
 		AgentSourceSpaceID: d.AgentSourceSpaceID, AgentName: d.AgentName,
 		DefinitionID: d.AgentID, VersionID: d.VersionID, Title: d.Title}, ref)
 	e.EventID, e.OccurredAt = d.EventID, d.CreatedAt

@@ -2838,6 +2838,54 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CreativityPublishError'
+  /api/v1/spaces/{space_id}/creativity/sessions/{session_id}/draft-debug:
+    parameters:
+      - name: space_id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ShortResourceID'
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ShortResourceID'
+    post:
+      operationId: createCreativityDraftDebugSession
+      security:
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [workspace_snapshot_id, idempotency_key]
+              properties:
+                workspace_snapshot_id:
+                  type: string
+                  format: uuid
+                idempotency_key:
+                  type: string
+                  pattern: ^[A-Za-z0-9._:-]{1,128}$
+                model_id:
+                  description: Selected current-space model when the Agent has no model binding.
+                  type: string
+                  format: uuid
+      responses:
+        '201':
+          description: Saved the project drafts and opened an ordinary session with fixed Agent and Skill content.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSession'
+        default:
+          description: Draft saving or session creation failed. Successfully saved drafts remain.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreativityPublishError'
   /api/v1/spaces/{space_id}/sessions:
     post:
       operationId: createSession
@@ -5430,8 +5478,12 @@ components:
         agent_source_space_id:
           $ref: '#/components/schemas/ShortResourceID'
         agent_name:
-          description: Published Agent name for a cross-space session.
+          description: Fixed Agent name for a cross-space or draft-debug session.
           type: string
+        draft_revision:
+          description: Selected Agent draft revision for a draft-debug session.
+          type: integer
+          format: int64
         id:
           $ref: '#/components/schemas/ShortResourceID'
         space_id:
@@ -5764,7 +5816,13 @@ components:
           description: Optional source of a public Agent. When different from the session space, omit version_id to use its published default.
           $ref: '#/components/schemas/ShortResourceID'
         version_id:
+          description: Agent version UUID. For a same-space runtime session, latest selects the current draft or the latest available formal version when the Agent has no draft.
           type: string
+        expected_draft_revision:
+          description: With latest, require this Agent draft revision before opening the session.
+          type: integer
+          format: int64
+          minimum: 1
         title:
           type: string
           maxLength: 200

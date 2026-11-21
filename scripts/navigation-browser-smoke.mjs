@@ -24,7 +24,8 @@ const messages = Array.from({ length: 32 }, (_, index) => {
 })
 const pageOf = items => ({ items, next_cursor: null, has_more: false, next_after: '0' })
 let signedIn = true, createdSpaces = 0, firstRunRejected = false, agentVisibility = 'space'
-let publishCalls = 0, pendingModelSelection = false
+let publishCalls = 0, pendingModelSelection = false, debugKey, debugSubmittedRun = false, debugSaved = false, debugFailed = false
+const directDebug = Promise.withResolvers()
 const requests = [], unexpected = [], models = [], modelKeys = new Map(), creativePrompts = []
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost'), path = url.pathname
@@ -117,7 +118,7 @@ const server = createServer(async (req, res) => {
       if (entry === 'skills/report-writer') return json({ directory: true, entries: [{ name: 'SKILL.md', directory: false }] })
       if (entry === 'skills/report-writer/SKILL.md') return json({ directory: false, text: '# Report writer' })
     }
-    if (/\/sessions\/session-(one|two|three|new|creative|shared|iterate)$/.test(path)) return json(sessions.find(s => path.endsWith(s.id)))
+    if (/\/sessions\/session-(one|two|three|new|creative|shared|iterate|debug|debug-direct)$/.test(path)) return json(sessions.find(s => path.endsWith(s.id)))
     if (path.endsWith('/session-creative/runs') && req.method === 'POST') {
       let body = ''; for await (const chunk of req) body += chunk
       creativePrompts.push(JSON.parse(body))
@@ -125,19 +126,47 @@ const server = createServer(async (req, res) => {
       runs.push(run)
       return json(run, 202)
     }
-    if (path.endsWith('/session-creative/publish')) {
-      const manifest = { model_id: publishModel.id, model_locked: publishCalls > 0, agent: { name: 'report-agent', action: 'create' }, skills: [{ name: 'report-writer', action: 'update' }] }
-      if (req.method === 'GET') {
-        assert.equal(url.searchParams.get('workspace_snapshot_id'), creativitySnapshot)
-        if (!url.searchParams.has('model_id') && !publishCalls) {
+    if (path.endsWith('/session-creative/draft-debug')) {
+      let body = ''; for await (const chunk of req) body += chunk
+      const input = JSON.parse(body)
+      assert.equal(input.workspace_snapshot_id, creativitySnapshot)
+      assert.ok(input.idempotency_key)
+      const id = debugSaved ? 'session-debug-direct' : 'session-debug'
+      if (!debugSaved) {
+        debugKey ??= input.idempotency_key
+        assert.equal(input.idempotency_key, debugKey)
+        if (!input.model_id) {
           pendingModelSelection = true
           return json({ code: 'publish_model_required' }, 400)
         }
-        assert.ok(publishCalls > 0 || url.searchParams.get('model_id') === publishModel.id)
+        assert.equal(input.model_id, publishModel.id)
+        if (!debugFailed) {
+          debugFailed = true
+          return json({ code: 'runtime_unavailable' }, 503)
+        }
+      } else {
+        assert.equal(input.model_id, undefined)
+        assert.notEqual(input.idempotency_key, debugKey)
+        await directDebug.promise
+      }
+      debugSaved = true
+      const session = { ...sessions[0], id, agent_name: 'report-agent', draft_revision: 2 }
+      sessions.push(session)
+      return json(session, 201)
+    }
+    if (path.endsWith('/session-creative/publish')) {
+      const manifest = { model_id: publishModel.id, model_locked: debugSaved || publishCalls > 0, agent: { name: 'report-agent', action: 'create' }, skills: [{ name: 'report-writer', action: 'update' }] }
+      if (req.method === 'GET') {
+        assert.equal(url.searchParams.get('workspace_snapshot_id'), creativitySnapshot)
+        if (!url.searchParams.has('model_id') && !manifest.model_locked) {
+          pendingModelSelection = true
+          return json({ code: 'publish_model_required' }, 400)
+        }
+        assert.ok(manifest.model_locked || url.searchParams.get('model_id') === publishModel.id)
         return json(manifest)
       }
       let body = ''; for await (const chunk of req) body += chunk
-      assert.deepEqual(JSON.parse(body), { workspace_snapshot_id: creativitySnapshot, ...(publishCalls ? {} : { model_id: publishModel.id }) })
+      assert.deepEqual(JSON.parse(body), { workspace_snapshot_id: creativitySnapshot, ...(manifest.model_locked ? {} : { model_id: publishModel.id }) })
       const skills = [{ ...manifest.skills[0], label: 'v2', status: 'published' }]
       if (++publishCalls === 1) return json({
         code: 'content_unavailable', message: 'Agent report-agent：Content unavailable',
@@ -155,6 +184,7 @@ const server = createServer(async (req, res) => {
       runs.push(run)
       return json(run, 202)
     }
+    if (/\/session-debug(-direct)?\/runs$/.test(path) && req.method === 'POST') debugSubmittedRun = true
     if (path.endsWith('/runs')) return json(pageOf(runs.filter(r => path.endsWith('/' + r.session_id + '/runs'))))
     if (/\/runs\/run-(one|two|new|creative)$/.test(path)) return json(runs.find(r => path.endsWith(r.id)))
     if (path.endsWith('/ui-snapshot')) return json({ session_id: runs.find(r => path.includes(`/${r.id}/`))?.session_id, cursor: '0', source_sequence: '0', protocol_profile: 'mass-agui-v1', mapper_version: 1, parser_version: 1, closed: true, state: { status: 'succeeded', cancel_requested: false, error: '', usage, messages: [], tools: [], artifacts: [] } })
@@ -216,7 +246,43 @@ try {
   await expect(publishDialog.getByLabel('发布模型')).toBeVisible()
   await expect(publishDialog.getByRole('button', { name: '确认发布' })).toBeDisabled()
   await expect(publishDialog.getByRole('list')).toHaveCount(0)
-  await publishDialog.getByLabel('发布模型').selectOption(publishModel.id)
+  await publishDialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await page.getByRole('button', { name: '去试试', exact: true }).click()
+  const debugDialog = page.getByRole('dialog', { name: '草稿调试' })
+  await expect(debugDialog.getByLabel('调试模型')).toBeVisible()
+  await debugDialog.getByLabel('调试模型').selectOption(publishModel.id)
+  await expect(debugDialog.getByRole('alert')).toBeVisible()
+  await debugDialog.getByRole('button', { name: '重试', exact: true }).click()
+  await expect(page).toHaveURL(url + '/spaces/space-one/agents/definition-one/sessions/session-debug')
+  await expect(page.getByRole('navigation', { name: '会话列表' })).toHaveCount(0)
+  await expect(page.getByText('草稿调试 · r2')).toBeVisible()
+  await expect(page.getByLabel('输入任务')).toBeVisible()
+  assert.equal(debugSubmittedRun, false)
+  await page.getByRole('link', { name: '← 返回创意会话' }).click(); await heading('session-creative')
+  try {
+    await page.getByRole('button', { name: '去试试', exact: true }).click()
+    await expect(debugDialog).toBeVisible()
+    await expect(debugDialog.getByRole('status')).toHaveText('正在校验并准备调试会话…')
+  } finally {
+    directDebug.resolve()
+  }
+  await expect(page).toHaveURL(url + '/spaces/space-one/agents/definition-one/sessions/session-debug-direct')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: '会话列表' })).toHaveCount(0)
+  await page.reload(); await heading('session-debug-direct')
+  await expect(page.getByRole('navigation', { name: '会话列表' })).toHaveCount(0)
+  assert.equal(debugSubmittedRun, false)
+  await page.getByRole('link', { name: '← 返回创意会话' }).click(); await heading('session-creative')
+  await page.goto(url + '/spaces/space-one/agents/definition-one/sessions/session-one')
+  const debugHistory = page.getByRole('navigation', { name: '会话列表' })
+  await debugHistory.getByRole('link', { name: 'session-debug 草稿调试', exact: true }).click()
+  await heading('session-debug')
+  await expect(debugHistory).toBeVisible()
+  await page.goto(url + '/spaces/space-one/creativity/sessions/session-creative'); await heading('session-creative')
+  await page.getByLabel('输入任务').fill('继续调试')
+  await page.getByRole('button', { name: 'skills', exact: true }).click()
+  await page.getByRole('button', { name: 'report-writer', exact: true }).click()
+  await page.getByRole('button', { name: '去发布', exact: true }).click()
   await expect(publishDialog).toContainText('report-writer — 编辑并发新版')
   await expect(publishDialog.locator('input, textarea')).toHaveCount(0)
   await publishDialog.getByRole('button', { name: '确认发布' }).click()
@@ -295,6 +361,7 @@ try {
   await expect(page.getByRole('navigation', { name: '会话列表' })).toHaveCount(0)
   await expect(page.getByLabel('输入任务')).toHaveValue('')
   await expect(page.getByRole('button', { name: '去发布', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '去试试', exact: true })).toBeDisabled()
   await page.getByRole('button', { name: 'AGENTS.md' }).click()
   await expect(page.getByRole('region', { name: '只读文件预览' })).toContainText('# Navigation fixture')
   await page.reload()

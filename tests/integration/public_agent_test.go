@@ -164,9 +164,10 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	newAgentConfig.Model = ""
 	newAgentYAML, err := json.Marshal(newAgentConfig)
 	must(err)
+	var draftBinding atomic.Value
 	fake := &einoadapter.ModelTransport{Fake: &einoadapter.FakeChatModel{Respond: func(_ context.Context, messages []*schema.Message) ([]*schema.Message, error) {
 		var toolMessages []string
-		iteration, createAgent, continueAfterArchive := false, false, false
+		iteration, createAgent, continueAfterArchive, readDraft := false, false, false, false
 		for _, message := range messages {
 			if message.Role == schema.Tool {
 				toolMessages = append(toolMessages, message.Content)
@@ -177,13 +178,22 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 			if message.Role == schema.User && strings.Contains(message.Content, "Create project for publication") {
 				createAgent = true
 			}
-			if message.Role == schema.User && strings.Contains(message.Content, "Continue after archiving") {
+			if message.Role == schema.User && (strings.Contains(message.Content, "Continue after archiving") || message.Content == "Keep the project unchanged") {
 				continueAfterArchive = true
+			}
+			if message.Role == schema.User && message.Content == "Read the pinned draft" {
+				readDraft = true
 			}
 		}
 		reply := &schema.Message{Role: schema.Assistant, Content: "Done", ResponseMeta: &schema.ResponseMeta{FinishReason: "stop", Usage: &schema.TokenUsage{PromptTokens: 10, CompletionTokens: 5}}}
 		tool, args := "", ""
 		switch {
+		case readDraft && len(toolMessages) == 0:
+			tool, args = "read_skill_resource", fmt.Sprintf(`{"skill_binding_id":%q,"path":"guide.txt"}`, draftBinding.Load())
+		case readDraft:
+			if !strings.Contains(toolMessages[0], "draft-only resource") {
+				return nil, fmt.Errorf("pinned Skill resource not returned: %s", toolMessages[0])
+			}
 		case continueAfterArchive:
 		case createAgent && len(toolMessages) == 0:
 			tool, args = "write_file", `{"path":"AGENTS.md","content":"Created in Creativity","media_type":"text/plain","expected_sha256":"missing"}`
@@ -391,6 +401,50 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 		t.Fatalf("unexpected publish preview: %+v", preview)
 	}
 	archiveCount := blobs.archiveWrites.Load()
+	debugPath := localLaunch + "/" + iteration.ID + "/draft-debug"
+	debugInput := map[string]string{"workspace_snapshot_id": snapshot, "idempotency_key": uuid.NewString()}
+	var debugSession, debugRetry run.Session
+	request("POST", debugPath, visitorCookie, debugInput, 403)
+	must(json.Unmarshal(request("POST", debugPath, ownerCookie, debugInput, 201).Body.Bytes(), &debugSession))
+	must(json.Unmarshal(request("POST", debugPath, ownerCookie, debugInput, 201).Body.Bytes(), &debugRetry))
+	if debugSession.ID != debugRetry.ID || debugSession.DefinitionID != agent.ID || debugSession.Creativity != nil ||
+		debugSession.DraftRevision == 0 || debugSession.LatestSnapshotID != "" || blobs.archiveWrites.Load() != archiveCount {
+		t.Fatalf("draft debug did not open a fixed ordinary session: %+v", debugSession)
+	}
+	debugPlan, err := sessions.CreativityPublishPlan(ctx, owner.ID, source.ID, iteration.ID, snapshot)
+	must(err)
+	debugDefinition, err := options.Service.Definition(ctx, owner.ID, source.ID, debugSession.DefinitionRef)
+	must(err)
+	stillFormal, _, err := catalogStore.LatestFormalVersion(ctx, owner.ID, source.ID, "skill", skill.ID)
+	must(err)
+	unpublishedSkill, _, err := catalogStore.LatestFormalVersion(ctx, owner.ID, source.ID, "skill", debugPlan.Skills[1].ID)
+	must(err)
+	if stillFormal.ID != latestSkill.ID || unpublishedSkill.ID != "" || len(debugDefinition.Skills) != 2 ||
+		!strings.HasPrefix(debugDefinition.Skills[0].Version, "draft-r") || debugDefinition.Skills[1].ID != debugPlan.Skills[1].ID {
+		t.Fatalf("debug used the wrong Skill bindings or published a version: %+v", debugDefinition.Skills)
+	}
+	must(json.Unmarshal(request("POST", iterationPath+"/runs", ownerCookie, map[string]string{
+		"idempotency_key": uuid.NewString(), "text": "Keep the project unchanged",
+	}, 202).Body.Bytes(), &accepted))
+	for !run.Terminal(accepted.Status) && ctx.Err() == nil {
+		time.Sleep(25 * time.Millisecond)
+		accepted, err = sessions.RuntimeRun(ctx, owner.ID, source.ID, accepted.ID)
+		must(err)
+	}
+	if accepted.Status != "succeeded" || accepted.WorkspaceSnapshotID == "" || accepted.WorkspaceSnapshotID == snapshot {
+		t.Fatalf("second iteration did not commit a new snapshot: %+v", accepted)
+	}
+	request("POST", debugPath, ownerCookie, debugInput, 409)
+	snapshot = accepted.WorkspaceSnapshotID
+	publishInput["workspace_snapshot_id"] = snapshot
+	debugInput["workspace_snapshot_id"], debugInput["idempotency_key"] = snapshot, uuid.NewString()
+	archiveCount = blobs.archiveWrites.Load()
+	must(json.Unmarshal(request("POST", debugPath, ownerCookie, debugInput, 201).Body.Bytes(), &debugRetry))
+	secondDebugPlan, err := sessions.CreativityPublishPlan(ctx, owner.ID, source.ID, iteration.ID, snapshot)
+	must(err)
+	if debugRetry.ID == debugSession.ID || !catalog.Equal(secondDebugPlan.DebugDrafts, debugPlan.DebugDrafts) || blobs.archiveWrites.Load() != archiveCount {
+		t.Fatalf("debug on a later snapshot did not reuse the saved drafts: %+v", secondDebugPlan)
+	}
 	blobs.blockVersionFor = agent.ID
 	blobs.versionStarted, blobs.releaseVersion = make(chan struct{}), make(chan struct{})
 	done := make(chan *httptest.ResponseRecorder, 1)
@@ -412,6 +466,7 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	}
 	request("POST", iterationPath+"/runs", ownerCookie, map[string]string{"idempotency_key": uuid.NewString(), "text": "Blocked by publish"}, 409)
 	request("POST", publishPath, ownerCookie, publishInput, 409)
+	request("POST", debugPath, ownerCookie, debugInput, 409)
 	close(blobs.releaseVersion)
 	var failure struct {
 		Details struct {
@@ -433,7 +488,7 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	publishCold := &archiveadapter.Runtime{DB: db.Store, Log: &sessionlog.Store{Root: t.TempDir(), Prefix: "shared", Blobs: blobs}}
 	pinned, err := publishCold.CreativityPublishPlan(ctx, owner.ID, source.ID, iteration.ID, snapshot)
 	must(err)
-	if len(pinned.Skills) != 2 || pinned.Agent.ID != agent.ID {
+	if len(pinned.Skills) != 2 || pinned.Agent.ID != agent.ID || pinned.Skills[1].ID != debugPlan.Skills[1].ID {
 		t.Fatalf("publish plan not persisted before partial writes: %+v", pinned)
 	}
 	savedAgent, err := catalogue.Draft(ctx, owner.ID, source.ID, "agent", agent.ID)
@@ -471,9 +526,57 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	if afterConflict.ID != competing.ID {
 		t.Fatal("publish retry overwrote a competing Skill version")
 	}
+	skill, err = catalogue.Upload(ctx, owner.ID, source.ID, "skill", skill.ID, "guide.txt", "text/plain", skill.Revision, strings.NewReader("draft-only resource"))
+	must(err)
+	afterPublishConfig := conf
+	afterPublishConfig.Skills = []catalog.SkillRef{{ID: skill.ID, Version: catalog.Latest}}
+	afterPublishYAML, err := json.Marshal(afterPublishConfig)
+	must(err)
+	draftAgent, err := catalogue.Save(ctx, owner.ID, source.ID, "agent", agent.ID, afterPublish.Revision, catalog.Document{Markdown: "Unpublished instructions.", ConfigYAML: string(afterPublishYAML)})
+	must(err)
+	_, err = catalogue.Publish(ctx, owner.ID, source.ID, "agent", agent.ID, "", draftAgent.Revision, false)
+	if err == nil {
+		t.Fatal("formal publish accepted a moving skill reference")
+	}
+	var pinnedDraft run.Session
+	pinInput := map[string]any{"agent_id": agent.ID, "version_id": "latest", "idempotency_key": uuid.NewString(), "expected_draft_revision": draftAgent.Revision}
+	must(json.Unmarshal(request("POST", source.ID+"/sessions", ownerCookie, pinInput, 201).Body.Bytes(), &pinnedDraft))
+	pinInput["agent_source_space_id"] = source.ID
+	request("POST", target.ID+"/sessions", visitorCookie, pinInput, 400)
+	definition, err := options.Service.Definition(ctx, owner.ID, source.ID, pinnedDraft.DefinitionRef)
+	must(err)
+	if pinnedDraft.DraftRevision != draftAgent.Revision || definition.Instructions != "Unpublished instructions." ||
+		len(definition.Skills) != 1 || definition.Skills[0].VersionID != skill.ContentID {
+		t.Fatalf("latest did not select the saved drafts: %+v", pinnedDraft)
+	}
+	_, err = catalogue.Upload(ctx, owner.ID, source.ID, "skill", skill.ID, "guide.txt", "text/plain", skill.Revision, strings.NewReader("overwrote draft resource"))
+	must(err)
+	pinnedContent := definition.Skills[0].VersionID
+	if _, err := catalogStore.Lookup(ctx, source.ID, pinnedContent); err == nil {
+		t.Fatal("test did not displace the pinned draft from the catalog")
+	}
+	_, runContent := publishCold.RunServices(run.Snapshot{SpaceID: source.ID, SessionID: pinnedDraft.ID}, content)
+	rawResource, _, err := resource.ReadSkillPackageFile(ctx, runContent, owner.ID, source.ID, pinnedContent, "guide.txt")
+	must(err)
+	if string(rawResource) != "draft-only resource" {
+		t.Fatalf("reopened draft session read %q", rawResource)
+	}
+	draftBinding.Store(pinnedContent)
+	must(json.Unmarshal(request("POST", source.ID+"/sessions/"+pinnedDraft.ID+"/runs", ownerCookie, map[string]string{
+		"idempotency_key": uuid.NewString(), "text": "Read the pinned draft",
+	}, 202).Body.Bytes(), &accepted))
+	for !run.Terminal(accepted.Status) && ctx.Err() == nil {
+		time.Sleep(25 * time.Millisecond)
+		accepted, err = sessions.RuntimeRun(ctx, owner.ID, source.ID, accepted.ID)
+		must(err)
+	}
+	if accepted.Status != "succeeded" {
+		t.Fatalf("draft debug run did not use its pinned Skill: status=%s error=%s", accepted.Status, accepted.Error)
+	}
 	var createSession run.Session
 	must(json.Unmarshal(request("POST", localLaunch, ownerCookie, inputs(), 201).Body.Bytes(), &createSession))
 	createPublishPath := localLaunch + "/" + createSession.ID + "/publish"
+	createDebugPath := localLaunch + "/" + createSession.ID + "/draft-debug"
 	must(json.Unmarshal(request("POST", source.ID+"/sessions/"+createSession.ID+"/runs", ownerCookie, map[string]string{
 		"idempotency_key": uuid.NewString(), "text": "Create project for publication",
 	}, 202).Body.Bytes(), &accepted))
@@ -506,13 +609,18 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 		t.Fatal("preview created a publish plan")
 	}
 	createPublishInput["model_id"] = publishModel.ID
+	createDebugInput := map[string]string{"workspace_snapshot_id": accepted.WorkspaceSnapshotID, "idempotency_key": uuid.NewString()}
+	request("POST", createDebugPath, ownerCookie, createDebugInput, 400)
+	createDebugInput["model_id"] = publishModel.ID
 	blobs.loseCatalogReply.Store(true)
-	ambiguous := request("POST", createPublishPath, ownerCookie, createPublishInput, 503)
+	ambiguous := request("POST", createDebugPath, ownerCookie, createDebugInput, 503)
 	must(json.Unmarshal(ambiguous.Body.Bytes(), &failure))
 	if failure.Details.Result.Agent.Status != "unknown" || failure.Details.Result.Agent.VersionID != "" {
 		t.Fatalf("lost write response produced a definitive result: %+v", failure.Details.Result.Agent)
 	}
 	request("POST", createPublishPath, ownerCookie, map[string]string{"workspace_snapshot_id": accepted.WorkspaceSnapshotID, "model_id": model.ID}, 409)
+	var newDebug run.Session
+	must(json.Unmarshal(request("POST", createDebugPath, ownerCookie, createDebugInput, 201).Body.Bytes(), &newDebug))
 	delete(createPublishInput, "model_id")
 	must(json.Unmarshal(request("GET", createPreviewPath, ownerCookie, nil, 200).Body.Bytes(), &preview))
 	if preview.ModelID != publishModel.ID || !preview.ModelLocked {
@@ -521,7 +629,7 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	must(json.Unmarshal(request("POST", createPublishPath, ownerCookie, createPublishInput, 200).Body.Bytes(), &published))
 	newAgent, err := catalogue.Draft(ctx, owner.ID, source.ID, "agent", published.Agent.ID)
 	must(err)
-	if newAgent.Name != newAgentConfig.Name || newAgent.Visibility != catalog.VisibilitySpace || newAgent.DefaultVersionID != published.Agent.VersionID ||
+	if newAgent.ID != newDebug.DefinitionID || newAgent.Name != newAgentConfig.Name || newAgent.Visibility != catalog.VisibilitySpace || newAgent.DefaultVersionID != published.Agent.VersionID ||
 		newAgent.Revision != 1 || published.Agent.Status != "published" || published.Agent.Label != "v1" {
 		t.Fatalf("unexpected new Agent: %+v", newAgent)
 	}

@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router-dom'
-import { APIError, list, request, type Schema } from '../../lib/api'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { agentSessionsPath } from '../../app/routes'
+import { APIError, list, newRequestKey, request, type Schema } from '../../lib/api'
 
 type PublishManifest = Schema['CreativityPublishManifest']
 const actions = { create: '新建并发布', update: '编辑并发新版', reference: '仅引用' }
+const debugActions = { create: '保存新草稿', update: '保存修改到草稿', reference: '引用已发布版本' }
 const results = {
   published: '已发布',
   referenced: '仅引用',
@@ -14,9 +16,15 @@ const results = {
   unknown: '结果待核实',
 }
 
-function entryLabel(entry: Schema['CreativityPublishEntry']) {
-  const label = entry.status ? results[entry.status] : actions[entry.action]
-  return entry.label ? `${label} · ${entry.label}` : label
+function ManifestEntries({ manifest, debug = false }: { manifest: PublishManifest; debug?: boolean }) {
+  function entryLabel(entry: Schema['CreativityPublishEntry']) {
+    const label = entry.status ? results[entry.status] : (debug ? debugActions : actions)[entry.action]
+    return entry.label ? `${label} · ${entry.label}` : label
+  }
+  return <ul>
+    <li>Agent · {manifest.agent.name} — {entryLabel(manifest.agent)}</li>
+    {manifest.skills.map((skill, index) => <li key={`${skill.id ?? skill.name}-${index}`}>Skill · {skill.name} — {entryLabel(skill)}</li>)}
+  </ul>
 }
 
 export function CreativityPublish({ space, sessionID, busy, snapshot, onPublishing }: {
@@ -24,20 +32,110 @@ export function CreativityPublish({ space, sessionID, busy, snapshot, onPublishi
 }) {
   const [params, setParams] = useSearchParams()
   const selected = params.get('publish') ?? ''
-  const openButton = useRef<HTMLButtonElement>(null)
+  const publishButton = useRef<HTMLButtonElement>(null)
+  const debugButton = useRef<HTMLButtonElement>(null)
+  const debugKey = useRef<{ snapshot: string; key: string } | null>(null)
+  const [chooseDebugModel, setChooseDebugModel] = useState(false)
+  const navigate = useNavigate()
+  const client = useQueryClient()
+  const debug = useMutation({
+    mutationFn: ({ snapshotID, modelID, key }: { snapshotID: string; modelID: string; key: string }) =>
+      request<Schema['RuntimeSession']>(`/spaces/${space}/creativity/sessions/${sessionID}/draft-debug`, 'POST', {
+        workspace_snapshot_id: snapshotID, idempotency_key: key, ...(modelID ? { model_id: modelID } : {}),
+      }),
+    onMutate: () => onPublishing(true),
+    onSettled: (session, error) => {
+      onPublishing(false)
+      if (!session && !publishResult(error)) return
+      void client.invalidateQueries({ queryKey: ['private', space, 'agent', 'list'] })
+      void client.invalidateQueries({ queryKey: ['private', space, 'skill', 'list'] })
+      void client.invalidateQueries({ queryKey: ['private', space, sessionID, 'publish'] })
+    },
+  })
+  const tryDraft = (modelID = '') => {
+    if (busy || !snapshot || debug.isPending) return
+    if (debugKey.current?.snapshot !== snapshot) debugKey.current = { snapshot, key: newRequestKey() }
+    debug.mutate({ snapshotID: snapshot, modelID, key: debugKey.current.key }, {
+      onError: error => {
+        if (hasErrorCode(error, 'publish_model_required')) setChooseDebugModel(true)
+      },
+      onSuccess: session => {
+        client.setQueryData(['private', space, session.id, 'session'], session)
+        void client.invalidateQueries({ queryKey: ['private', space, 'sessions', session.definition_id] })
+        navigate(agentSessionsPath(space, session.definition_id, session.id), { replace: true, state: { creativitySessionID: sessionID } })
+      },
+    })
+  }
+  const closeDebug = () => {
+    setChooseDebugModel(false)
+    debug.reset()
+    requestAnimationFrame(() => debugButton.current?.focus())
+  }
   const select = (id: string) => {
     const next = new URLSearchParams(params)
+    next.delete('publish')
     if (id) next.set('publish', id)
-    else next.delete('publish')
     setParams(next, { replace: true })
-    if (!id) requestAnimationFrame(() => openButton.current?.focus())
+    if (!id) requestAnimationFrame(() => publishButton.current?.focus())
   }
   return <>
-    <button ref={openButton} type="button" disabled={busy || !snapshot} onClick={() => select(snapshot)}
+    <button ref={debugButton} type="button" className="secondary" disabled={busy || !snapshot || debug.isPending} onClick={() => tryDraft()}
+      title={!snapshot ? '最近一轮 Run 提交工作区快照后才能调试' : undefined}>{debug.isPending ? '正在打开…' : '去试试'}</button>
+    <button ref={publishButton} type="button" disabled={busy || !snapshot || debug.isPending} onClick={() => select(snapshot)}
       title={!snapshot ? '最近一轮 Run 提交工作区快照后才能发布' : undefined}>去发布</button>
     {selected && <PublishDialog key={selected} space={space} sessionID={sessionID} selected={selected}
-      available={!busy && selected === snapshot} close={() => select('')} onPublishing={onPublishing} />}
+      available={!busy && !debug.isPending && selected === snapshot} close={() => select('')} onPublishing={onPublishing} />}
+    {!debug.isIdle && <DraftDebugDialog space={space} chooseModel={chooseDebugModel}
+      available={!busy && debug.variables?.snapshotID === snapshot} pending={debug.isPending || debug.isSuccess}
+      error={debug.error} modelID={debug.variables?.modelID ?? ''} start={tryDraft} close={closeDebug} />}
   </>
+}
+
+function DraftDebugDialog({ space, chooseModel, available, pending, error, modelID, start, close }: {
+  space: string; chooseModel: boolean; available: boolean; pending: boolean; error: Error | null;
+  modelID: string; start: (modelID: string) => void; close: () => void
+}) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const modelRequired = hasErrorCode(error, 'publish_model_required')
+  const modelLocked = hasErrorCode(error, 'publish_model_locked')
+  const models = useAvailableModels(space, chooseModel && !modelLocked)
+  const partial = publishResult(error)
+  useEffect(() => { dialog.current?.showModal() }, [])
+  return <dialog ref={dialog} className="run-details-dialog creativity-publish-dialog" aria-labelledby="debug-heading"
+    onCancel={event => { event.preventDefault(); if (!pending) close() }}>
+    <h2 id="debug-heading">草稿调试</h2>
+    {chooseModel && !modelLocked && <div>
+      <p>此 Agent 尚未绑定模型。选择模型后将直接打开调试会话。</p>
+      <label>调试模型
+        <select value={modelID} disabled={pending || !available || !models.data?.length} onChange={event => {
+          if (event.target.value) start(event.target.value)
+        }}>
+          <option value="">选择可用模型</option>
+          {models.data?.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+        </select>
+      </label>
+      {models.isPending && <p role="status">正在读取可用模型…</p>}
+      {models.isError && <p role="alert">{models.error.message} <button type="button" onClick={() => { void models.refetch() }}>重试读取模型</button></p>}
+      {models.data?.length === 0 && <p>当前空间没有可用模型，请先在「模型配置」中添加或启用模型。</p>}
+    </div>}
+    {pending && <p role="status">正在校验并准备调试会话…</p>}
+    {error && !modelRequired && <p role="alert">{error.message}</p>}
+    {partial && <ManifestEntries manifest={partial} debug />}
+    {!available && <p className="muted">当前有运行中的任务，或此快照已不是最近一轮。请在会话结束后重新打开。</p>}
+    <div className="dialog-actions">
+      <button type="button" className="secondary" disabled={pending} onClick={close}>关闭</button>
+      {error && !modelRequired && <button type="button" disabled={!available || pending}
+        onClick={() => start(modelLocked ? '' : modelID)}>{modelLocked ? '使用已确认的模型' : '重试'}</button>}
+    </div>
+  </dialog>
+}
+
+function useAvailableModels(space: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['private', space, 'catalog-models'],
+    queryFn: ({ signal }) => list<Schema['Model']>(`/spaces/${space}/models?available=true`, signal),
+    enabled,
+  })
 }
 
 function PublishDialog({ space, sessionID, selected, available, close, onPublishing }: {
@@ -45,17 +143,17 @@ function PublishDialog({ space, sessionID, selected, available, close, onPublish
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const client = useQueryClient()
-  const base = `/spaces/${space}/creativity/sessions/${sessionID}/publish`
+  const url = `/spaces/${space}/creativity/sessions/${sessionID}/publish`
   const [modelID, setModelID] = useState('')
   const preview = useQuery({
     queryKey: ['private', space, sessionID, 'publish', selected, modelID],
-    queryFn: ({ signal }) => request<PublishManifest>(`${base}?${new URLSearchParams({
+    queryFn: ({ signal }) => request<PublishManifest>(`${url}?${new URLSearchParams({
       workspace_snapshot_id: selected, ...(modelID ? { model_id: modelID } : {}),
     })}`, 'GET', undefined, signal),
     retry: false,
   })
   const confirm = useMutation({
-    mutationFn: (choice: string) => request<PublishManifest>(base, 'POST', {
+    mutationFn: (choice: string) => request<PublishManifest>(url, 'POST', {
       workspace_snapshot_id: selected, ...(choice ? { model_id: choice } : {}),
     }),
     onMutate: () => onPublishing(true),
@@ -73,11 +171,7 @@ function PublishDialog({ space, sessionID, selected, available, close, onPublish
   const modelConflict = [preview.error, confirm.error].some(error => hasErrorCode(error, 'publish_model_locked'))
   const locked = !!manifest?.model_locked
   const chooseModel = (modelRequired || !!modelID) && !locked && !modelConflict
-  const models = useQuery({
-    queryKey: ['private', space, 'catalog-models'],
-    queryFn: ({ signal }) => list<Schema['Model']>(`/spaces/${space}/models?available=true`, signal),
-    enabled: chooseModel || locked,
-  })
+  const models = useAvailableModels(space, chooseModel || locked)
   const useLockedModel = () => {
     confirm.reset()
     setModelID('')
@@ -88,7 +182,7 @@ function PublishDialog({ space, sessionID, selected, available, close, onPublish
     <h2 id="publish-heading">发布 Agent 和 Skills</h2>
     <p className="muted">发布内容来自此轮 Run 的工作区快照。要改内容，请回到会话修改后再打开发布。</p>
     {chooseModel && <div>
-      <p>{modelID ? '所选模型仅用于本次发布，不会修改工作区快照。' : '此 Agent 尚未绑定模型，请选择当前空间的模型，再检查发布清单。'}</p>
+      <p>{modelID ? '所选模型将写入 Agent 草稿，用于发布。' : '此 Agent 尚未绑定模型，请选择当前空间的模型，再检查发布清单。'}</p>
       <label>发布模型
         <select value={modelID} disabled={confirm.isPending || !available || !models.data?.length} onChange={event => {
           confirm.reset()
@@ -105,10 +199,7 @@ function PublishDialog({ space, sessionID, selected, available, close, onPublish
     {locked && <p>本次发布已固定模型：{models.data?.find(model => model.id === manifest.model_id)?.name ?? manifest.model_id}</p>}
     {preview.isPending && <p role="status">正在读取发布清单…</p>}
     {preview.isError && !modelRequired && <p role="alert">{preview.error.message}</p>}
-    {manifest && <ul>
-      <li>Agent · {manifest.agent.name} — {entryLabel(manifest.agent)}</li>
-      {manifest.skills.map((skill, index) => <li key={`${skill.id ?? skill.name}-${index}`}>Skill · {skill.name} — {entryLabel(skill)}</li>)}
-    </ul>}
+    {manifest && <ManifestEntries manifest={manifest} />}
     {confirm.isError && <p role="alert">{confirm.error.message} {partial
       ? '已成功发布的版本和已保存的草稿不会回滚。'
       : '未收到逐项结果，重试时会重新核对。'}</p>}

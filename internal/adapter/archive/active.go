@@ -99,6 +99,9 @@ func (a *activeRun) Object(ctx context.Context, _, space, id string, committed b
 		return storage.Object{}, err
 	}
 	ref, ok := s.blobs[id]
+	if !ok {
+		ref, ok = s.draftPackages[id]
+	}
 	s.Unlock()
 	if ok {
 		return ref.Metadata(), nil

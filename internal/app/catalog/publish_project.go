@@ -39,6 +39,7 @@ type PublishManifest struct {
 
 type projectSkillDraft struct {
 	entry    PublishEntry
+	path     string
 	base     Version
 	document Document
 	files    map[string][]byte
@@ -214,7 +215,7 @@ func (s *Service) ScanPublishSkills(ctx context.Context, actor, space string, fi
 		if err != nil {
 			return project, err
 		}
-		project.skills = append(project.skills, projectSkillDraft{entry: PublishEntry{Name: name, Action: publishNew}, document: document, files: resources})
+		project.skills = append(project.skills, projectSkillDraft{entry: PublishEntry{Name: name, Action: publishNew}, path: folder, document: document, files: resources})
 	}
 	if len(project.skills) > 32 {
 		return project, projectError("proj.yaml", "Agent 最多可绑定 32 个 Skill")

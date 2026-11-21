@@ -55,6 +55,11 @@ type Skill struct {
 	Markdown  string          `json:"markdown"`
 	Resources []SkillResource `json:"resources,omitempty"`
 }
+
+type DraftSkillPackage struct {
+	storage.Object
+	Key string `json:"key"`
+}
 type Definition struct {
 	ModelAttempts   int         `json:"model_attempts,omitempty"`
 	VersionID       string      `json:"version_id"`
@@ -89,16 +94,19 @@ type PublishTarget struct {
 	ID       string `json:"id"`
 	Version  string `json:"version_id,omitempty"`
 	Revision int64  `json:"revision,omitempty"`
+	Path     string `json:"path,omitempty"`
 }
 
 type CreativityPublishPlan struct {
-	SnapshotID string          `json:"workspace_snapshot_id"`
-	ModelID    string          `json:"model_id,omitempty"`
-	Agent      PublishTarget   `json:"agent"`
-	Skills     []PublishTarget `json:"skills"`
+	SnapshotID  string           `json:"workspace_snapshot_id"`
+	ModelID     string           `json:"model_id,omitempty"`
+	Agent       PublishTarget    `json:"agent"`
+	Skills      []PublishTarget  `json:"skills"`
+	DebugDrafts map[string]int64 `json:"debug_drafts,omitempty"`
 }
 
 type Session struct {
+	DraftRevision      int64       `json:"draft_revision,omitempty"`
 	AgentSourceSpaceID string      `json:"agent_source_space_id,omitempty"`
 	AgentName          string      `json:"agent_name,omitempty"`
 	Hide               bool        `json:"hide"`

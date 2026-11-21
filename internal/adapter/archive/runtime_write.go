@@ -88,6 +88,7 @@ func (r *Runtime) AcceptRuntimeRequest(ctx context.Context, actor, space, operat
 		}
 		defer r.inline.Delete(space + "/" + d.DefinitionRef.ObjectID)
 		created := sessionlog.Created{Header: sessionlog.Header{Seq: 1, Type: sessionlog.SessionCreated, Role: "system"},
+			DraftRevision: d.DraftRevision, DraftSkillPackages: d.DraftSkillPackages,
 			AgentSourceSpaceID: d.AgentSourceSpaceID, AgentName: d.AgentName,
 			Creativity:    d.Creativity,
 			SchemaVersion: 1, SessionID: batch.SessionID, SpaceID: space, AgentID: d.DefinitionID, VersionID: d.VersionID,

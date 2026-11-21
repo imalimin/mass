@@ -276,6 +276,7 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
   if (sessionID && session.isError) return <p className="session-loading" role="alert">{session.error.message}</p>
   if (sessionID && !ownsSession) return <p className="session-loading" role="alert">此会话不属于当前 Agent。</p>
   const fixedVersion = session.data?.version_id ?? createdSession?.version_id
+  const draftRevision = session.data?.draft_revision ?? createdSession?.draft_revision
   return <section className="conversation-page">
     <header className="conversation-header">
       <h1>{sessionID || agent.name}</h1>
@@ -372,7 +373,8 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
               }} />
             <button type="button" className="secondary attach-button" disabled={submit.isPending || files.length >= 16}
               onClick={() => fileInput.current?.click()} title="添加附件（每个最多 8 MiB）">+ 附件</button>
-            {fixedVersion ? <span className="composer-version" title={fixedVersion}>固定版本 · {fixedVersion.slice(0, 8)}</span>
+            {draftRevision ? <span className="composer-version">草稿调试 · r{draftRevision}</span>
+              : fixedVersion ? <span className="composer-version" title={fixedVersion}>固定版本 · {fixedVersion.slice(0, 8)}</span>
               : <select className="composer-version" aria-label="Agent 版本" disabled={submit.isPending || !versions.data?.length}
                 value={validVersion ? versionID : ''} onChange={event => setSelectedVersion(event.target.value)}>
                 <option value="" disabled>选择 Agent 版本</option>

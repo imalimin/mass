@@ -30,19 +30,21 @@ type Header struct {
 
 type Created struct {
 	Header
-	AgentSourceSpaceID string          `json:"agent_source_space_id,omitempty"`
-	AgentName          string          `json:"agent_name,omitempty"`
-	Creativity         *run.Creativity `json:"creativity,omitempty"`
-	SchemaVersion      int             `json:"schema_version"`
-	SessionID          string          `json:"session_id"`
-	SpaceID            string          `json:"space_id"`
-	AgentID            string          `json:"agent_id"`
-	VersionID          string          `json:"version_id"`
-	ActorID            string          `json:"actor_id"`
-	Title              string          `json:"title"`
-	EventID            string          `json:"event_id"`
-	CreatedAt          time.Time       `json:"created_at"`
-	Definition         Definition      `json:"definition"`
+	DraftRevision      int64                   `json:"draft_revision,omitempty"`
+	DraftSkillPackages []run.DraftSkillPackage `json:"draft_skill_packages,omitempty"`
+	AgentSourceSpaceID string                  `json:"agent_source_space_id,omitempty"`
+	AgentName          string                  `json:"agent_name,omitempty"`
+	Creativity         *run.Creativity         `json:"creativity,omitempty"`
+	SchemaVersion      int                     `json:"schema_version"`
+	SessionID          string                  `json:"session_id"`
+	SpaceID            string                  `json:"space_id"`
+	AgentID            string                  `json:"agent_id"`
+	VersionID          string                  `json:"version_id"`
+	ActorID            string                  `json:"actor_id"`
+	Title              string                  `json:"title"`
+	EventID            string                  `json:"event_id"`
+	CreatedAt          time.Time               `json:"created_at"`
+	Definition         Definition              `json:"definition"`
 }
 
 type Definition struct {

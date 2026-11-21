@@ -189,6 +189,13 @@ func diagnostic(records []json.RawMessage, include func(string) bool) ([]json.Ra
 			continue
 		}
 		switch h.Type {
+		case SessionCreated:
+			var value map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return nil, err
+			}
+			delete(value, "draft_skill_packages")
+			raw, _ = json.Marshal(value)
 		case RunAccepted:
 			var value map[string]json.RawMessage
 			if err := json.Unmarshal(raw, &value); err != nil {

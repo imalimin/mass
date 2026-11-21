@@ -18,10 +18,13 @@ type PublishItemError struct {
 func (e *PublishItemError) Error() string { return e.Kind + " " + e.Name + ": " + e.Err.Error() }
 func (e *PublishItemError) Unwrap() error { return e.Err }
 
-func (s *Service) NewPublishPlan(ctx context.Context, actor, space, snapshot string, session run.Creativity, project PublishProject, result *PublishManifest) (run.CreativityPublishPlan, error) {
+func (s *Service) NewPublishPlan(ctx context.Context, actor, space, snapshot string, session run.Creativity, project PublishProject, result *PublishManifest, previous run.CreativityPublishPlan) (run.CreativityPublishPlan, error) {
 	plan := run.CreativityPublishPlan{SnapshotID: snapshot,
 		Agent:  run.PublishTarget{ID: session.TargetAgentID, Version: session.TargetVersionID, Revision: session.TargetDraftRevision},
 		Skills: make([]run.PublishTarget, 0, len(project.skills))}
+	if revision := previous.DebugDrafts[previous.Agent.ID]; revision != 0 {
+		plan.Agent = run.PublishTarget{ID: previous.Agent.ID, Version: previous.Agent.Version, Revision: revision}
+	}
 	if plan.Agent.ID == "" {
 		plan.Agent.ID = newDefinition("agent", project.agent.Name).ID
 	} else {
@@ -29,17 +32,34 @@ func (s *Service) NewPublishPlan(ctx context.Context, actor, space, snapshot str
 		if !ok {
 			return plan, storage.ErrIntegrity
 		}
-		if _, err := s.inspectProjectTarget(ctx, repo, actor, space, "agent", project.agent.Name, plan.Agent, nil); err != nil {
+		if _, err := s.inspectProjectTarget(ctx, repo, actor, space, "agent", project.agent.Name, plan.Agent, nil, false); err != nil {
 			result.Agent.Status = "failed"
 			return plan, &PublishItemError{"Agent", project.agent.Name, err}
 		}
 	}
 	for index, skill := range project.skills {
-		target := run.PublishTarget{ID: skill.entry.ID, Version: skill.base.ID}
+		target := run.PublishTarget{ID: skill.entry.ID, Version: skill.base.ID, Path: skill.path}
 		switch skill.entry.Action {
 		case publishNew:
-			target.ID = newDefinition("skill", skill.entry.Name).ID
+			for _, old := range previous.Skills {
+				if old.Path == skill.path && previous.DebugDrafts[old.ID] != 0 {
+					target.ID, target.Revision = old.ID, previous.DebugDrafts[old.ID]
+					break
+				}
+			}
+			if target.ID == "" {
+				target.ID = newDefinition("skill", skill.entry.Name).ID
+			}
 		case publishUpdate:
+			for _, old := range previous.Skills {
+				if old.ID == target.ID && old.Version == target.Version && previous.DebugDrafts[old.ID] != 0 {
+					target.Revision = previous.DebugDrafts[old.ID]
+					break
+				}
+			}
+			if target.Revision != 0 {
+				break
+			}
 			draft, err := s.Draft(ctx, actor, space, "skill", target.ID)
 			if err != nil {
 				result.Skills[index].Status = "failed"
@@ -76,7 +96,7 @@ type projectTargetState struct {
 	saved bool
 }
 
-func (s *Service) inspectProjectTarget(ctx context.Context, repo projectCatalog, actor, space, kind, name string, target run.PublishTarget, matches func(Document) bool) (projectTargetState, error) {
+func (s *Service) inspectProjectTarget(ctx context.Context, repo projectCatalog, actor, space, kind, name string, target run.PublishTarget, matches func(Document) bool, reusePublished bool) (projectTargetState, error) {
 	var state projectTargetState
 	draft, err := s.Draft(ctx, actor, space, kind, target.ID)
 	if errors.Is(err, identity.ErrNotFound) && target.Revision == 0 {
@@ -93,7 +113,7 @@ func (s *Service) inspectProjectTarget(ctx context.Context, repo projectCatalog,
 	if err != nil {
 		return state, err
 	}
-	if latest.ID != "" && matches != nil {
+	if reusePublished && latest.ID != "" && matches != nil {
 		if err := s.loadVersion(ctx, actor, space, kind, &latest); err != nil {
 			return state, err
 		}
@@ -130,7 +150,7 @@ func (s *Service) PublishProject(ctx context.Context, actor, space string, proje
 		}
 		state, err := s.inspectProjectTarget(ctx, repo, actor, space, "skill", skill.entry.Name, target, func(doc Document) bool {
 			return sameSkill(doc, skill.document)
-		})
+		}, true)
 		if err != nil {
 			result.Skills[index].Status = "failed"
 			return result, &PublishItemError{"Skill", skill.entry.Name, err}
@@ -150,7 +170,11 @@ func (s *Service) PublishProject(ctx context.Context, actor, space string, proje
 		desired := project.agentDocument(result.Skills)
 		agentMatches = func(document Document) bool { return sameAgent(document, desired) }
 	}
-	agentState, err := s.inspectProjectTarget(ctx, repo, actor, space, "agent", project.agent.Name, plan.Agent, agentMatches)
+	agentTarget := plan.Agent
+	if revision := plan.DebugDrafts[agentTarget.ID]; revision != 0 {
+		agentTarget.Revision = revision
+	}
+	agentState, err := s.inspectProjectTarget(ctx, repo, actor, space, "agent", project.agent.Name, agentTarget, agentMatches, true)
 	if err != nil {
 		result.Agent.Status = "failed"
 		return result, &PublishItemError{"Agent", project.agent.Name, err}
@@ -166,7 +190,7 @@ func (s *Service) PublishProject(ctx context.Context, actor, space string, proje
 		}
 	}
 	if agentState.done.ID == "" {
-		err = s.publishProjectTarget(ctx, repo, actor, space, "agent", plan.Agent, agentState, project.agentDocument(result.Skills), nil, &result.Agent)
+		err = s.publishProjectTarget(ctx, repo, actor, space, "agent", agentTarget, agentState, project.agentDocument(result.Skills), nil, &result.Agent)
 		if err != nil {
 			return result, &PublishItemError{"Agent", project.agent.Name, err}
 		}
@@ -182,7 +206,7 @@ func completedEntry(entry PublishEntry, id string, version Version) PublishEntry
 	return entry
 }
 
-func (s *Service) publishProjectTarget(ctx context.Context, repo projectCatalog, actor, space, kind string, target run.PublishTarget, state projectTargetState, document Document, files map[string][]byte, entry *PublishEntry) error {
+func (s *Service) saveProjectTarget(ctx context.Context, repo projectCatalog, actor, space, kind string, target run.PublishTarget, state projectTargetState, document Document, files map[string][]byte, entry *PublishEntry) (int64, error) {
 	revision := state.draft.Revision
 	if !state.saved {
 		draft := state.draft
@@ -203,7 +227,7 @@ func (s *Service) publishProjectTarget(ctx context.Context, repo projectCatalog,
 			})
 			if err != nil {
 				entry.Status = "failed"
-				return err
+				return 0, err
 			}
 		}
 		var err error
@@ -221,10 +245,25 @@ func (s *Service) publishProjectTarget(ctx context.Context, repo projectCatalog,
 					entry.ID, entry.Status = target.ID, "draft_saved"
 				}
 			}
-			return err
+			return 0, err
 		}
 	}
 	entry.ID, entry.Status = target.ID, "draft_saved"
+	return revision, nil
+}
+
+func (s *Service) publishProjectTarget(ctx context.Context, repo projectCatalog, actor, space, kind string, target run.PublishTarget, state projectTargetState, document Document, files map[string][]byte, entry *PublishEntry) error {
+	if state.draft.ID != "" && !state.saved {
+		if kind == "agent" {
+			state.saved = sameAgent(state.draft.Document, document)
+		} else {
+			state.saved = sameSkill(state.draft.Document, document)
+		}
+	}
+	revision, err := s.saveProjectTarget(ctx, repo, actor, space, kind, target, state, document, files, entry)
+	if err != nil {
+		return err
+	}
 	version, err := s.publish(ctx, actor, space, kind, target.ID, "", revision, false, &target.Version)
 	var write *IndexWriteError
 	switch {

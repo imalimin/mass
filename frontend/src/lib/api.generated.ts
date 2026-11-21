@@ -664,6 +664,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/spaces/{space_id}/creativity/sessions/{session_id}/draft-debug": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createCreativityDraftDebugSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/spaces/{space_id}/sessions": {
         parameters: {
             query?: never;
@@ -1684,8 +1703,13 @@ export interface components {
                 }[];
             };
             agent_source_space_id?: components["schemas"]["ShortResourceID"];
-            /** @description Published Agent name for a cross-space session. */
+            /** @description Fixed Agent name for a cross-space or draft-debug session. */
             agent_name?: string;
+            /**
+             * Format: int64
+             * @description Selected Agent draft revision for a draft-debug session.
+             */
+            draft_revision?: number;
             id: components["schemas"]["ShortResourceID"];
             space_id: components["schemas"]["ShortResourceID"];
             /** Format: uuid */
@@ -1809,7 +1833,13 @@ export interface components {
             agent_id: components["schemas"]["ShortResourceID"];
             /** @description Optional source of a public Agent. When different from the session space, omit version_id to use its published default. */
             agent_source_space_id?: components["schemas"]["ShortResourceID"];
+            /** @description Agent version UUID. For a same-space runtime session, latest selects the current draft or the latest available formal version when the Agent has no draft. */
             version_id?: string;
+            /**
+             * Format: int64
+             * @description With latest, require this Agent draft revision before opening the session.
+             */
+            expected_draft_revision?: number;
             title?: string;
         };
         RunSubmitInput: {
@@ -5342,6 +5372,51 @@ export interface operations {
                 };
             };
             /** @description Publish failed. Previously saved drafts and published versions remain. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativityPublishError"];
+                };
+            };
+        };
+    };
+    createCreativityDraftDebugSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    workspace_snapshot_id: string;
+                    idempotency_key: string;
+                    /**
+                     * Format: uuid
+                     * @description Selected current-space model when the Agent has no model binding.
+                     */
+                    model_id?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Saved the project drafts and opened an ordinary session with fixed Agent and Skill content. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeSession"];
+                };
+            };
+            /** @description Draft saving or session creation failed. Successfully saved drafts remain. */
             default: {
                 headers: {
                     [name: string]: unknown;
