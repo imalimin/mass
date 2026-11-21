@@ -19,6 +19,7 @@ const (
 	AttachmentAdded   = "attachment_added"
 	WorkspaceRestored = "workspace_restored"
 	PublishPlanned    = "creativity_publish_planned"
+	PublishCompleted  = "creativity_publish_completed"
 )
 
 type Header struct {
@@ -111,6 +112,11 @@ type Planned struct {
 	Plan run.CreativityPublishPlan `json:"plan"`
 }
 
+type Published struct {
+	Header
+	Publication run.CreativityPublication `json:"publication"`
+}
+
 type Accepted struct {
 	Header
 	AcceptedAt     time.Time `json:"accepted_at"`
@@ -197,7 +203,7 @@ type Finished struct {
 func (r Header) valid() bool {
 	var role string
 	switch r.Type {
-	case SessionCreated, RunFinished, AttachmentAdded, WorkspaceRestored, PublishPlanned:
+	case SessionCreated, RunFinished, AttachmentAdded, WorkspaceRestored, PublishPlanned, PublishCompleted:
 		role = "system"
 	case RunAccepted:
 		role = "user"
@@ -207,7 +213,7 @@ func (r Header) valid() bool {
 		return false
 	}
 	switch r.Type {
-	case SessionCreated, AttachmentAdded, PublishPlanned:
+	case SessionCreated, AttachmentAdded, PublishPlanned, PublishCompleted:
 		return r.Role == role && r.RunID == ""
 	case WorkspaceRestored:
 		return r.Role == role && (r.RunID == "" || storage.ValidShortID(r.RunID))

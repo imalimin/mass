@@ -92,6 +92,7 @@ type projectSkill struct {
 
 func (s *Service) RestoreIteration(ctx context.Context, actor, space string, base run.Creativity, write func(string, []byte) error) error {
 	var document Document
+	var config *Config
 	if base.TargetVersionID == "" {
 		draft, err := s.Draft(ctx, actor, space, "agent", base.TargetAgentID)
 		if err != nil {
@@ -101,17 +102,23 @@ func (s *Service) RestoreIteration(ctx context.Context, actor, space string, bas
 			return ErrIterationDraft
 		}
 		document = draft.Document
+		config, err = ValidateDocument("agent", draft.Name, document, false)
+		if err != nil {
+			return err
+		}
 	} else {
 		version, err := s.Version(ctx, actor, space, "agent", base.TargetAgentID, base.TargetVersionID)
 		if err != nil {
 			return err
 		}
 		document = version.Bundle.Document
+		config = version.Bundle.Config
 	}
+	document.NormalizeAgentConfig(config)
 	if err := write("AGENTS.md", []byte(document.Markdown)); err != nil {
 		return err
 	}
-	if err := write("agent.yaml", []byte(document.ConfigYAML)); err != nil {
+	if err := write(resource.AgentConfigPath, []byte(document.ConfigYAML)); err != nil {
 		return err
 	}
 	project := struct {

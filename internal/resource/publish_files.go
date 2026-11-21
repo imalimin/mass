@@ -16,6 +16,11 @@ type ProjectFileError struct{ Path, Reason string }
 
 func (e *ProjectFileError) Error() string { return fmt.Sprintf("%s：%s", e.Path, e.Reason) }
 
+const (
+	AgentConfigPath       = "agent.json"
+	LegacyAgentConfigPath = "agent.yaml"
+)
+
 type ProjectFiles struct {
 	Files       map[string][]byte
 	Directories []string
@@ -24,7 +29,7 @@ type ProjectFiles struct {
 }
 
 func projectPath(name string) bool {
-	return name == "AGENTS.md" || name == "agent.yaml" || name == "proj.yaml" || strings.Count(name, "/") >= 1 && strings.HasPrefix(name, "skills/")
+	return name == "AGENTS.md" || name == AgentConfigPath || name == LegacyAgentConfigPath || name == "proj.yaml" || strings.HasPrefix(name, "skills/")
 }
 
 func (s *SnapshotStore) ReadProjectFiles(ctx context.Context, actor, space string, snapshot storage.Snapshot) (ProjectFiles, error) {

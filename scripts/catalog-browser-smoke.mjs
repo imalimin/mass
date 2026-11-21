@@ -108,7 +108,10 @@ try {
   assert.equal(await agentName.evaluate(input => input.validity.valid), true)
   const assistantName = 'report_writer'
   await create('Agent', assistantName); await edit('AGENTS.md', '# Assistant v1')
-  await expect(page.locator('[data-editor="agent.yaml"]')).toBeHidden()
+  await expect(page.locator('[data-editor="agent.json"]')).toBeHidden()
+  await page.getByText('高级配置', { exact: true }).click()
+  await expect(page.locator('[data-editor="agent.json"]')).toBeVisible()
+  await page.getByText('高级配置', { exact: true }).click()
   await expect(page.getByRole('button', { name: '上传资源', exact: true })).toHaveCount(0)
   await page.getByLabel('绑定模型').selectOption({ label: '发布模型' }); await page.getByLabel('Skill 版本：extract', { exact: true }).selectOption('v1'); await page.getByLabel('Skill 版本：report_template', { exact: true }).selectOption('v1'); await page.getByLabel('run_code_js', { exact: true }).check(); await page.getByText('run_code_js 运行 JavaScript', { exact: false }).waitFor()
   const maxSteps = page.getByLabel('最大步数', { exact: true })
@@ -178,6 +181,7 @@ try {
     data: { expected_revision: rawDraft.revision, document: { ...rawDraft.document, config_yaml: yaml } },
   })
   assert.equal(yamlSaved.status(), 200, await yamlSaved.text())
+  assert.deepEqual(JSON.parse((await yamlSaved.json()).document.config_yaml).limits, { max_steps: 75, timeout_seconds: 2400 })
   await page.reload()
   await expect(maxSteps).toHaveValue('75')
   await expect(runTimeout).toHaveValue('2400')

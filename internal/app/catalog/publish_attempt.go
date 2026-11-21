@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/google/uuid"
@@ -22,9 +23,10 @@ func (s *Service) NewPublishPlan(ctx context.Context, actor, space, snapshot str
 	plan := run.CreativityPublishPlan{SnapshotID: snapshot,
 		Agent:  run.PublishTarget{ID: session.TargetAgentID, Version: session.TargetVersionID, Revision: session.TargetDraftRevision},
 		Skills: make([]run.PublishTarget, 0, len(project.skills))}
-	if revision := previous.DebugDrafts[previous.Agent.ID]; revision != 0 {
+	if revision := previous.DebugDrafts[previous.Agent.ID]; revision != 0 && revision >= plan.Agent.Revision {
 		plan.Agent = run.PublishTarget{ID: previous.Agent.ID, Version: previous.Agent.Version, Revision: revision}
 	}
+	plan.Agent.NextVersionID = uuid.NewString()
 	if plan.Agent.ID == "" {
 		plan.Agent.ID = newDefinition("agent", project.agent.Name).ID
 	} else {
@@ -38,7 +40,10 @@ func (s *Service) NewPublishPlan(ctx context.Context, actor, space, snapshot str
 		}
 	}
 	for index, skill := range project.skills {
-		target := run.PublishTarget{ID: skill.entry.ID, Version: skill.base.ID, Path: skill.path}
+		target := run.PublishTarget{ID: skill.entry.ID, Version: skill.base.ID, Revision: skill.baseRevision, Path: skill.path}
+		if skill.entry.Action != publishReference {
+			target.NextVersionID = uuid.NewString()
+		}
 		switch skill.entry.Action {
 		case publishNew:
 			for _, old := range previous.Skills {
@@ -52,8 +57,8 @@ func (s *Service) NewPublishPlan(ctx context.Context, actor, space, snapshot str
 			}
 		case publishUpdate:
 			for _, old := range previous.Skills {
-				if old.ID == target.ID && old.Version == target.Version && previous.DebugDrafts[old.ID] != 0 {
-					target.Revision = previous.DebugDrafts[old.ID]
+				if revision := previous.DebugDrafts[old.ID]; old.ID == target.ID && old.Version == target.Version && revision > target.Revision {
+					target.Revision = revision
 					break
 				}
 			}
@@ -113,11 +118,13 @@ func (s *Service) inspectProjectTarget(ctx context.Context, repo projectCatalog,
 	if err != nil {
 		return state, err
 	}
-	if reusePublished && latest.ID != "" && matches != nil {
+	if reusePublished && latest.ID != "" && matches != nil &&
+		(target.NextVersionID == "" || latest.ID == target.Version || latest.ID == target.NextVersionID) {
 		if err := s.loadVersion(ctx, actor, space, kind, &latest); err != nil {
 			return state, err
 		}
-		if matches(latest.Bundle.Document) {
+		// An equivalent YAML Agent version still needs a JSON successor.
+		if matches(latest.Bundle.Document) && (kind != "agent" || json.Valid([]byte(latest.Bundle.Document.ConfigYAML))) {
 			state.done = latest
 			return state, nil
 		}
@@ -197,12 +204,48 @@ func (s *Service) PublishProject(ctx context.Context, actor, space string, proje
 	} else {
 		result.Agent = completedEntry(result.Agent, plan.Agent.ID, agentState.done)
 	}
+	result.Publication = project.publication(plan, agentTarget, result)
 	return result, nil
+}
+
+func (p PublishProject) publication(plan run.CreativityPublishPlan, agentTarget run.PublishTarget, result PublishManifest) run.CreativityPublication {
+	agent := result.Agent
+	if !agent.committed && agent.VersionID != agentTarget.NextVersionID && agent.VersionID != agentTarget.Version {
+		// Older plans have no reserved ID. An identical version alone does not
+		// establish which session published it.
+		return run.CreativityPublication{}
+	}
+	revision := agent.revision
+	if agent.VersionID == agentTarget.Version {
+		revision = agentTarget.Revision
+	}
+	publication := run.CreativityPublication{SnapshotID: plan.SnapshotID,
+		Agent: run.PublishTarget{ID: agent.ID, Version: agent.VersionID, Revision: revision}}
+	for i, skill := range p.skills {
+		entry := result.Skills[i]
+		if skill.path == "" {
+			continue
+		}
+		revision := entry.revision
+		if entry.VersionID == skill.base.ID {
+			revision = skill.baseRevision
+		} else if !entry.committed && entry.VersionID != plan.Skills[i].NextVersionID {
+			continue
+		}
+		if revision == 0 {
+			continue
+		}
+		publication.Skills = append(publication.Skills, run.PublishedSkill{PublishTarget: run.PublishTarget{
+			ID: entry.ID, Version: entry.VersionID, Revision: revision, Path: skill.path,
+		}, SourceVersion: skill.sourceVersion})
+	}
+	return publication
 }
 
 func completedEntry(entry PublishEntry, id string, version Version) PublishEntry {
 	entry.ID, entry.VersionID, entry.Label = id, version.ID, version.Label
 	entry.Status = "published"
+	entry.revision = version.Bundle.Revision
 	return entry
 }
 
@@ -264,11 +307,12 @@ func (s *Service) publishProjectTarget(ctx context.Context, repo projectCatalog,
 	if err != nil {
 		return err
 	}
-	version, err := s.publish(ctx, actor, space, kind, target.ID, "", revision, false, &target.Version)
+	version, err := s.publish(ctx, actor, space, kind, target.ID, "", revision, false, &target.Version, target.NextVersionID)
 	var write *IndexWriteError
 	switch {
 	case err == nil || errors.As(err, &write) && write.Committed:
 		*entry = completedEntry(*entry, target.ID, version)
+		entry.committed = true
 	case write != nil:
 		entry.Status = "unknown"
 	}

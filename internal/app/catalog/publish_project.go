@@ -28,21 +28,26 @@ type PublishEntry struct {
 	VersionID string `json:"version_id,omitempty"`
 	Label     string `json:"label,omitempty"`
 	Status    string `json:"status,omitempty"`
+	revision  int64
+	committed bool
 }
 
 type PublishManifest struct {
-	Agent       PublishEntry   `json:"agent"`
-	Skills      []PublishEntry `json:"skills"`
-	ModelID     string         `json:"model_id"`
-	ModelLocked bool           `json:"model_locked,omitempty"`
+	Agent       PublishEntry              `json:"agent"`
+	Skills      []PublishEntry            `json:"skills"`
+	ModelID     string                    `json:"model_id"`
+	ModelLocked bool                      `json:"model_locked,omitempty"`
+	Publication run.CreativityPublication `json:"-"`
 }
 
 type projectSkillDraft struct {
-	entry    PublishEntry
-	path     string
-	base     Version
-	document Document
-	files    map[string][]byte
+	entry         PublishEntry
+	path          string
+	base          Version
+	baseRevision  int64
+	sourceVersion string
+	document      Document
+	files         map[string][]byte
 }
 
 type PublishProject struct {
@@ -97,6 +102,10 @@ func (p PublishProject) SupportsModel(model identity.Model) bool {
 
 func (s *Service) PreparePublishAgent(ctx context.Context, actor, space string, session run.Creativity, files resource.ProjectFiles, modelID string) (PublishProject, error) {
 	project := PublishProject{}
+	present := func(name string) bool {
+		_, archived := files.Files[name]
+		return archived || slices.Contains(files.Directories, name) || slices.Contains(files.Oversized, name) || slices.Contains(files.LocalFiles, name)
+	}
 	required := func(name string) ([]byte, error) {
 		if slices.Contains(files.Oversized, name) {
 			return nil, projectError(name, "超出发布文件大小限制")
@@ -110,12 +119,17 @@ func (s *Service) PreparePublishAgent(ctx context.Context, actor, space string, 
 		}
 		return raw, nil
 	}
-	config, err := required("agent.yaml")
+	configPath := resource.AgentConfigPath
+	if !present(configPath) && present(resource.LegacyAgentConfigPath) {
+		configPath = resource.LegacyAgentConfigPath
+	}
+	config, err := required(configPath)
 	if err != nil {
 		return project, err
 	}
-	if len(config) > 64<<10 || strictYAML(string(config), &project.config) != nil {
-		return project, projectError("agent.yaml", "Agent 配置无效")
+	invalidJSON := configPath == resource.AgentConfigPath && !json.Valid(config)
+	if len(config) > 64<<10 || invalidJSON || strictYAML(string(config), &project.config) != nil {
+		return project, projectError(configPath, "Agent 配置无效")
 	}
 	if project.config.Model == "" {
 		if modelID == "" {
@@ -123,7 +137,7 @@ func (s *Service) PreparePublishAgent(ctx context.Context, actor, space string, 
 		}
 		project.config.Model = modelID
 	} else if modelID != "" {
-		return project, projectError("agent.yaml", "Agent 已绑定模型，请返回创意会话更改")
+		return project, projectError(configPath, "Agent 已绑定模型，请返回创意会话更改")
 	}
 	markdown, err := required("AGENTS.md")
 	if err != nil {
@@ -138,19 +152,23 @@ func (s *Service) PreparePublishAgent(ctx context.Context, actor, space string, 
 			return project, err
 		}
 		if draft.Archived {
-			return project, projectError("agent.yaml", "目标 Agent 已归档，请先恢复")
+			return project, projectError(configPath, "目标 Agent 已归档，请先恢复")
 		}
 		project.agent.Name, project.agent.Action = draft.Name, publishUpdate
 	}
 	if _, err := ValidateDocument("agent", project.agent.Name, project.agentDocument(nil), true); err != nil {
-		return project, projectError("AGENTS.md / agent.yaml", "正文或 Agent 配置无效")
+		return project, projectError("AGENTS.md / "+configPath, "正文或 Agent 配置无效")
 	}
 	return project, nil
 }
 
-func (s *Service) ScanPublishSkills(ctx context.Context, actor, space string, files resource.ProjectFiles, project PublishProject) (PublishProject, error) {
-	if len(files.Oversized) > 0 {
-		return project, projectError(files.Oversized[0], "超出发布文件大小限制")
+func (s *Service) ScanPublishSkills(ctx context.Context, actor, space string, files resource.ProjectFiles, project PublishProject, published []run.PublishedSkill) (PublishProject, error) {
+	for _, name := range files.Oversized {
+		// PreparePublishAgent already checked the selected config. An unused legacy
+		// file may coexist with agent.json in a workspace created before migration.
+		if name != resource.LegacyAgentConfigPath {
+			return project, projectError(name, "超出发布文件大小限制")
+		}
 	}
 	for _, local := range files.LocalFiles {
 		parent := path.Dir(local)
@@ -169,34 +187,58 @@ func (s *Service) ScanPublishSkills(ctx context.Context, actor, space string, fi
 	if slices.Contains(files.Directories, "proj.yaml") {
 		return project, projectError("proj.yaml", "必须是文件")
 	}
-	usedPath := map[string]bool{}
-	for _, ref := range bindings {
+	byPath := make(map[string]run.PublishedSkill, len(published))
+	byID := make(map[string]run.PublishedSkill, len(published))
+	for _, skill := range published {
+		byPath[skill.Path] = skill
+		byID[skill.ID] = skill
+	}
+	load := func(ref projectSkill, sourceVersion string, revision int64) error {
 		base, err := s.Version(ctx, actor, space, "skill", ref.SkillID, ref.VersionID)
 		if errors.Is(err, identity.ErrNotFound) || err == nil && (base.Archived || base.Debug) {
-			return project, projectError("proj.yaml", "Skill 版本不可用："+ref.SkillID)
+			return projectError("proj.yaml", "Skill 版本不可用："+ref.SkillID)
 		}
 		if err != nil {
-			return project, err
+			return err
 		}
 		draft, err := s.Repo.CatalogDraft(ctx, actor, space, "skill", ref.SkillID)
 		if err != nil {
-			return project, err
+			return err
 		}
 		if draft.Archived {
-			return project, projectError("proj.yaml", "Skill 已归档："+draft.Name)
+			return projectError("proj.yaml", "Skill 已归档："+draft.Name)
 		}
-		skill := projectSkillDraft{entry: PublishEntry{Name: draft.Name, Action: publishReference, ID: ref.SkillID, VersionID: base.ID, Label: base.Label}, base: base}
+		skill := projectSkillDraft{entry: PublishEntry{Name: draft.Name, Action: publishReference, ID: ref.SkillID, VersionID: base.ID, Label: base.Label},
+			base: base, baseRevision: revision, sourceVersion: sourceVersion}
 		if ref.Path != "" {
-			usedPath[ref.Path] = true
+			skill.path = ref.Path
 			skill.document, skill.files, err = readProjectSkill(files, ref.Path, draft.Name)
 			if err != nil {
-				return project, err
+				return err
 			}
 			if !sameSkill(skill.document, base.Bundle.Document) {
 				skill.entry.Action, skill.entry.VersionID, skill.entry.Label = publishUpdate, "", ""
 			}
 		}
 		project.skills = append(project.skills, skill)
+		return nil
+	}
+	usedPath, usedID := map[string]bool{}, map[string]bool{}
+	for _, ref := range bindings {
+		usedID[ref.SkillID] = true
+		sourceVersion := ref.VersionID
+		var revision int64
+		if ref.Path != "" {
+			usedPath[ref.Path] = true
+			// Follow this session's publication when the local binding is still the same.
+			prior := byID[ref.SkillID]
+			if prior.SourceVersion == sourceVersion || prior.Version == sourceVersion {
+				ref.VersionID, revision = prior.Version, prior.Revision
+			}
+		}
+		if err := load(ref, sourceVersion, revision); err != nil {
+			return project, err
+		}
 	}
 	folders := []string{}
 	for name := range files.Files {
@@ -210,6 +252,14 @@ func (s *Service) ScanPublishSkills(ctx context.Context, actor, space string, fi
 	}
 	slices.Sort(folders)
 	for _, folder := range folders {
+		if prior := byPath[folder]; prior.ID != "" && prior.SourceVersion == "" && !usedID[prior.ID] {
+			ref := projectSkill{SkillBase: run.SkillBase{SkillID: prior.ID, VersionID: prior.Version}, Path: folder}
+			if err := load(ref, "", prior.Revision); err != nil {
+				return project, err
+			}
+			usedID[prior.ID] = true
+			continue
+		}
 		name := path.Base(folder)
 		document, resources, err := readProjectSkill(files, folder, name)
 		if err != nil {

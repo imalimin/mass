@@ -10,10 +10,11 @@ import (
 )
 
 var (
-	ErrDraft      = errors.New("draft_conflict")
-	ErrVersion    = errors.New("version_conflict")
-	ErrReferenced = errors.New("version_referenced")
-	ErrConfig     = errors.New("invalid_definition")
+	ErrDraft        = errors.New("draft_conflict")
+	ErrVersion      = errors.New("version_conflict")
+	ErrReferenced   = errors.New("version_referenced")
+	ErrConfig       = errors.New("invalid_definition")
+	ErrNameConflict = errors.New("definition_name_conflict")
 )
 
 type IndexWriteError struct {

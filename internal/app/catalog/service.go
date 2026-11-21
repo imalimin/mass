@@ -38,11 +38,12 @@ func (s *Service) Draft(ctx context.Context, actor, space, kind, id string) (Dra
 }
 
 func (s *Service) createDraft(ctx context.Context, actor, space string, d Draft) (Draft, error) {
-	if _, err := ValidateDocument(d.Kind, d.Name, d.Document, false); err != nil {
+	config, err := ValidateDocument(d.Kind, d.Name, d.Document, false)
+	if err != nil {
 		return d, err
 	}
+	d.Document.NormalizeAgentConfig(config)
 	if d.Kind == "skill" {
-		var err error
 		d, err = s.packSkill(ctx, actor, space, d, d.Revision, nil, nil)
 		if err != nil {
 			return d, err
@@ -78,11 +79,12 @@ func (s *Service) saveDraft(ctx context.Context, actor, space string, d Draft, r
 	if d.Kind == "skill" && d.Document.Assets == nil {
 		d.Document.Assets = []Asset{}
 	}
-	if _, err := ValidateDocument(d.Kind, d.Name, d.Document, false); err != nil {
+	config, err := ValidateDocument(d.Kind, d.Name, d.Document, false)
+	if err != nil {
 		return d, err
 	}
+	d.Document.NormalizeAgentConfig(config)
 	if d.Kind == "skill" {
-		var err error
 		d, err = s.packSkill(ctx, actor, space, d, d.Revision+1, replacement, data)
 		if err != nil {
 			return d, err
@@ -135,10 +137,10 @@ func (s *Service) Upload(ctx context.Context, actor, space, kind, id, path, medi
 	return s.saveDraft(ctx, actor, space, d, &a, raw)
 }
 func (s *Service) Publish(ctx context.Context, actor, space, kind, id, label string, revision int64, debug bool) (Version, error) {
-	return s.publish(ctx, actor, space, kind, id, label, revision, debug, nil)
+	return s.publish(ctx, actor, space, kind, id, label, revision, debug, nil, "")
 }
 
-func (s *Service) publish(ctx context.Context, actor, space, kind, id, label string, revision int64, debug bool, base *string) (Version, error) {
+func (s *Service) publish(ctx context.Context, actor, space, kind, id, label string, revision int64, debug bool, base *string, versionID string) (Version, error) {
 	if (!debug && label != "" && !ValidLabel(label)) || (debug && kind != "agent") {
 		return Version{}, ErrConfig
 	}
@@ -147,6 +149,9 @@ func (s *Service) publish(ctx context.Context, actor, space, kind, id, label str
 			return s.Repo.(projectCatalog).CatalogPublishBasedOn(ctx, actor, space, v, *base)
 		}
 		return s.Repo.CatalogPublish(ctx, actor, space, v)
+	}
+	if versionID == "" {
+		versionID = uuid.NewString()
 	}
 	if kind == "skill" {
 		d, err := s.Draft(ctx, actor, space, kind, id)
@@ -166,7 +171,7 @@ func (s *Service) publish(ctx context.Context, actor, space, kind, id, label str
 		if err != nil {
 			return Version{}, err
 		}
-		v := Version{ID: uuid.NewString(), DefinitionID: id, Label: label, ContentID: o.ID, SHA256: o.SHA256, CreatedAt: time.Now().UTC().Truncate(time.Microsecond), Bundle: skillBundle(d)}
+		v := Version{ID: versionID, DefinitionID: id, Label: label, ContentID: o.ID, SHA256: o.SHA256, CreatedAt: time.Now().UTC().Truncate(time.Microsecond), Bundle: skillBundle(d)}
 		err = commit(&v)
 		return v, err
 	}
@@ -178,7 +183,6 @@ func (s *Service) publish(ctx context.Context, actor, space, kind, id, label str
 	if err != nil {
 		return Version{}, err
 	}
-	versionID := uuid.NewString()
 	o, err := s.Content.PutAt(ctx, actor, space, versionID, "definition.bundle", "application/json",
 		s.Content.CatalogObjectKey(space, kind, id, "versions/"+versionID+".json"), bytes.NewReader(raw))
 	if err != nil {

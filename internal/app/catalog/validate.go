@@ -92,6 +92,14 @@ func ValidateDocument(kind, name string, doc Document, publish bool) (*Config, e
 	return validateConfig(c, !publish)
 }
 
+// NormalizeAgentConfig converts validated legacy text while preserving JSON edits.
+func (doc *Document) NormalizeAgentConfig(config *Config) {
+	if config != nil && !json.Valid([]byte(doc.ConfigYAML)) {
+		raw, _ := json.MarshalIndent(config, "", "  ")
+		doc.ConfigYAML = string(raw)
+	}
+}
+
 func strictYAML(raw string, value any) error {
 	var tree yaml.Node
 	dec := yaml.NewDecoder(strings.NewReader(raw))

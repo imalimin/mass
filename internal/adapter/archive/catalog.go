@@ -146,7 +146,7 @@ func (c *Catalog) CatalogCreate(ctx context.Context, actor, space string, input 
 	}
 	for _, d := range index {
 		if d.Kind == input.Kind && d.Name == input.Name {
-			return identity.ErrConflict
+			return errors.Join(catalog.ErrNameConflict, identity.ErrConflict)
 		}
 	}
 	ref, err := c.putDraft(ctx, actor, space, input)
@@ -253,6 +253,7 @@ func (c *Catalog) prepare(ctx context.Context, actor, space string, d *definitio
 	if !cfg.SupportsModel(model) {
 		return catalog.Bundle{}, identity.ErrCapability
 	}
+	draft.Document.NormalizeAgentConfig(cfg)
 	b := catalog.Bundle{FormatVersion: 1, Kind: d.Kind, DefinitionID: d.ID, Name: d.Name, Revision: d.Revision, Document: draft.Document,
 		Config: cfg, Model: &model, Bindings: []catalog.Binding{}}
 	for _, ref := range cfg.Skills {

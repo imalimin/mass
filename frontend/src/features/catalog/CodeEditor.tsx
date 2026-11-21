@@ -12,8 +12,9 @@ import 'monaco-editor/languages/definitions/css/register'
 import 'monaco-editor/languages/definitions/sql/register'
 import 'monaco-editor/languages/definitions/go/register'
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker'
+import JSONWorker from 'monaco-editor/languages/features/json/json.worker?worker'
 
-self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
+self.MonacoEnvironment = { getWorker: (_, label) => label === 'json' ? new JSONWorker() : new EditorWorker() }
 export default function CodeEditor({ value, onChange, label, language = 'markdown', original, readOnly }: { value: string; onChange?: (value: string) => void; label: string; language?: string; original?: string; readOnly?: boolean }) {
   const root = useRef<HTMLDivElement>(null), editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null), latest = useRef(onChange)
   useEffect(() => { latest.current = onChange }, [onChange])

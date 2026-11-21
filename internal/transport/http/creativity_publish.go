@@ -29,7 +29,9 @@ func (e *publishResponseError) Unwrap() error { return e.error }
 type publishPlans interface {
 	CreativityPublishPlan(context.Context, string, string, string, string) (run.CreativityPublishPlan, error)
 	LastCreativityDebugPlan(context.Context, string, string, string) (run.CreativityPublishPlan, error)
+	PreviousCreativityPublication(context.Context, string, string, string, string) (run.CreativityPublication, error)
 	SaveCreativityPublishPlan(context.Context, string, string, string, run.CreativityPublishPlan) error
+	SaveCreativityPublication(context.Context, string, string, string, run.CreativityPublication) error
 }
 
 func registerCreativityPublish(register func(string, bool, endpoint), runtime *RuntimeOptions, base string) {
@@ -128,8 +130,18 @@ func handleCreativityPublish(w http.ResponseWriter, r *http.Request, actor ident
 	if err != nil {
 		return err
 	}
+	publication, err := plans.PreviousCreativityPublication(ctx, actor.ID, space, id, snapshotID)
+	if err != nil {
+		return err
+	}
+	iteration := *source.Creativity
+	if publication.Agent.ID != "" {
+		iteration.TargetAgentID = publication.Agent.ID
+		iteration.TargetVersionID = publication.Agent.Version
+		iteration.TargetDraftRevision = publication.Agent.Revision
+	}
 	catalogue := runtime.Service.Catalog
-	project, err := catalogue.PreparePublishAgent(ctx, actor.ID, space, *source.Creativity, files, modelID)
+	project, err := catalogue.PreparePublishAgent(ctx, actor.ID, space, iteration, files, modelID)
 	if err != nil {
 		return err
 	}
@@ -142,7 +154,7 @@ func handleCreativityPublish(w http.ResponseWriter, r *http.Request, actor ident
 			return err
 		}
 	}
-	project, err = catalogue.ScanPublishSkills(ctx, actor.ID, space, files, project)
+	project, err = catalogue.ScanPublishSkills(ctx, actor.ID, space, files, project, publication.Skills)
 	if err != nil {
 		return err
 	}
@@ -158,7 +170,10 @@ func handleCreativityPublish(w http.ResponseWriter, r *http.Request, actor ident
 		if err != nil {
 			return err
 		}
-		plan, err = catalogue.NewPublishPlan(ctx, actor.ID, space, snapshotID, *source.Creativity, project, &result, previous)
+		if publication.Agent.ID != "" && (previous.Agent.ID != publication.Agent.ID || previous.Agent.Version != publication.Agent.Version) {
+			previous = run.CreativityPublishPlan{}
+		}
+		plan, err = catalogue.NewPublishPlan(ctx, actor.ID, space, snapshotID, iteration, project, &result, previous)
 		if err != nil {
 			return &publishResponseError{err, result}
 		}
@@ -181,6 +196,11 @@ func handleCreativityPublish(w http.ResponseWriter, r *http.Request, actor ident
 	result.ModelLocked = plan.ModelID != ""
 	if err != nil {
 		return &publishResponseError{err, result}
+	}
+	if result.Publication.Agent.ID != "" {
+		if err := plans.SaveCreativityPublication(ctx, actor.ID, space, id, result.Publication); err != nil {
+			return &publishResponseError{err, result}
+		}
 	}
 	writeJSON(w, http.StatusOK, result)
 	return nil

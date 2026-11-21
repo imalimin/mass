@@ -135,6 +135,8 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
   const references = useQuery({ queryKey: ['private', space, kind, id, 'refs', versionID], queryFn: ({ signal }) => list<Schema['DefinitionReference']>(`${base}/versions/${versionID}/references`, signal), enabled: kind === 'skill' && !!versionID })
   const diff = useQuery({ queryKey: ['private', space, kind, id, 'diff', fromID, versionID], queryFn: ({ signal }) => request<Schema['DefinitionDiff']>(`${base}/diff?from=${fromID}&to=${versionID}`, 'GET', undefined, signal), enabled: !!fromID && !!versionID })
   const documentChanged = JSON.stringify(doc) !== JSON.stringify(draft.document)
+  const savedConfig = draft.document.config_yaml.trim()
+  const configLanguage = savedConfig && !savedConfig.startsWith('{') ? 'yaml' : 'json'
   const changed = documentChanged || resourceEdits.size > 0 || builderDirty
   useEffect(() => {
     if (kind !== 'skill' || !changed) return
@@ -280,7 +282,7 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
         onDirtyChange={setBuilderDirty}
         onAction={(action, configYaml) => action === 'draft' ? save.mutate({ configYaml }) : publish.mutate({ debug: action === 'debug', configYaml })} />
       <details className="config-builder"><summary>高级配置</summary>
-        <Suspense fallback={<p>正在载入编辑器…</p>}><CodeEditor label="agent.yaml" language="yaml" value={doc.config_yaml}
+        <Suspense fallback={<p>正在载入编辑器…</p>}><CodeEditor label="agent.json" language={configLanguage} value={doc.config_yaml}
           onChange={config_yaml => setDoc(d => ({ ...d, config_yaml }))} readOnly={pending || draft.archived} /></Suspense>
       </details>
     </>}
@@ -385,7 +387,7 @@ function ConfigBuilder({ space, name, config, disabled, onDirtyChange, onAction 
   }
   return <details className="config-builder" open>
     <summary>模型、Skill、工具与运行限制</summary>
-    {!valid && <p className="muted" role="alert">agent.yaml 当前不是有效配置，请先在高级配置中修复。</p>}
+    {!valid && <p className="muted" role="alert">Agent 配置无效，请先在高级配置中修复。</p>}
     <div className="form-grid">
       <label>绑定模型<select disabled={builderDisabled} value={state.model} onChange={e => select({ model: e.target.value })}>
         <option value="">选择可用模型</option>{models.data?.map(m => <option value={m.id} key={m.id}>{m.name}</option>)}

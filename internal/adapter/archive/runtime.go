@@ -55,6 +55,7 @@ type conversation struct {
 	snapshots     map[string]storage.Snapshot
 	draftPackages map[string]Ref
 	publishPlans  map[string]run.CreativityPublishPlan
+	publications  []run.CreativityPublication
 	lastDebugPlan run.CreativityPublishPlan
 	maintenance   bool
 	active        string
@@ -280,6 +281,12 @@ func (r *Runtime) rehydrate(s *conversation, records []json.RawMessage) error {
 				return err
 			}
 			s.rememberPublishPlan(entry.Plan)
+		case sessionlog.PublishCompleted:
+			var entry sessionlog.Published
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return err
+			}
+			s.publications = append(s.publications, entry.Publication)
 		}
 	}
 	return nil

@@ -385,13 +385,15 @@ func exerciseCatalog(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if _, e = svc.Publish(ctx, u.ID, space.ID, "agent", agent.ID, "foreign", agent.Revision, false); !errors.Is(e, identity.ErrNotFound) {
 		t.Fatal("foreign dependency accepted", e)
 	}
-	// Missing dependency and latest are rejected, model availability is rechecked.
+	// Formal versions reject missing dependencies and moving draft references.
 	missing := strings.Replace(config("v2"), s2.ID, uuid.NewString(), 1)
 	agent = save(agent, agent.Document.Markdown, missing)
 	api("POST", path(agent)+"/versions", map[string]any{"expected_revision": agent.Revision, "label": "missing"}, 404)
-	bad := agent.Document
-	bad.ConfigYAML = config("latest")
-	api("PUT", path(agent)+"/draft", map[string]any{"expected_revision": agent.Revision, "document": bad}, 400)
+	agent = save(agent, agent.Document.Markdown, config("latest"))
+	if !json.Valid([]byte(agent.Document.ConfigYAML)) {
+		t.Fatal("saving legacy YAML did not produce JSON")
+	}
+	api("POST", path(agent)+"/versions", map[string]any{"expected_revision": agent.Revision, "label": "moving-skill"}, 400)
 	agent = save(agent, agent.Document.Markdown, config("v2"))
 	model.Enabled = false
 	if _, e = auth.SaveModel(ctx, u.ID, space.ID, model.ID, model); e != nil {

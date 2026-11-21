@@ -16,6 +16,7 @@ const sessions = [
 sessions.push({ ...sessions[0], id: 'session-shared', title: 'session-shared', space_id: 'space-two', agent_source_space_id: 'space-one', agent_name: 'report-agent' })
 const usage = { input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_write_tokens: null }
 const creativitySnapshot = '02c1a2c3-dc3c-4ab2-8724-d7f2a68bf755'
+const agentConfig = JSON.stringify({ schema_version: 1 })
 const publishModel = { id: 'd8626872-6a61-44ae-95f7-50db3ec58caf', name: '发布测试模型' }
 const skillMarkdown = '# Report writer\n\n- **Weekly highlights**\n'
 const runs = ['run-one', 'run-two'].map((id, i) => ({ id, session_id: 'session-one', created_at: `2026-10-25T00:00:0${i}Z`, status: 'succeeded', usage, error: '', workspace_snapshot_id: '' }))
@@ -114,9 +115,9 @@ const server = createServer(async (req, res) => {
     if (path.endsWith('/workspace-snapshots')) return json({ items: [] })
     if (path.endsWith('/workspace/files')) {
       const entry = url.searchParams.get('path')
-      if (entry === '.') return json({ directory: true, entries: [{ name: 'AGENTS.md', directory: false }, { name: 'agent.yaml', directory: false }, { name: 'skills', directory: true }] })
+      if (entry === '.') return json({ directory: true, entries: [{ name: 'AGENTS.md', directory: false }, { name: 'agent.json', directory: false }, { name: 'skills', directory: true }] })
       if (entry === 'AGENTS.md') return json({ directory: false, text: '# Navigation fixture' })
-      if (entry === 'agent.yaml') return json({ directory: false, text: 'schema_version: 1' })
+      if (entry === 'agent.json') return json({ directory: false, text: agentConfig })
       if (entry === 'skills') return json({ directory: true, entries: [{ name: 'report-writer', directory: true }] })
       if (entry === 'skills/report-writer') return json({ directory: true, entries: [{ name: 'SKILL.md', directory: false }] })
       if (entry === 'skills/report-writer/SKILL.md') return json({ directory: false, text: skillMarkdown })
@@ -177,6 +178,12 @@ const server = createServer(async (req, res) => {
           code: 'content_unavailable', message: 'Agent report-agent：Content unavailable',
           details: { result: { ...manifest, model_locked: true, agent: { ...manifest.agent, status: 'draft_saved' }, skills } },
         }, 503)
+      }
+      if (publishCalls === 3) {
+        return json({
+          code: 'definition_name_conflict', message: 'Agent report-agent：A definition of this kind with this name already exists in the space',
+          details: { result: { ...manifest, agent: { ...manifest.agent, status: 'failed' }, skills } },
+        }, 409)
       }
       pendingModelSelection = false
       return json({ ...manifest, agent: { ...manifest.agent, label: 'v1', status: 'published' }, skills })
@@ -264,8 +271,8 @@ try {
   await preview.getByRole('button', { name: '查看原文' }).click()
   await page.getByRole('button', { name: 'AGENTS.md' }).click()
   await expect(preview.getByRole('heading', { name: 'Navigation fixture', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'agent.yaml', exact: true }).click()
-  await expect(preview.locator('pre')).toHaveText('schema_version: 1')
+  await page.getByRole('button', { name: 'agent.json', exact: true }).click()
+  await expect(preview.locator('pre')).toHaveText(agentConfig)
   await expect(preview.getByRole('button', { name: '查看原文' })).toHaveCount(0)
   await page.getByRole('button', { name: '关闭预览', exact: true }).click()
   await expect(page.getByRole('region', { name: '只读文件预览' })).toHaveCount(0)
@@ -335,6 +342,12 @@ try {
   await expect(publishDialog).toContainText('report-agent — 已发布 · v1')
   await expect(publishDialog).toContainText('report-writer — 已发布 · v2')
   await expect(publishDialog).toContainText('发布完成')
+  await publishDialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await publishButton.click()
+  await publishDialog.getByRole('button', { name: '确认发布' }).click()
+  await expect(publishDialog.getByRole('alert')).toContainText('Agent report-agent：当前空间已存在同名条目')
+  await expect(publishDialog).toContainText('report-writer — 已发布 · v2')
+  await expect(publishDialog.getByRole('button', { name: '重试发布' })).toHaveCount(0)
   await publishDialog.getByRole('button', { name: '关闭', exact: true }).click()
   await expect(sendTask).toBeEnabled()
   await expect(page.getByLabel('输入任务')).toHaveValue('继续调试')

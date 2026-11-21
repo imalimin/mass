@@ -91,10 +91,11 @@ type SkillBase struct {
 }
 
 type PublishTarget struct {
-	ID       string `json:"id"`
-	Version  string `json:"version_id,omitempty"`
-	Revision int64  `json:"revision,omitempty"`
-	Path     string `json:"path,omitempty"`
+	ID            string `json:"id"`
+	Version       string `json:"version_id,omitempty"`
+	Revision      int64  `json:"revision,omitempty"`
+	Path          string `json:"path,omitempty"`
+	NextVersionID string `json:"next_version_id,omitempty"`
 }
 
 type CreativityPublishPlan struct {
@@ -103,6 +104,17 @@ type CreativityPublishPlan struct {
 	Agent       PublishTarget    `json:"agent"`
 	Skills      []PublishTarget  `json:"skills"`
 	DebugDrafts map[string]int64 `json:"debug_drafts,omitempty"`
+}
+
+type PublishedSkill struct {
+	PublishTarget
+	SourceVersion string `json:"source_version_id,omitempty"`
+}
+
+type CreativityPublication struct {
+	SnapshotID string           `json:"workspace_snapshot_id"`
+	Agent      PublishTarget    `json:"agent"`
+	Skills     []PublishedSkill `json:"skills"`
 }
 
 type Session struct {

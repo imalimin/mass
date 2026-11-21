@@ -34,6 +34,7 @@ import (
 	transport "github.com/imalimin/mass/internal/transport/http"
 	"github.com/imalimin/mass/tests/fakes"
 	"github.com/imalimin/mass/tests/testdb"
+	"go.yaml.in/yaml/v4"
 )
 
 type sharedModelTransport struct {
@@ -43,11 +44,12 @@ type sharedModelTransport struct {
 
 type publishBlobFixture struct {
 	*fakes.Blobs
-	blockVersionFor  string
-	versionStarted   chan struct{}
-	releaseVersion   chan struct{}
-	archiveWrites    atomic.Int64
-	loseCatalogReply atomic.Bool
+	blockVersionFor   string
+	versionStarted    chan struct{}
+	releaseVersion    chan struct{}
+	archiveWrites     atomic.Int64
+	loseCatalogReply  atomic.Bool
+	failPublishRecord atomic.Bool
 }
 
 func (b *publishBlobFixture) PutNew(ctx context.Context, key string, body io.Reader, size int64, media string) (storage.BlobInfo, error) {
@@ -66,6 +68,16 @@ func (b *publishBlobFixture) PutNew(ctx context.Context, key string, body io.Rea
 }
 
 func (b *publishBlobFixture) Overwrite(ctx context.Context, key string, body io.Reader, size int64, media string) (storage.BlobInfo, error) {
+	if b.failPublishRecord.Load() && strings.HasSuffix(key, "/session.jsonl") {
+		raw, err := io.ReadAll(body)
+		if err != nil {
+			return storage.BlobInfo{}, err
+		}
+		if bytes.Contains(raw, []byte(`"type":"creativity_publish_completed"`)) && b.failPublishRecord.Swap(false) {
+			return storage.BlobInfo{}, storage.ErrIntegrity
+		}
+		body = bytes.NewReader(raw)
+	}
 	info, err := b.Blobs.Overwrite(ctx, key, body, size, media)
 	if err == nil && strings.HasSuffix(key, "/catalog.json") && b.loseCatalogReply.Swap(false) {
 		return info, storage.ErrIntegrity
@@ -162,15 +174,20 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	newAgentConfig := conf
 	newAgentConfig.Name, newAgentConfig.Skills = "agent-from-creativity", nil
 	newAgentConfig.Model = ""
-	newAgentYAML, err := json.Marshal(newAgentConfig)
+	legacyAgentYAML, err := yaml.Marshal(newAgentConfig)
 	must(err)
 	var draftBinding atomic.Value
 	fake := &einoadapter.ModelTransport{Fake: &einoadapter.FakeChatModel{Respond: func(_ context.Context, messages []*schema.Message) ([]*schema.Message, error) {
 		var toolMessages []string
+		latestUser, latestTools := "", 0
 		iteration, createAgent, continueAfterArchive, readDraft := false, false, false, false
 		for _, message := range messages {
 			if message.Role == schema.Tool {
 				toolMessages = append(toolMessages, message.Content)
+				latestTools++
+			}
+			if message.Role == schema.User {
+				latestUser, latestTools = message.Content, 0
 			}
 			if message.Role == schema.User && strings.Contains(message.Content, "Update iteration workspace") {
 				iteration = true
@@ -194,11 +211,20 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 			if !strings.Contains(toolMessages[0], "draft-only resource") {
 				return nil, fmt.Errorf("pinned Skill resource not returned: %s", toolMessages[0])
 			}
+		case latestUser == "Prepare next release":
+			switch latestTools {
+			case 0:
+				tool, args = "write_file", fmt.Sprintf(`{"path":"AGENTS.md","content":"Second release from the same session","media_type":"text/plain","expected_sha256":"%x"}`, sha256.Sum256([]byte("Follow the published instructions.")))
+			case 1:
+				tool, args = "write_file", fmt.Sprintf(`{"path":"skills/source-skill/guide.txt","content":"second improvement","media_type":"text/plain","expected_sha256":"%x"}`, sha256.Sum256([]byte("improved Skill")))
+			case 2:
+				tool, args = "write_file", `{"path":"skills/extra-skill/addendum.txt","content":"new resource for the same Skill","media_type":"text/plain","expected_sha256":"missing"}`
+			}
 		case continueAfterArchive:
 		case createAgent && len(toolMessages) == 0:
 			tool, args = "write_file", `{"path":"AGENTS.md","content":"Created in Creativity","media_type":"text/plain","expected_sha256":"missing"}`
 		case createAgent && len(toolMessages) == 1:
-			tool, args = "write_file", fmt.Sprintf(`{"path":"agent.yaml","content":%q,"media_type":"text/plain","expected_sha256":"missing"}`, string(newAgentYAML))
+			tool, args = "write_file", fmt.Sprintf(`{"path":"agent.yaml","content":%q,"media_type":"text/plain","expected_sha256":"missing"}`, string(legacyAgentYAML))
 		case createAgent:
 		case iteration && len(toolMessages) == 0:
 			tool, args = "write_file", `{"path":"result.txt","content":"iteration result","media_type":"text/plain","expected_sha256":"missing"}`
@@ -331,7 +357,8 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 		}
 	}
 	assertFile("AGENTS.md", "Follow the published instructions.")
-	assertFile("agent.yaml", model.ID)
+	assertFile("agent.json", model.ID)
+	request("GET", iterationPath+"/workspace/files?path=agent.yaml", ownerCookie, nil, 404)
 	assertFile("proj.yaml", latestSkill.ID)
 	assertFile("skills/source-skill/SKILL.md", "Read the bound resource.")
 	assertFile("skills/source-skill/guide.txt", "latest skill resource")
@@ -514,10 +541,21 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	must(err)
 	newSkill, _, err := catalogStore.LatestFormalVersion(ctx, owner.ID, source.ID, "skill", pinned.Skills[1].ID)
 	must(err)
+	// Lose the catalog reply after Agent commit, then fail publication log upload.
+	// Both retries must find the same planned Agent version.
+	blobs.loseCatalogReply.Store(true)
+	request("POST", publishPath, ownerCookie, publishInput, 503)
+	committed, _, err := catalogStore.LatestFormalVersion(ctx, owner.ID, source.ID, "agent", agent.ID)
+	must(err)
+	if committed.ID != pinned.Agent.NextVersionID || committed.ID == latestAgent.ID {
+		t.Fatalf("unexpected version after losing the catalog reply: %+v", committed)
+	}
+	blobs.failPublishRecord.Store(true)
+	request("POST", publishPath, ownerCookie, publishInput, 503)
 	var published, replay catalog.PublishManifest
 	must(json.Unmarshal(request("POST", publishPath, ownerCookie, publishInput, 200).Body.Bytes(), &published))
 	must(json.Unmarshal(request("POST", publishPath, ownerCookie, publishInput, 200).Body.Bytes(), &replay))
-	if !catalog.Equal(published, replay) || published.Agent.ID != agent.ID || published.Skills[0].VersionID != partial.ID || published.Skills[1].VersionID != newSkill.ID ||
+	if !catalog.Equal(published, replay) || published.Agent.ID != agent.ID || published.Agent.VersionID != committed.ID || published.Skills[0].VersionID != partial.ID || published.Skills[1].VersionID != newSkill.ID ||
 		published.Skills[0].Label != "v3" || published.Skills[1].Label != "v1" || blobs.archiveWrites.Load() != archiveCount {
 		t.Fatalf("retry changed versions or wrote a workspace snapshot: %+v", published)
 	}
@@ -526,6 +564,40 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	if afterPublish.Revision != savedAgent.Revision || afterPublish.DefaultVersionID != secondVersion.ID {
 		t.Fatalf("retry rewrote saved Agent draft or changed default: %+v", afterPublish)
 	}
+	publicationCold := &archiveadapter.Runtime{DB: db.Store, Log: &sessionlog.Store{Root: t.TempDir(), Prefix: "shared", Blobs: blobs}}
+	basis, err := publicationCold.PreviousCreativityPublication(ctx, owner.ID, source.ID, iteration.ID, "")
+	must(err)
+	if basis.Agent.Version != published.Agent.VersionID || basis.Agent.Revision != afterPublish.Revision || len(basis.Skills) != 2 {
+		t.Fatalf("cold replay lost the preceding publication: %+v", basis)
+	}
+	must(json.Unmarshal(request("POST", iterationPath+"/runs", ownerCookie, map[string]string{
+		"idempotency_key": uuid.NewString(), "text": "Prepare next release",
+	}, 202).Body.Bytes(), &accepted))
+	for !run.Terminal(accepted.Status) && ctx.Err() == nil {
+		time.Sleep(25 * time.Millisecond)
+		accepted, err = sessions.RuntimeRun(ctx, owner.ID, source.ID, accepted.ID)
+		must(err)
+	}
+	if accepted.Status != "succeeded" || accepted.WorkspaceSnapshotID == "" || accepted.WorkspaceSnapshotID == snapshot {
+		t.Fatalf("next release did not commit a new snapshot: %+v", accepted)
+	}
+	request("POST", publishPath, ownerCookie, publishInput, 409)
+	snapshot = accepted.WorkspaceSnapshotID
+	publishInput["workspace_snapshot_id"] = snapshot
+	var secondRelease catalog.PublishManifest
+	must(json.Unmarshal(request("POST", publishPath, ownerCookie, publishInput, 200).Body.Bytes(), &secondRelease))
+	if secondRelease.Agent.ID != agent.ID || secondRelease.Agent.VersionID == published.Agent.VersionID || len(secondRelease.Skills) != 2 ||
+		secondRelease.Skills[0].ID != partial.DefinitionID || secondRelease.Skills[0].VersionID == partial.ID ||
+		secondRelease.Skills[1].ID != newSkill.DefinitionID || secondRelease.Skills[1].VersionID == newSkill.ID {
+		t.Fatalf("next release did not update the same Agent and Skills: %+v", secondRelease)
+	}
+	newRelease, err := catalogue.Version(ctx, owner.ID, source.ID, "agent", agent.ID, secondRelease.Agent.VersionID)
+	must(err)
+	if newRelease.Bundle.Document.Markdown != "Second release from the same session" || newRelease.Bundle.Revision != basis.Agent.Revision+1 {
+		t.Fatal("next release did not use the latest snapshot and the previous revision")
+	}
+	afterPublish, err = catalogue.Draft(ctx, owner.ID, source.ID, "agent", agent.ID)
+	must(err)
 	skill, err = catalogue.Draft(ctx, owner.ID, source.ID, "skill", skill.ID)
 	must(err)
 	skill, err = catalogue.Upload(ctx, owner.ID, source.ID, "skill", skill.ID, "guide.txt", "text/plain", skill.Revision, strings.NewReader("new content from management"))
@@ -554,6 +626,29 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	_, err = catalogue.Publish(ctx, owner.ID, source.ID, "agent", agent.ID, "", draftAgent.Revision, false)
 	if err == nil {
 		t.Fatal("formal publish accepted a moving skill reference")
+	}
+	var conflictRun run.View
+	must(json.Unmarshal(request("POST", iterationPath+"/runs", ownerCookie, map[string]string{
+		"idempotency_key": uuid.NewString(), "text": "Keep the project unchanged",
+	}, 202).Body.Bytes(), &conflictRun))
+	for !run.Terminal(conflictRun.Status) && ctx.Err() == nil {
+		time.Sleep(25 * time.Millisecond)
+		conflictRun, err = sessions.RuntimeRun(ctx, owner.ID, source.ID, conflictRun.ID)
+		must(err)
+	}
+	if conflictRun.Status != "succeeded" || conflictRun.WorkspaceSnapshotID == "" {
+		t.Fatalf("conflict check did not get a new snapshot: %+v", conflictRun)
+	}
+	snapshot = conflictRun.WorkspaceSnapshotID
+	conflict = request("POST", publishPath, ownerCookie, map[string]string{"workspace_snapshot_id": snapshot}, 409)
+	must(json.Unmarshal(conflict.Body.Bytes(), &failure))
+	if failure.Details.Result.Agent.Status != "failed" {
+		t.Fatalf("expected Agent draft conflict: %s", conflict.Body.String())
+	}
+	draftAfterConflict, err := catalogue.Draft(ctx, owner.ID, source.ID, "agent", agent.ID)
+	must(err)
+	if draftAfterConflict.Revision != draftAgent.Revision {
+		t.Fatal("continuous publication overwrote an external Agent draft")
 	}
 	var pinnedDraft run.Session
 	pinInput := map[string]any{"agent_id": agent.ID, "version_id": "latest", "idempotency_key": uuid.NewString(), "expected_draft_revision": draftAgent.Revision}
@@ -655,13 +750,49 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	if publishedVersion.Bundle.Config.Model != publishModel.ID || publishedVersion.Bundle.Model.ID != publishModel.ID {
 		t.Fatal("published Agent did not bind the selected model")
 	}
+	if !json.Valid([]byte(publishedVersion.Bundle.Document.ConfigYAML)) {
+		t.Fatal("published Agent kept the legacy YAML format")
+	}
+	var duplicateSession run.Session
+	must(json.Unmarshal(request("POST", localLaunch, ownerCookie, inputs(), 201).Body.Bytes(), &duplicateSession))
+	var duplicateRun run.View
+	must(json.Unmarshal(request("POST", source.ID+"/sessions/"+duplicateSession.ID+"/runs", ownerCookie, map[string]string{
+		"idempotency_key": uuid.NewString(), "text": "Create project for publication",
+	}, 202).Body.Bytes(), &duplicateRun))
+	for !run.Terminal(duplicateRun.Status) && ctx.Err() == nil {
+		time.Sleep(25 * time.Millisecond)
+		duplicateRun, err = sessions.RuntimeRun(ctx, owner.ID, source.ID, duplicateRun.ID)
+		must(err)
+	}
+	if duplicateRun.Status != "succeeded" || duplicateRun.WorkspaceSnapshotID == "" {
+		t.Fatalf("duplicate project did not commit its workspace: %+v", duplicateRun)
+	}
+	duplicatePublish := request("POST", localLaunch+"/"+duplicateSession.ID+"/publish", ownerCookie, map[string]string{
+		"workspace_snapshot_id": duplicateRun.WorkspaceSnapshotID, "model_id": publishModel.ID,
+	}, 409)
+	must(json.Unmarshal(duplicatePublish.Body.Bytes(), &failure))
+	if !strings.Contains(duplicatePublish.Body.String(), `"code":"definition_name_conflict"`) ||
+		!strings.Contains(duplicatePublish.Body.String(), "Agent "+newAgent.Name+"：") ||
+		failure.Details.Result.Agent.Status != "failed" {
+		t.Fatal(duplicatePublish.Body.String())
+	}
 	var projectFile resource.WorkspaceEntryView
 	must(json.Unmarshal(request("GET", source.ID+"/sessions/"+createSession.ID+"/workspace/files?path=agent.yaml", ownerCookie, nil, 200).Body.Bytes(), &projectFile))
-	var unchangedConfig catalog.Config
-	must(json.Unmarshal([]byte(projectFile.Text), &unchangedConfig))
-	if unchangedConfig.Model != "" {
-		t.Fatal("publishing a selected model modified the workspace")
+	if projectFile.Text != string(legacyAgentYAML) {
+		t.Fatal("publishing modified the legacy workspace file")
 	}
+	newIterationInput := inputs()
+	newIterationInput["target_agent_id"] = newAgent.ID
+	var newIteration run.Session
+	must(json.Unmarshal(request("POST", localLaunch, ownerCookie, newIterationInput, 201).Body.Bytes(), &newIteration))
+	newProjectPath := source.ID + "/sessions/" + newIteration.ID + "/workspace/files?path="
+	must(json.Unmarshal(request("GET", newProjectPath+"agent.json", ownerCookie, nil, 200).Body.Bytes(), &projectFile))
+	var restoredConfig catalog.Config
+	must(json.Unmarshal([]byte(projectFile.Text), &restoredConfig))
+	if restoredConfig.Model != publishModel.ID {
+		t.Fatal("new iteration did not restore the published JSON config")
+	}
+	request("GET", newProjectPath+"agent.yaml", ownerCookie, nil, 404)
 	unpublished, err := catalogue.Create(ctx, owner.ID, source.ID, "agent", "first-release")
 	must(err)
 	draftInput := inputs()
@@ -744,5 +875,6 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	if replayedPlan.OperationID != writtenPlan.OperationID || replayedPlan.CausationID != writtenPlan.CausationID {
 		t.Fatalf("replayed plan lost tool call provenance: operation=%q causation=%q", replayedPlan.OperationID, replayedPlan.CausationID)
 	}
-	assertFile("skills/source-skill/guide.txt", "improved Skill")
+	assertFile("skills/source-skill/guide.txt", "second improvement")
+	assertFile("skills/extra-skill/addendum.txt", "new resource for the same Skill")
 }

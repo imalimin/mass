@@ -125,6 +125,10 @@ func apiError(w http.ResponseWriter, err error, logger *slog.Logger) {
 	}
 	var item *catalog.PublishItemError
 	if errors.As(err, &item) {
+		if errors.Is(item, catalog.ErrNameConflict) {
+			code = catalog.ErrNameConflict.Error()
+			message = "A definition of this kind with this name already exists in the space"
+		}
 		message = item.Kind + " " + item.Name + "：" + message
 	}
 	var publish *publishResponseError

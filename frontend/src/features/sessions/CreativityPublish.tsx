@@ -97,6 +97,7 @@ function DraftDebugDialog({ space, chooseModel, available, pending, error, model
   const dialog = useRef<HTMLDialogElement>(null)
   const modelRequired = hasErrorCode(error, 'publish_model_required')
   const modelLocked = hasErrorCode(error, 'publish_model_locked')
+  const nameConflict = hasErrorCode(error, 'definition_name_conflict')
   const models = useAvailableModels(space, chooseModel && !modelLocked)
   const partial = publishResult(error)
   useEffect(() => { dialog.current?.showModal() }, [])
@@ -123,7 +124,7 @@ function DraftDebugDialog({ space, chooseModel, available, pending, error, model
     {!available && <p className="muted">当前有运行中的任务，或此快照已不是最近一轮。请在会话结束后重新打开。</p>}
     <div className="dialog-actions">
       <button type="button" className="secondary" disabled={pending} onClick={close}>关闭</button>
-      {error && !modelRequired && <button type="button" disabled={!available || pending}
+      {error && !modelRequired && !nameConflict && <button type="button" disabled={!available || pending}
         onClick={() => start(modelLocked ? '' : modelID)}>{modelLocked ? '使用已确认的模型' : '重试'}</button>}
     </div>
   </dialog>
@@ -167,6 +168,7 @@ function PublishDialog({ space, sessionID, selected, available, close, mutationK
   const manifest = confirm.data ?? partial ?? preview.data
   const modelRequired = hasErrorCode(preview.error, 'publish_model_required')
   const modelConflict = [preview.error, confirm.error].some(error => hasErrorCode(error, 'publish_model_locked'))
+  const nameConflict = hasErrorCode(confirm.error, 'definition_name_conflict')
   const locked = !!manifest?.model_locked
   const chooseModel = (modelRequired || !!modelID) && !locked && !modelConflict
   const models = useAvailableModels(space, chooseModel || locked)
@@ -207,7 +209,7 @@ function PublishDialog({ space, sessionID, selected, available, close, mutationK
       <button type="button" className="secondary" disabled={confirm.isPending} onClick={close}>关闭</button>
       {modelConflict && available && <button type="button" onClick={useLockedModel}>使用已确认的模型</button>}
       {preview.isError && !modelRequired && !modelConflict && available && <button type="button" onClick={() => { void preview.refetch() }}>重试加载</button>}
-      {!confirm.isSuccess && <button type="button" disabled={!preview.isSuccess || !available || confirm.isPending || modelConflict}
+      {!confirm.isSuccess && !nameConflict && <button type="button" disabled={!preview.isSuccess || !available || confirm.isPending || modelConflict}
         onClick={() => confirm.mutate(locked ? '' : modelID)}>{confirm.isPending ? '正在发布…' : confirm.isError ? '重试发布' : '确认发布'}</button>}
     </div>
   </dialog>
