@@ -16,16 +16,33 @@ var (
 	ErrConfig     = errors.New("invalid_definition")
 )
 
+type IndexWriteError struct {
+	Err       error
+	Committed bool
+}
+
+func (e *IndexWriteError) Error() string { return e.Err.Error() }
+func (e *IndexWriteError) Unwrap() error { return e.Err }
+
 const MaxDocument = 256 << 10
 const MaxResource = 8 << 20
 
 type Definition struct {
-	ID               string `json:"id"`
-	Kind             string `json:"kind"`
-	Name             string `json:"name"`
-	Archived         bool   `json:"archived"`
-	DefaultVersionID string `json:"default_version_id"`
+	ID               string     `json:"id"`
+	Kind             string     `json:"kind"`
+	Name             string     `json:"name"`
+	Archived         bool       `json:"archived"`
+	DefaultVersionID string     `json:"default_version_id"`
+	Visibility       Visibility `json:"visibility,omitempty"`
 }
+
+type Visibility string
+
+const (
+	VisibilitySpace  Visibility = "space"
+	VisibilityPublic Visibility = "public"
+)
+
 type Asset struct {
 	Path      string `json:"path"`
 	ObjectID  string `json:"object_id"`
@@ -89,6 +106,14 @@ type Config struct {
 		TimeoutSeconds int `json:"timeout_seconds" yaml:"timeout_seconds"`
 	} `json:"limits" yaml:"limits"`
 }
+
+func (c Config) SupportsModel(model identity.Model) bool {
+	c.Context.Normalize()
+	return model.Enabled && model.Provider == "ark" &&
+		c.Context.MaxInputTokens+c.Context.MaxTokens <= model.ContextWindow &&
+		c.Context.MaxTokens <= model.MaxOutputTokens
+}
+
 type Binding struct {
 	SkillID   string `json:"skill_id"`
 	VersionID string `json:"version_id"`

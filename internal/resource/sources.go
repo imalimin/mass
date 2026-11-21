@@ -14,8 +14,9 @@ import (
 )
 
 type Sources struct {
-	Files   *FileService
-	Journal *journal.Journal
+	Files            *FileService
+	Journal          *journal.Journal
+	SharedSkillAsset func(context.Context, string, run.Skill, run.SkillResource) ([]byte, storage.Object, error)
 }
 type SourceInput struct {
 	RecordOffset int        `json:"record_offset"`
@@ -137,7 +138,14 @@ func (r *Sources) ReadSkill(ctx context.Context, s run.Snapshot, in SourceInput)
 		}
 		var raw []byte
 		source := storage.Ref{Role: "source", ObjectID: a.ObjectID, SHA256: a.SHA256}
-		if a.Package {
+		if s.AgentSourceSpaceID != "" {
+			if r.SharedSkillAsset == nil {
+				return run.ToolResult{}, storage.ErrIntegrity
+			}
+			var object storage.Object
+			raw, object, err = r.SharedSkillAsset(ctx, s.AgentSourceSpaceID, skill, a)
+			source.SHA256 = object.SHA256
+		} else if a.Package {
 			var o storage.Object
 			raw, o, err = ReadSkillPackageFile(ctx, r.Files.Content, s.ActorID, s.SpaceID, a.ObjectID, a.Path)
 			source.SHA256 = o.SHA256

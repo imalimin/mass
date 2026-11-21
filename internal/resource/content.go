@@ -210,6 +210,10 @@ func (c *ContentStore) Read(ctx context.Context, actor, space, id string) (stora
 	return o, f, err
 }
 
+func (c *ContentStore) ReadVerified(ctx context.Context, object storage.Object) (*File, error) {
+	return c.verify(ctx, object)
+}
+
 func (c *ContentStore) Object(ctx context.Context, actor, space, id string) (storage.Object, error) {
 	if c.Inline != nil {
 		object, reader, err := c.Inline.OpenInline(ctx, actor, space, id)

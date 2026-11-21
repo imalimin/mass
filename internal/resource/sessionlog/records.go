@@ -18,6 +18,7 @@ const (
 	RunFinished       = "run_finished"
 	AttachmentAdded   = "attachment_added"
 	WorkspaceRestored = "workspace_restored"
+	PublishPlanned    = "creativity_publish_planned"
 )
 
 type Header struct {
@@ -29,16 +30,19 @@ type Header struct {
 
 type Created struct {
 	Header
-	SchemaVersion int        `json:"schema_version"`
-	SessionID     string     `json:"session_id"`
-	SpaceID       string     `json:"space_id"`
-	AgentID       string     `json:"agent_id"`
-	VersionID     string     `json:"version_id"`
-	ActorID       string     `json:"actor_id"`
-	Title         string     `json:"title"`
-	EventID       string     `json:"event_id"`
-	CreatedAt     time.Time  `json:"created_at"`
-	Definition    Definition `json:"definition"`
+	AgentSourceSpaceID string          `json:"agent_source_space_id,omitempty"`
+	AgentName          string          `json:"agent_name,omitempty"`
+	Creativity         *run.Creativity `json:"creativity,omitempty"`
+	SchemaVersion      int             `json:"schema_version"`
+	SessionID          string          `json:"session_id"`
+	SpaceID            string          `json:"space_id"`
+	AgentID            string          `json:"agent_id"`
+	VersionID          string          `json:"version_id"`
+	ActorID            string          `json:"actor_id"`
+	Title              string          `json:"title"`
+	EventID            string          `json:"event_id"`
+	CreatedAt          time.Time       `json:"created_at"`
+	Definition         Definition      `json:"definition"`
 }
 
 type Definition struct {
@@ -98,6 +102,11 @@ type Restored struct {
 	OccurredAt time.Time `json:"occurred_at"`
 	SnapshotID string    `json:"snapshot_id"`
 	Reason     string    `json:"reason"`
+}
+
+type Planned struct {
+	Header
+	Plan run.CreativityPublishPlan `json:"plan"`
 }
 
 type Accepted struct {
@@ -186,7 +195,7 @@ type Finished struct {
 func (r Header) valid() bool {
 	var role string
 	switch r.Type {
-	case SessionCreated, RunFinished, AttachmentAdded, WorkspaceRestored:
+	case SessionCreated, RunFinished, AttachmentAdded, WorkspaceRestored, PublishPlanned:
 		role = "system"
 	case RunAccepted:
 		role = "user"
@@ -196,7 +205,7 @@ func (r Header) valid() bool {
 		return false
 	}
 	switch r.Type {
-	case SessionCreated, AttachmentAdded:
+	case SessionCreated, AttachmentAdded, PublishPlanned:
 		return r.Role == role && r.RunID == ""
 	case WorkspaceRestored:
 		return r.Role == role && (r.RunID == "" || storage.ValidShortID(r.RunID))

@@ -404,6 +404,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/spaces/{space_id}/agents/{id}/visibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setAgentVisibility"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/spaces/{space_id}/agents/{id}/default-version": {
         parameters: {
             query?: never;
@@ -591,6 +607,57 @@ export interface paths {
         get?: never;
         put: operations["catalog31"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/creativity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getCreativityAvailability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/creativity/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createCreativitySession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/creativity/sessions/{session_id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        get: operations["previewCreativityPublish"];
+        put?: never;
+        post: operations["confirmCreativityPublish"];
         delete?: never;
         options?: never;
         head?: never;
@@ -855,6 +922,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/spaces/{space_id}/sessions/{session_id}/workspace/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Restores the latest committed Run snapshot locally if the session directory is missing. This does not start a Run or save a new snapshot. */
+        get: operations["browseWorkspace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/spaces/{space_id}/sessions/{session_id}/workspace/restore": {
         parameters: {
             query?: never;
@@ -1083,6 +1167,8 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @enum {string} */
+        AgentVisibility: "space" | "public";
         Definition: {
             id: components["schemas"]["DefinitionID"];
             /** @enum {string} */
@@ -1090,6 +1176,7 @@ export interface components {
             name: string;
             archived: boolean;
             default_version_id: string;
+            visibility?: components["schemas"]["AgentVisibility"];
         };
         DefinitionAsset: {
             path: string;
@@ -1118,6 +1205,7 @@ export interface components {
             default_version_id: string;
             revision: number;
             document: components["schemas"]["DefinitionDocument"];
+            visibility?: components["schemas"]["AgentVisibility"];
         };
         DefinitionConfig: {
             /** @constant */
@@ -1504,7 +1592,7 @@ export interface components {
         SessionDiagnosticRecord: {
             seq: number;
             /** @enum {string} */
-            type: "session_created" | "run_accepted" | "model_step" | "context_summary" | "run_finished" | "attachment_added" | "workspace_restored";
+            type: "session_created" | "run_accepted" | "model_step" | "context_summary" | "run_finished" | "attachment_added" | "workspace_restored" | "creativity_publish_planned";
             /** @enum {string} */
             role: "system" | "user" | "assistant" | "tool";
             run_id?: components["schemas"]["ShortResourceID"];
@@ -1513,6 +1601,7 @@ export interface components {
             [key: string]: unknown;
         };
         RuntimeRun: {
+            agent_source_space_id?: components["schemas"]["ShortResourceID"];
             id: components["schemas"]["ShortResourceID"];
             space_id: components["schemas"]["ShortResourceID"];
             session_id: components["schemas"]["ShortResourceID"];
@@ -1538,15 +1627,65 @@ export interface components {
             error: string;
             snapshot_error: string;
             workspace_snapshot_committed: boolean;
+            /**
+             * Format: uuid
+             * @description Present only when the Run's workspace snapshot is committed.
+             */
+            workspace_snapshot_id?: string;
             workspace_cleanup?: boolean;
             started_at: string | null;
             finished_at: string | null;
             heartbeat_at: string | null;
             usage: components["schemas"]["RuntimeUsage"];
         };
+        CreativityAvailability: {
+            available: boolean;
+        };
+        CreativityPublishEntry: {
+            name: string;
+            /** @enum {string} */
+            action: "create" | "update" | "reference";
+            id?: string;
+            /** Format: uuid */
+            version_id?: string;
+            label?: string;
+            /**
+             * @description Result of this confirmation attempt; omitted from the preview.
+             * @enum {string}
+             */
+            status?: "published" | "referenced" | "draft_saved" | "failed" | "unprocessed" | "unknown";
+        };
+        CreativityPublishManifest: {
+            agent: components["schemas"]["CreativityPublishEntry"];
+            skills: components["schemas"]["CreativityPublishEntry"][];
+            /** Format: uuid */
+            model_id: string;
+            /** @description The model selected for this snapshot is saved in the publish plan. */
+            model_locked?: boolean;
+        };
+        CreativityPublishError: components["schemas"]["Error"] & {
+            details?: {
+                result?: components["schemas"]["CreativityPublishManifest"];
+            };
+        };
         RuntimeSession: {
             /** @default false */
             hide: boolean;
+            creativity?: {
+                target_agent_id?: components["schemas"]["ShortResourceID"];
+                /** Format: uuid */
+                target_version_id?: string;
+                /** Format: int64 */
+                target_draft_revision?: number;
+                skill_bases?: {
+                    skill_id: components["schemas"]["ShortResourceID"];
+                    /** Format: uuid */
+                    version_id: string;
+                }[];
+            };
+            agent_source_space_id?: components["schemas"]["ShortResourceID"];
+            /** @description Published Agent name for a cross-space session. */
+            agent_name?: string;
             id: components["schemas"]["ShortResourceID"];
             space_id: components["schemas"]["ShortResourceID"];
             /** Format: uuid */
@@ -1601,6 +1740,16 @@ export interface components {
         };
         RuntimeArtifacts: {
             items: components["schemas"]["RuntimeArtifact"][];
+        };
+        WorkspaceEntryView: {
+            directory: boolean;
+            entries: {
+                name: string;
+                directory: boolean;
+            }[];
+            text: string;
+            /** @enum {string} */
+            status?: "binary" | "too_large";
         };
         RuntimeRestored: {
             restored: boolean;
@@ -1658,6 +1807,8 @@ export interface components {
             hide: boolean;
             idempotency_key: string;
             agent_id: components["schemas"]["ShortResourceID"];
+            /** @description Optional source of a public Agent. When different from the session space, omit version_id to use its published default. */
+            agent_source_space_id?: components["schemas"]["ShortResourceID"];
             version_id?: string;
             title?: string;
         };
@@ -3734,6 +3885,44 @@ export interface operations {
             };
         };
     };
+    setAgentVisibility: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    visibility: components["schemas"]["AgentVisibility"];
+                };
+            };
+        };
+        responses: {
+            /** @description Agent definition with the new visibility. Draft and published versions are unchanged. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Definition"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     catalog18: {
         parameters: {
             query?: never;
@@ -5013,6 +5202,156 @@ export interface operations {
             };
         };
     };
+    getCreativityAvailability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether the configured authoring Agent can start a session. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativityAvailability"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createCreativitySession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    idempotency_key: string;
+                    /** @description Agent to iterate in the current space. Omit when creating a new Agent. */
+                    target_agent_id?: components["schemas"]["ShortResourceID"];
+                };
+            };
+        };
+        responses: {
+            /** @description A regular conversation with the configured authoring Agent. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeSession"];
+                };
+            };
+            /** @description Request rejected or authoring Agent unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    previewCreativityPublish: {
+        parameters: {
+            query: {
+                workspace_snapshot_id: string;
+                /** @description Current-space model configuration ID. Only accepted if the snapshot has no model binding. */
+                model_id?: string;
+            };
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only manifest from the latest committed Run snapshot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativityPublishManifest"];
+                };
+            };
+            /** @description Run active, snapshot unavailable or not current, or invalid publish files. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    confirmCreativityPublish: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    workspace_snapshot_id: string;
+                    /**
+                     * Format: uuid
+                     * @description Selected model for an unbound Agent. A saved plan locks this choice for retries.
+                     */
+                    model_id?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Published or reused versions. Retry the same snapshot after partial failure. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativityPublishManifest"];
+                };
+            };
+            /** @description Publish failed. Previously saved drafts and published versions remain. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativityPublishError"];
+                };
+            };
+        };
+    };
     listSessions: {
         parameters: {
             query?: {
@@ -5617,6 +5956,41 @@ export interface operations {
                 };
             };
             /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    browseWorkspace: {
+        parameters: {
+            query?: {
+                /** @description Workspace-relative path; omit for the root directory. */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Immediate directory entries or read-only UTF-8 file preview. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceEntryView"];
+                };
+            };
+            /** @description Request rejected or path unavailable. */
             default: {
                 headers: {
                     [name: string]: unknown;

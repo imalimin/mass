@@ -24,7 +24,9 @@ try {
   const send = async text => { await page.getByLabel('输入任务', { exact: true }).fill(text); const accepted = page.waitForResponse(r => /\/sessions\/[^/]+\/runs$/.test(r.url()) && r.request().method() === 'POST'); await page.getByRole('button', { name: '发送任务', exact: true }).click(); const response = await accepted; assert.equal(response.status(), 202, await response.text()); return response.json() }
   const sessionRoot = page.url()
   await expect(page.getByLabel('Agent 版本')).toHaveValue(version.id)
+  await page.getByRole('button', { name: '会话列表', exact: true }).click()
   await expect(page.getByRole('navigation', { name: '会话列表' }).getByText('还没有会话')).toBeVisible()
+  await page.getByRole('button', { name: '会话列表', exact: true }).click()
   const creating = page.waitForResponse(r => r.url().endsWith('/sessions') && r.request().method() === 'POST')
   const runRequest = /\/sessions\/[^/]+\/runs$/
   await page.route(runRequest, route => route.fulfill({ status: 503, json: { code: 'runtime_unavailable' } }), { times: 1 })

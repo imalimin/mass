@@ -73,34 +73,63 @@ type Definition struct {
 	MaxSteps        int         `json:"max_steps"`
 	TimeoutSeconds  int         `json:"timeout_seconds"`
 }
+type Creativity struct {
+	TargetAgentID       string      `json:"target_agent_id,omitempty"`
+	TargetVersionID     string      `json:"target_version_id,omitempty"`
+	TargetDraftRevision int64       `json:"target_draft_revision,omitempty"`
+	SkillBases          []SkillBase `json:"skill_bases,omitempty"`
+}
+
+type SkillBase struct {
+	SkillID   string `json:"skill_id" yaml:"skill_id"`
+	VersionID string `json:"version_id" yaml:"version_id"`
+}
+
+type PublishTarget struct {
+	ID       string `json:"id"`
+	Version  string `json:"version_id,omitempty"`
+	Revision int64  `json:"revision,omitempty"`
+}
+
+type CreativityPublishPlan struct {
+	SnapshotID string          `json:"workspace_snapshot_id"`
+	ModelID    string          `json:"model_id,omitempty"`
+	Agent      PublishTarget   `json:"agent"`
+	Skills     []PublishTarget `json:"skills"`
+}
+
 type Session struct {
-	Hide             bool        `json:"hide"`
-	ID               string      `json:"id"`
-	SpaceID          string      `json:"space_id"`
-	ActorID          string      `json:"actor_id"`
-	Title            string      `json:"title"`
-	DefinitionID     string      `json:"definition_id"`
-	VersionID        string      `json:"version_id"`
-	DefinitionRef    storage.Ref `json:"definition_ref"`
-	LatestSnapshotID string      `json:"latest_workspace_snapshot_id"`
-	WorkspaceError   string      `json:"workspace_error"`
-	LastSequence     int64       `json:"last_sequence,string"`
-	CreatedAt        time.Time   `json:"created_at"`
+	AgentSourceSpaceID string      `json:"agent_source_space_id,omitempty"`
+	AgentName          string      `json:"agent_name,omitempty"`
+	Hide               bool        `json:"hide"`
+	Creativity         *Creativity `json:"creativity,omitempty"`
+	ID                 string      `json:"id"`
+	SpaceID            string      `json:"space_id"`
+	ActorID            string      `json:"actor_id"`
+	Title              string      `json:"title"`
+	DefinitionID       string      `json:"definition_id"`
+	VersionID          string      `json:"version_id"`
+	DefinitionRef      storage.Ref `json:"definition_ref"`
+	LatestSnapshotID   string      `json:"latest_workspace_snapshot_id"`
+	WorkspaceError     string      `json:"workspace_error"`
+	LastSequence       int64       `json:"last_sequence,string"`
+	CreatedAt          time.Time   `json:"created_at"`
 }
 type Snapshot struct {
-	ID             string      `json:"id"`
-	SpaceID        string      `json:"space_id"`
-	SessionID      string      `json:"session_id"`
-	ActorID        string      `json:"actor_id"`
-	DefinitionRef  storage.Ref `json:"definition_ref"`
-	UserEventID    string      `json:"user_event_id"`
-	BaseSnapshotID string      `json:"base_workspace_snapshot_id"`
-	Definition     Definition  `json:"definition"`
-	Build          string      `json:"build"`
-	Profile        string      `json:"protocol_profile"`
-	MapperVersion  int         `json:"mapper_version"`
-	ParserVersion  int         `json:"parser_version"`
-	CreatedAt      time.Time   `json:"created_at"`
+	AgentSourceSpaceID string      `json:"agent_source_space_id,omitempty"`
+	ID                 string      `json:"id"`
+	SpaceID            string      `json:"space_id"`
+	SessionID          string      `json:"session_id"`
+	ActorID            string      `json:"actor_id"`
+	DefinitionRef      storage.Ref `json:"definition_ref"`
+	UserEventID        string      `json:"user_event_id"`
+	BaseSnapshotID     string      `json:"base_workspace_snapshot_id"`
+	Definition         Definition  `json:"definition"`
+	Build              string      `json:"build"`
+	Profile            string      `json:"protocol_profile"`
+	MapperVersion      int         `json:"mapper_version"`
+	ParserVersion      int         `json:"parser_version"`
+	CreatedAt          time.Time   `json:"created_at"`
 
 	WorkspaceCleanup bool `json:"workspace_cleanup,omitempty"`
 }

@@ -63,6 +63,10 @@ type Config struct {
 		WorkspaceTempRoot string        `yaml:"workspace_temp_root"`
 		SnapshotTimeout   time.Duration `yaml:"snapshot_timeout"`
 	} `yaml:"runtime"`
+	Creativity struct {
+		AgentID          string `yaml:"agent_id"`
+		AgentWorkspaceID string `yaml:"agent_workspace_id"`
+	} `yaml:"creativity"`
 	Tools struct {
 		Code struct {
 			Timeout             time.Duration `yaml:"timeout"`

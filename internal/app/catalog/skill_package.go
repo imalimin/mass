@@ -20,12 +20,16 @@ func skillBundle(d Draft) Bundle {
 }
 
 func (s *Service) readSkillBundle(ctx context.Context, actor, space, id, expectedSHA string) (Bundle, error) {
-	var b Bundle
 	o, f, err := s.Content.Read(ctx, actor, space, id)
 	if err != nil {
-		return b, err
+		return Bundle{}, err
 	}
 	defer f.Close()
+	return decodeSkillBundle(o, f, expectedSHA)
+}
+
+func decodeSkillBundle(o storage.Object, f *resource.File, expectedSHA string) (Bundle, error) {
+	var b Bundle
 	if expectedSHA != "" && o.SHA256 != expectedSHA {
 		return b, storage.ErrIntegrity
 	}

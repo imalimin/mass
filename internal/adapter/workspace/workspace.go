@@ -66,7 +66,25 @@ func New(base string, limits storage.Limits) (*Manager, error) {
 }
 func (m *Manager) LocalPath() string { return m.root.Name() }
 func (m *Manager) Close() error      { return m.root.Close() }
+
+type openMode int
+
+const (
+	openOrCreate openMode = iota
+	openExisting
+	openMissing
+)
+
 func (m *Manager) With(ctx context.Context, space, session string, fn func(resource.WorkspaceDir) error) error {
+	return m.with(ctx, space, session, openOrCreate, fn)
+}
+func (m *Manager) WithExisting(ctx context.Context, space, session string, fn func(resource.WorkspaceDir) error) error {
+	return m.with(ctx, space, session, openExisting, fn)
+}
+func (m *Manager) WithMissing(ctx context.Context, space, session string, fn func(resource.WorkspaceDir) error) error {
+	return m.with(ctx, space, session, openMissing, fn)
+}
+func (m *Manager) with(ctx context.Context, space, session string, mode openMode, fn func(resource.WorkspaceDir) error) (result error) {
 	if !storage.ValidShortID(space) || !storage.ValidShortID(session) {
 		return storage.ErrInvalid
 	}
@@ -94,11 +112,31 @@ func (m *Manager) With(ctx context.Context, space, session string, fn func(resou
 	case <-g.token:
 	}
 	defer func() { g.token <- struct{}{} }()
-	if err := m.root.Mkdir(name, 0700); err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
+	if mode != openExisting {
+		err := m.root.Mkdir(name, 0700)
+		if errors.Is(err, fs.ErrExist) {
+			if mode == openMissing {
+				return nil
+			}
+		} else if err != nil {
+			return err
+		}
+		if mode == openMissing {
+			defer func() {
+				if result != nil {
+					result = errors.Join(result, m.root.RemoveAll(name))
+				}
+			}()
+		}
 	}
 	info, err := m.root.Lstat(name)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+	if err != nil {
+		if mode != openExisting {
+			return storage.ErrWorkspace
+		}
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return storage.ErrWorkspace
 	}
 	root, err := m.root.OpenRoot(name)

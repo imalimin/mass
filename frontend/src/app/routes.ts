@@ -1,7 +1,8 @@
 export const workspaceHomePath = '/spaces'
 
 export const workspaceSections = [
-  { path: '', label: '空间概览', description: '查看空间入口，开始任务或管理协作资源。', group: '工作空间' },
+  { path: '', label: '创意', description: '通过对话把想法变成 Agent。', group: '工作空间' },
+  { path: 'overview', label: '空间概览', description: '查看空间入口，开始任务或管理协作资源。', group: '工作空间' },
   { path: 'agents', label: 'Agents', description: '配置助手的模型、指令与工具，发布可复用的版本。', group: '定义与资源' },
   { path: 'skills', label: 'Skills', description: '编写方法与资源，供 Agent 绑定和复用。', group: '定义与资源' },
   { path: 'evaluation/datasets', label: '评测集', description: '管理版本化评测集，编排每条用例的单轮和多轮输入。', group: '评测' },
@@ -16,6 +17,9 @@ export function spacePath(space: string, section = '') {
 export function agentSessionsPath(space: string, agent: string, session = '') {
   const base = spacePath(space, `agents/${encodeURIComponent(agent)}/sessions`)
   return session ? `${base}/${encodeURIComponent(session)}` : base
+}
+export function creativitySessionPath(space: string, session: string) {
+  return spacePath(space, `creativity/sessions/${encodeURIComponent(session)}`)
 }
 export function legacySpacePath(search: string) {
   const params = new URLSearchParams(search), space = params.get('space'), session = params.get('session')

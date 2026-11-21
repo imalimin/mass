@@ -83,6 +83,16 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {
 	return nil
 }
 func apiError(w http.ResponseWriter, err error, logger *slog.Logger) {
+	var projectFile *resource.ProjectFileError
+	if errors.As(err, &projectFile) {
+		writeError(w, http.StatusBadRequest, "publish_project_file", projectFile.Error())
+		return
+	}
+	var version *catalog.IterationVersionUnavailable
+	if errors.As(err, &version) {
+		writeError(w, http.StatusConflict, "iteration_version_unavailable", version.Error())
+		return
+	}
 	status := 500
 	code := "internal_error"
 	message := "Request could not be completed"
@@ -93,6 +103,12 @@ func apiError(w http.ResponseWriter, err error, logger *slog.Logger) {
 	}{
 		{catalog.ErrDraft, 409, "Draft changed; compare and reload before saving"}, {catalog.ErrVersion, 409, "Version label already published"}, {catalog.ErrReferenced, 409, "Version is referenced"}, {catalog.ErrConfig, 400, "Invalid definition or operation"},
 		{catalog.ErrSkillDocumentMissing, 400, "SKILL.md is required at the ZIP root"},
+		{catalog.ErrAgentNotPublic, 403, "Agent is not available for cross-space use"},
+		{catalog.ErrIterationDraft, 409, "Draft changed; restart iteration from the Agent management page"},
+		{errPublishSnapshot, 409, "Select the latest Run with a committed workspace snapshot"},
+		{catalog.ErrPublishModelRequired, 400, "Select a model before publishing an Agent without a model"},
+		{errPublishModelChoice, 400, "Selected model is unavailable or does not meet Agent capabilities"},
+		{errPublishModelLocked, 409, "The publish plan already pins another model"},
 		{run.ErrState, 409, "Run state conflict"}, {run.ErrCancelled, 409, "Run cancelled"}, {run.ErrBudget, 400, "Run budget exceeded"}, {run.ErrOverflow, 400, "Context capacity exceeded"}, {run.ErrUnavailable, 503, "Runtime unavailable"}, {run.ErrTool, 400, "Tool not available in this stage"}, {run.ErrProtocol, 502, "Model response incomplete or invalid"}, {run.ErrCursor, 400, "Invalid stream cursor"},
 		{storage.ErrConflict, 409, "Storage fact conflict"}, {storage.ErrSchema, 400, "Unsupported event schema"}, {storage.ErrInvalid, 400, "Invalid storage request"}, {storage.ErrIntegrity, 503, "Content unavailable"}, {storage.ErrWorkspace, 409, "Workspace unavailable"}, {storage.ErrActive, 409, "Session has an active run"},
 		{identity.ErrUnauthenticated, 401, "Please sign in"}, {identity.ErrForbidden, 403, "Access denied"}, {identity.ErrNotFound, 404, "Resource not found"}, {identity.ErrConflict, 409, "Resource changed or already exists"}, {identity.ErrInvalid, 400, "Invalid request"}, {identity.ErrCapability, 400, "Unsupported model capability or endpoint"},
@@ -106,6 +122,18 @@ func apiError(w http.ResponseWriter, err error, logger *slog.Logger) {
 	}
 	if status == 500 {
 		logger.Error("request failed", "request_id", w.Header().Get("X-Request-ID"))
+	}
+	var item *catalog.PublishItemError
+	if errors.As(err, &item) {
+		message = item.Kind + " " + item.Name + "：" + message
+	}
+	var publish *publishResponseError
+	if errors.As(err, &publish) {
+		writeJSON(w, status, struct {
+			ErrorBody
+			Details map[string]catalog.PublishManifest `json:"details"`
+		}{ErrorBody{code, message, w.Header().Get("X-Request-ID")}, map[string]catalog.PublishManifest{"result": publish.result}})
+		return
 	}
 	writeError(w, status, code, message)
 }

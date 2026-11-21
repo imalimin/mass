@@ -47,12 +47,14 @@ type Service struct {
 	Notify        func()
 }
 type CreateInput struct {
-	Hide             bool   `json:"hide,omitempty"`
-	Key              string `json:"idempotency_key"`
-	AgentID          string `json:"agent_id"`
-	VersionID        string `json:"version_id"`
-	SourceSnapshotID string `json:"source_workspace_snapshot_id"`
-	Title            string `json:"title"`
+	AgentSourceSpaceID string          `json:"agent_source_space_id,omitempty"`
+	Creativity         *run.Creativity `json:"-"`
+	Hide               bool            `json:"hide,omitempty"`
+	Key                string          `json:"idempotency_key"`
+	AgentID            string          `json:"agent_id"`
+	VersionID          string          `json:"version_id"`
+	SourceSnapshotID   string          `json:"source_workspace_snapshot_id"`
+	Title              string          `json:"title"`
 }
 type SubmitInput struct {
 	Key         string   `json:"idempotency_key"`
@@ -72,6 +74,16 @@ func (s *Service) ready(ctx context.Context) error {
 	return nil
 }
 func (s *Service) Create(ctx context.Context, actor, space string, in CreateInput) (run.Session, error) {
+	if in.AgentSourceSpaceID == space {
+		in.AgentSourceSpaceID = ""
+	}
+	shared := in.AgentSourceSpaceID != ""
+	if shared && (!storage.ValidShortID(in.AgentSourceSpaceID) || in.VersionID != "" || in.SourceSnapshotID != "") {
+		return run.Session{}, identity.ErrInvalid
+	}
+	if shared && s.Content.Inline == nil {
+		return run.Session{}, catalog.ErrAgentNotPublic
+	}
 	if s.Content.Inline != nil && in.SourceSnapshotID != "" {
 		return run.Session{}, identity.ErrInvalid
 	}
@@ -79,6 +91,12 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 		return run.Session{}, identity.ErrInvalid
 	}
 	digest := journal.Digest(in)
+	if in.Creativity != nil {
+		digest = journal.Digest(struct {
+			CreateInput
+			Creativity *run.Creativity `json:"creativity"`
+		}{in, in.Creativity})
+	}
 	id, _, found, err := s.Repo.FindRuntimeRequest(ctx, actor, space, "session", in.Key, digest)
 	if err != nil {
 		return run.Session{}, err
@@ -89,73 +107,122 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 	if err = s.ready(ctx); err != nil {
 		return run.Session{}, err
 	}
-	draft, err := s.Catalog.Repo.CatalogDraft(ctx, actor, space, "agent", in.AgentID)
+	if in.Creativity != nil && in.Creativity.TargetAgentID != "" {
+		if s.Content.Inline == nil || !storage.ValidShortID(in.Creativity.TargetAgentID) {
+			return run.Session{}, identity.ErrInvalid
+		}
+		in.Creativity, err = s.Catalog.ResolveIteration(ctx, actor, space, in.Creativity.TargetAgentID)
+		if err != nil {
+			return run.Session{}, err
+		}
+	}
+	var agentName string
+	var version catalog.Version
+	var boundSkills []catalog.Bundle
+	if shared {
+		publicAgent, loadErr := s.Catalog.LoadPublicAgent(ctx, in.AgentSourceSpaceID, in.AgentID)
+		if loadErr != nil {
+			return run.Session{}, loadErr
+		}
+		agentName, version, boundSkills = publicAgent.Name, publicAgent.Version, publicAgent.Skills
+	} else {
+		version, err = s.localAgentVersion(ctx, actor, space, in)
+		if err != nil {
+			return run.Session{}, err
+		}
+	}
+	if version.Archived || in.Creativity != nil && version.Debug || version.Bundle.Config == nil || version.Bundle.Model == nil {
+		return run.Session{}, catalog.ErrConfig
+	}
+	b := version.Bundle
+	c := b.Config
+	c.Context.Normalize()
+	d := run.Definition{VersionID: version.ID, AgentID: in.AgentID, Debug: version.Debug, PlatformVersion: run.PlatformVersion, Platform: run.PlatformInstructions, Instructions: b.Document.Markdown, Skills: []run.Skill{}, Model: Model(*b.Model), Tools: []run.ToolSpec{}, Compression: c.Context.Compression, MaxInputTokens: c.Context.MaxInputTokens, OutputTokens: c.Context.MaxTokens, MaxSteps: c.Limits.MaxSteps, TimeoutSeconds: c.Limits.TimeoutSeconds}
+	var refs []storage.Ref
+	if !shared {
+		refs = append(refs, storage.Ref{Role: "agent_version", ObjectID: version.ContentID, SHA256: version.SHA256})
+	}
+	for i, binding := range b.Bindings {
+		var skillBundle catalog.Bundle
+		if shared {
+			skillBundle = boundSkills[i]
+		} else {
+			skill, err := s.Catalog.Version(ctx, actor, space, "skill", binding.SkillID, binding.VersionID)
+			if err != nil {
+				return run.Session{}, err
+			}
+			if skill.SHA256 != binding.SHA256 {
+				return run.Session{}, storage.ErrIntegrity
+			}
+			skillBundle = skill.Bundle
+			refs = append(refs, storage.Ref{Role: "skill_version", Ordinal: i, ObjectID: skill.ContentID, SHA256: skill.SHA256})
+		}
+		resources := []run.SkillResource{}
+		for _, a := range skillBundle.Document.Assets {
+			resources = append(resources, run.SkillResource{Path: a.Path, ObjectID: a.ObjectID, SHA256: a.SHA256, Size: a.Size, MediaType: a.MediaType, Package: a.Package})
+		}
+		d.Skills = append(d.Skills, run.Skill{Resources: resources, ID: binding.SkillID, VersionID: binding.VersionID, Version: binding.Version, SHA256: binding.SHA256, Markdown: skillBundle.Document.Markdown})
+	}
+	for _, name := range c.Tools {
+		d.Tools = append(d.Tools, run.ToolSpec{Name: name, Version: "1"})
+	}
+	if shared {
+		d.Model.Endpoint = ""
+	}
+	accept := func() error {
+		var acceptErr error
+		id, acceptErr = s.acceptSession(ctx, actor, space, in, d, refs, agentName, digest)
+		return acceptErr
+	}
+	if shared {
+		err = s.Catalog.WithPublicAgent(ctx, in.AgentSourceSpaceID, in.AgentID, version.ID, accept)
+	} else {
+		err = accept()
+	}
 	if err != nil {
 		return run.Session{}, err
 	}
+	return s.Repo.RuntimeSession(ctx, actor, space, id)
+}
+
+func (s *Service) localAgentVersion(ctx context.Context, actor, space string, in CreateInput) (catalog.Version, error) {
+	draft, err := s.Catalog.Repo.CatalogDraft(ctx, actor, space, "agent", in.AgentID)
+	if err != nil {
+		return catalog.Version{}, err
+	}
 	if draft.Archived {
-		return run.Session{}, catalog.ErrConfig
+		return catalog.Version{}, catalog.ErrConfig
 	}
 	versionID := in.VersionID
 	if versionID == "" {
 		versionID = draft.DefaultVersionID
 	}
 	if versionID == "" {
-		return run.Session{}, catalog.ErrConfig
+		return catalog.Version{}, catalog.ErrConfig
 	}
-	version, err := s.Catalog.Version(ctx, actor, space, "agent", in.AgentID, versionID)
-	if err != nil {
-		return run.Session{}, err
-	}
-	if version.Archived || version.Bundle.Config == nil || version.Bundle.Model == nil {
-		return run.Session{}, catalog.ErrConfig
-	}
-	b := version.Bundle
-	c := b.Config
-	c.Context.Normalize()
-	m := b.Model
-	d := run.Definition{VersionID: version.ID, AgentID: in.AgentID, Debug: version.Debug, PlatformVersion: run.PlatformVersion, Platform: run.PlatformInstructions, Instructions: b.Document.Markdown, Skills: []run.Skill{}, Model: Model(*m), Tools: []run.ToolSpec{}, Compression: c.Context.Compression, MaxInputTokens: c.Context.MaxInputTokens, OutputTokens: c.Context.MaxTokens, MaxSteps: c.Limits.MaxSteps, TimeoutSeconds: c.Limits.TimeoutSeconds}
-	refs := []storage.Ref{{Role: "agent_version", ObjectID: version.ContentID, SHA256: version.SHA256}}
-	for i, binding := range b.Bindings {
-		skill, err := s.Catalog.Version(ctx, actor, space, "skill", binding.SkillID, binding.VersionID)
-		if err != nil {
-			return run.Session{}, err
-		}
-		if skill.SHA256 != binding.SHA256 {
-			return run.Session{}, storage.ErrIntegrity
-		}
-		resources := []run.SkillResource{}
-		for _, a := range skill.Bundle.Document.Assets {
-			resources = append(resources, run.SkillResource{Path: a.Path, ObjectID: a.ObjectID, SHA256: a.SHA256, Size: a.Size, MediaType: a.MediaType, Package: a.Package})
-		}
-		d.Skills = append(d.Skills, run.Skill{Resources: resources, ID: binding.SkillID, VersionID: binding.VersionID, Version: binding.Version, SHA256: binding.SHA256, Markdown: skill.Bundle.Document.Markdown})
-		refs = append(refs, storage.Ref{Role: "skill_version", Ordinal: i, ObjectID: skill.ContentID, SHA256: skill.SHA256})
-	}
-	for _, name := range c.Tools {
-		d.Tools = append(d.Tools, run.ToolSpec{Name: name, Version: "1"})
-	}
+	return s.Catalog.Version(ctx, actor, space, "agent", in.AgentID, versionID)
+}
+
+func (s *Service) acceptSession(ctx context.Context, actor, space string, in CreateInput, d run.Definition, refs []storage.Ref, agentName, digest string) (string, error) {
 	raw, _ := json.Marshal(d)
 	o, err := s.Content.Put(ctx, actor, space, uuid.NewString(), "session.definition", "application/json", bytes.NewReader(raw))
 	if err != nil {
-		return run.Session{}, err
+		return "", err
 	}
 	defRef := Ref(o, "definition")
 	refs = append(refs, defRef)
-	id = storage.NewShortID()
+	id := storage.NewShortID()
 	title := in.Title
 	if title == "" {
 		title = id
 	}
-	event := journal.New(actor, "session.created", "", journal.SessionData{Hide: in.Hide, SourceSnapshotID: in.SourceSnapshotID, DefinitionRef: &defRef, DefinitionID: in.AgentID, VersionID: version.ID, Title: title}, refs...)
+	event := journal.New(actor, "session.created", "", journal.SessionData{Hide: in.Hide, Creativity: in.Creativity, SourceSnapshotID: in.SourceSnapshotID, DefinitionRef: &defRef, DefinitionID: in.AgentID, VersionID: d.VersionID, Title: title, AgentSourceSpaceID: in.AgentSourceSpaceID, AgentName: agentName}, refs...)
 	batch, err := journal.Prepare(actor, journal.Request{SpaceID: space, SessionID: id, AppendKey: uuid.NewString(), Events: []journal.Proposed{event}})
 	if err != nil {
-		return run.Session{}, err
+		return "", err
 	}
 	id, _, err = s.Repo.AcceptRuntimeRequest(ctx, actor, space, "session", in.Key, digest, batch)
-	if err != nil {
-		return run.Session{}, err
-	}
-	return s.Repo.RuntimeSession(ctx, actor, space, id)
+	return id, err
 }
 func Model(m identity.Model) run.ModelConfig {
 	return run.ModelConfig{ID: m.ID, Provider: m.Provider, ModelID: m.ModelID, Endpoint: m.BaseURL, Revision: m.Revision, ContextWindow: m.ContextWindow, MaxOutputTokens: m.MaxOutputTokens, Temperature: m.Temperature}
@@ -178,6 +245,13 @@ func (s *Service) Definition(ctx context.Context, actor, space string, ref stora
 		return d, err
 	}
 	return d, nil
+}
+
+func (s *Service) PrepareIteration(ctx context.Context, actor string, session run.Session) error {
+	if session.Creativity == nil || session.Creativity.TargetAgentID == "" || session.LatestSnapshotID != "" {
+		return nil
+	}
+	return s.Workspaces.InitializeIteration(ctx, actor, session.SpaceID, session.ID)
 }
 func (s *Service) Submit(ctx context.Context, actor, space, sessionID string, in SubmitInput) (run.View, error) {
 	return s.submit(ctx, actor, space, sessionID, in, false)
@@ -229,6 +303,25 @@ func (s *Service) submit(ctx context.Context, actor, space, sessionID string, in
 	if err != nil {
 		return run.View{}, err
 	}
+	if !workspaceCleanup {
+		if err := s.PrepareIteration(ctx, actor, session); err != nil {
+			return run.View{}, err
+		}
+	}
+	if session.AgentSourceSpaceID == "" {
+		return s.submitNewRun(ctx, actor, session, in, digest, workspaceCleanup)
+	}
+	var view run.View
+	err = s.Catalog.WithPublicAgent(ctx, session.AgentSourceSpaceID, session.DefinitionID, session.VersionID, func() error {
+		var submitErr error
+		view, submitErr = s.submitNewRun(ctx, actor, session, in, digest, workspaceCleanup)
+		return submitErr
+	})
+	return view, err
+}
+
+func (s *Service) submitNewRun(ctx context.Context, actor string, session run.Session, in SubmitInput, digest string, workspaceCleanup bool) (run.View, error) {
+	space, sessionID := session.SpaceID, session.ID
 	if workspaceCleanup && !s.Workspaces.LocalExists(space, sessionID) {
 		return run.View{}, storage.ErrWorkspace
 	}
@@ -242,7 +335,12 @@ func (s *Service) submit(ctx context.Context, actor, space, sessionID string, in
 			return run.View{}, err
 		}
 	}
-	model, err := s.Identity.Repo.Model(ctx, actor, space, definition.Model.ID)
+	var model identity.Model
+	if session.AgentSourceSpaceID == "" {
+		model, err = s.Identity.Repo.Model(ctx, actor, space, definition.Model.ID)
+	} else {
+		model, err = s.Identity.CheckSharedRunModel(ctx, actor, space, session.AgentSourceSpaceID, definition.Model.ID)
+	}
 	if err != nil {
 		return run.View{}, err
 	}
@@ -250,8 +348,10 @@ func (s *Service) submit(ctx context.Context, actor, space, sessionID string, in
 	if !model.Enabled || definition.MaxInputTokens+definition.OutputTokens > model.ContextWindow || definition.OutputTokens > model.MaxOutputTokens {
 		return run.View{}, identity.ErrCapability
 	}
-	if _, err = s.Identity.ModelSecret(ctx, actor, space, model.ID); err != nil {
-		return run.View{}, err
+	if session.AgentSourceSpaceID == "" {
+		if _, err = s.Identity.ModelSecret(ctx, actor, space, model.ID); err != nil {
+			return run.View{}, err
+		}
 	}
 	o, err := s.Content.Put(ctx, actor, space, uuid.NewString(), "user.message", "text/plain; charset=utf-8", strings.NewReader(in.Text))
 	if err != nil {
@@ -272,7 +372,7 @@ func (s *Service) submit(ctx context.Context, actor, space, sessionID string, in
 	message := journal.New(actor, "user.message.accepted", "", journal.UserMessageData{ID: uuid.NewString(), ContentID: o.ID, Attachments: attachments}, refs...)
 	definition.ToolPolicy = s.ToolPolicy
 	definition.ModelAttempts = max(1, s.ModelAttempts)
-	id = uuid.NewString()
+	id := uuid.NewString()
 	if s.Content.Inline != nil {
 		id = storage.NewShortID()
 	}
@@ -285,6 +385,7 @@ func (s *Service) submit(ctx context.Context, actor, space, sessionID string, in
 		definition.Skills[i].Resources = nil
 	}
 	snapshot := run.Snapshot{ID: id, SpaceID: space, SessionID: sessionID, ActorID: actor, DefinitionRef: session.DefinitionRef, UserEventID: message.EventID, BaseSnapshotID: session.LatestSnapshotID, Definition: definition, Build: s.Build, Profile: "mass-agui-v1", MapperVersion: 1, ParserVersion: 1, CreatedAt: time.Now().UTC().Truncate(time.Microsecond)}
+	snapshot.AgentSourceSpaceID = session.AgentSourceSpaceID
 	snapshot.WorkspaceCleanup = workspaceCleanup
 	created := journal.New(actor, "run.created", id, journal.RunData{Snapshot: &snapshot})
 	created.CausationID = message.EventID

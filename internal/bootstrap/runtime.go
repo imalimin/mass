@@ -121,7 +121,17 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	store.UIContent = content
 	store.UIToolState = recorder.ToolState
 	registryService := &registry.Registry{}
-	workspaceService := &resource.RunWorkspaces{Workspaces: workspaces, Repo: repo, Content: content, Journal: journalService}
+	workspaceService := &resource.RunWorkspaces{Workspaces: workspaces, Repo: repo, Content: content, Journal: journalService,
+		Limits: storage.Limits{MaxArchiveFileBytes: c.Storage.MaxObjectBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes}}
+	if sessions != nil {
+		workspaceService.Iteration = func(ctx context.Context, actor, space, id string, write func(string, []byte) error) (bool, error) {
+			session, err := sessions.RuntimeSession(ctx, actor, space, id)
+			if err != nil || session.Creativity == nil || session.Creativity.TargetAgentID == "" || session.LatestSnapshotID != "" {
+				return false, err
+			}
+			return true, catalogue.RestoreIteration(ctx, actor, space, *session.Creativity, write)
+		}
+	}
 	finisher := &resource.Finisher{Scope: scope, Content: content, Workspaces: workspaces, Timeout: c.Runtime.SnapshotTimeout, DiagnosticLog: diagnosticLog}
 	snapshots.DiagnosticLog = diagnosticLog
 	supervisorService := &supervisor.Supervisor{Guard: auth, Coordinator: coordinator, Workspaces: workspaceService, Finisher: finisher, CleanupTimeout: c.Runtime.SnapshotTimeout + 5*time.Second, DiagnosticLog: diagnosticLog}
@@ -172,13 +182,18 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		contextPlanner := &planner.Planner{Journal: runJournal, Content: runContent, Projector: &projector.Projector{
 			Content: runContent, ToolResult: recorder.ToolResult, MissingLocalFiles: missingLocalFiles,
 		}, Tools: registryService}
-		gateway := &modelgateway.Gateway{Journal: runJournal, Content: runContent, Transport: transport, Credentials: auth, Control: budget, Trace: recorder, Delta: store.LiveUI.Delta}
+		var credentials modelgateway.Credentials = auth
+		if s.AgentSourceSpaceID != "" {
+			credentials = identity.SharedRunCredentials{Identity: auth, Run: s}
+		}
+		gateway := &modelgateway.Gateway{Journal: runJournal, Content: runContent, Transport: transport, Credentials: credentials, Control: budget, Trace: recorder, Delta: store.LiveUI.Delta}
 		contextPlanner.Model = gateway
 		fileService := &resource.FileService{Workspaces: workspaces, Content: runContent, Cursors: auth, MaxBytes: 1 << 20, Limits: storage.Limits{MaxArchiveFileBytes: c.Storage.MaxObjectBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
 		fileService.EnableRunPagination()
 		code := &resource.CodeService{Engine: codeEngine, Files: fileService, Network: &resource.Network{}}
 		commands := &resource.CommandService{Workspaces: workspaces, Execute: command.Execute}
-		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: &resource.Sources{Files: fileService, Journal: runJournal}, Code: code, Command: commands, Journal: runJournal}, Control: budget, Journal: runJournal, Trace: recorder}
+		sources := &resource.Sources{Files: fileService, Journal: runJournal, SharedSkillAsset: catalogue.ReadPublicAgentSkillAsset}
+		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: sources, Code: code, Command: commands, Journal: runJournal}, Control: budget, Journal: runJournal, Trace: recorder}
 		return &executor.Executor{Planner: contextPlanner, Model: gateway, Tools: tools, Control: budget}, nil
 	}
 	// The connection-scoped lock proves the old dispatcher is gone before recovery.
@@ -223,6 +238,8 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	}
 	service := &sessionapp.Service{ModelAttempts: max(1, c.LLM.MaxAttempts), ToolPolicy: policy, Repo: repo, Catalog: catalogue, Identity: auth, Content: content, Workspaces: workspaceService, Build: build, Ready: schedulerService.Ready, Notify: schedulerService.Notify, ResolveTools: registryService.Describe}
 	options = &httptransport.RuntimeOptions{Service: service, Repo: repo, UI: &agui.Projector{Repo: repo, Live: live, ResponseText: responseText, ToolState: toolState}, Trace: archive, Workspaces: workspaceService, Snapshots: snapshots, Finisher: finisher, Cancel: supervisorService.Cancel, DiagnosticLog: diagnosticLog}
+	options.CreativityAgentID = c.Creativity.AgentID
+	options.CreativityAgentSpace = c.Creativity.AgentWorkspaceID
 	saveTraces := func(ctx context.Context) map[string][]run.View {
 		if sessions != nil {
 			if err := sessions.RetryUploads(ctx); err != nil && ctx.Err() == nil {

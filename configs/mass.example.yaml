@@ -31,6 +31,9 @@ secrets:
 runtime:
   workspace_temp_root: "/tmp/mass-workspaces"
   snapshot_timeout: "60s"
+creativity:
+  agent_id: ""
+  agent_workspace_id: ""
 tools:
   code:
     timeout: "5s"

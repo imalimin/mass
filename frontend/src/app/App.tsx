@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useMatch, useNavigate } from 'react-router-dom'
 import { APIError, list, request, type Schema } from '../lib/api'
 import { SessionWorkspace, LegacySession } from '../features/sessions/Sessions'
+import { CreativityConversation, CreativityHome } from '../features/sessions/Creativity'
 import { Catalog } from '../features/catalog/Catalog'
 import { Evaluation } from '../features/evaluation/Evaluation'
 import { Members, Models } from '../features/spaces/SpaceDetail'
@@ -10,6 +11,7 @@ import { sortSpacesByCreation } from '../features/spaces/spaces'
 import { workspaceHomePath, legacySpacePath, spacePath, workspaceSections } from './routes'
 
 const agentConversationRoute = '/spaces/:spaceId/agents/:agentId/sessions/:sessionId?'
+const creativityConversationRoute = '/spaces/:spaceId/creativity/sessions/:sessionId'
 
 export function App() {
   const client = useQueryClient(), navigate = useNavigate(), location = useLocation()
@@ -20,7 +22,9 @@ export function App() {
   const space = spaces.data?.find(s => s.id === spaceID)
   const section = match?.params['*'] ?? ''
   const page = workspaceSections.find(s => s.path === section || s.path !== '' && section.startsWith(s.path + '/'))
-  const sessionPage = !!useMatch(agentConversationRoute)
+  const agentSessionPage = !!useMatch(agentConversationRoute)
+  const creativitySessionPage = !!useMatch(creativityConversationRoute)
+  const sessionPage = agentSessionPage || creativitySessionPage
   useEffect(() => {
     if (!spaceID) return
     return () => {
@@ -57,10 +61,11 @@ export function App() {
     return <div className="login-card"><h1>暂时无法连接服务</h1><p role="alert">{me.error.message}</p><button onClick={() => { void me.refetch() }}>重试</button></div>
   }
   if (sessionPage) return <main id="main-content" className="agent-conversation-page">
-    <Routes><Route path={agentConversationRoute} element={spaces.isPending
+    <Routes><Route path={creativitySessionPage ? creativityConversationRoute : agentConversationRoute} element={spaces.isPending
       ? <p className="session-loading" role="status">正在读取空间…</p>
       : spaces.error ? <p className="session-loading" role="alert">{spaces.error.message}</p>
-      : space ? <SessionWorkspace key={space.id} space={space.id} /> : <SpaceUnavailable />} /></Routes>
+      : space ? creativitySessionPage ? <CreativityConversation key={space.id} space={space.id} />
+        : <SessionWorkspace key={space.id} space={space.id} /> : <SpaceUnavailable />} /></Routes>
   </main>
   return <div className="layout"><aside className="app-sidebar"><Link className="brand" to={workspaceHomePath}>M<span className="brand-dot">A</span>SS<span className="brand-sub">AGENT WORKSPACE</span></Link>
     <nav aria-label="主导航"><label className="workspace-picker">空间<select aria-label="切换空间" value={space?.id ?? spaces.data?.[0]?.id ?? ''} disabled={!spaces.data?.length} onChange={event => navigate(spacePath(event.target.value))}>{!spaces.data?.length && <option value="" disabled>{spaces.isPending ? '正在读取空间…' : '暂无空间'}</option>}{spaces.data?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label></nav>
@@ -144,7 +149,8 @@ function SpaceWorkspace({ space, user, pending, error }: { space?: Schema['Space
   if (pending) return <p role="status">正在读取空间…</p>
   if (error) return <p role="alert">{error.message}</p>
   if (!space) return <SpaceUnavailable />
-  return <Routes><Route index element={<SpaceOverview space={space} />} />
+  return <Routes><Route index element={<CreativityHome key={space.id} space={space.id} />} />
+    <Route path="overview" element={<SpaceOverview space={space} />} />
     <Route path="members" element={<Members key={space.id} space={space} user={user} onLeave={() => navigate(workspaceHomePath)} />} />
     <Route path="models" element={<Models key={space.id} space={space} />} />
     <Route path="credentials" element={<Navigate to={spacePath(space.id, 'models')} replace />} />

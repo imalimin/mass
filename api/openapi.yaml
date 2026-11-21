@@ -1611,6 +1611,46 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/DefinitionArchiveInput'
+  /api/v1/spaces/{space_id}/agents/{id}/visibility:
+    put:
+      operationId: setAgentVisibility
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [visibility]
+              properties:
+                visibility:
+                  $ref: '#/components/schemas/AgentVisibility'
+      responses:
+        '200':
+          description: Agent definition with the new visibility. Draft and published versions are unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Definition'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/agents/{id}/default-version:
     put:
       operationId: catalog18
@@ -2660,6 +2700,144 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/DefinitionArchiveInput'
+  /api/v1/spaces/{space_id}/creativity:
+    get:
+      operationId: getCreativityAvailability
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+      responses:
+        '200':
+          description: Whether the configured authoring Agent can start a session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreativityAvailability'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/creativity/sessions:
+    post:
+      operationId: createCreativitySession
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [idempotency_key]
+              properties:
+                idempotency_key:
+                  type: string
+                  pattern: ^[A-Za-z0-9._:-]{1,128}$
+                target_agent_id:
+                  description: Agent to iterate in the current space. Omit when creating a new Agent.
+                  $ref: '#/components/schemas/ShortResourceID'
+      responses:
+        '201':
+          description: A regular conversation with the configured authoring Agent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSession'
+        default:
+          description: Request rejected or authoring Agent unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/creativity/sessions/{session_id}/publish:
+    parameters:
+      - name: space_id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ShortResourceID'
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ShortResourceID'
+    get:
+      operationId: previewCreativityPublish
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: workspace_snapshot_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: model_id
+          in: query
+          description: Current-space model configuration ID. Only accepted if the snapshot has no model binding.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Read-only manifest from the latest committed Run snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreativityPublishManifest'
+        default:
+          description: Run active, snapshot unavailable or not current, or invalid publish files.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: confirmCreativityPublish
+      security:
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [workspace_snapshot_id]
+              properties:
+                workspace_snapshot_id:
+                  type: string
+                  format: uuid
+                model_id:
+                  description: Selected model for an unbound Agent. A saved plan locks this choice for retries.
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Published or reused versions. Retry the same snapshot after partial failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreativityPublishManifest'
+        default:
+          description: Publish failed. Previously saved drafts and published versions remain.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreativityPublishError'
   /api/v1/spaces/{space_id}/sessions:
     post:
       operationId: createSession
@@ -3272,6 +3450,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/sessions/{session_id}/workspace/files:
+    get:
+      operationId: browseWorkspace
+      description: Restores the latest committed Run snapshot locally if the session directory is missing. This does not start a Run or save a new snapshot.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: path
+          in: query
+          description: Workspace-relative path; omit for the root directory.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Immediate directory entries or read-only UTF-8 file preview.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntryView'
+        default:
+          description: Request rejected or path unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/sessions/{session_id}/workspace/restore:
     post:
       operationId: restoreWorkspace
@@ -3805,6 +4018,9 @@ paths:
                 $ref: '#/components/schemas/Error'
 components:
   schemas:
+    AgentVisibility:
+      type: string
+      enum: [space, public]
     Definition:
       type: object
       additionalProperties: false
@@ -3828,6 +4044,8 @@ components:
           type: boolean
         default_version_id:
           type: string
+        visibility:
+          $ref: '#/components/schemas/AgentVisibility'
     DefinitionAsset:
       type: object
       additionalProperties: false
@@ -3912,6 +4130,8 @@ components:
           minimum: 1
         document:
           $ref: '#/components/schemas/DefinitionDocument'
+        visibility:
+          $ref: '#/components/schemas/AgentVisibility'
     DefinitionConfig:
       type: object
       additionalProperties: false
@@ -5002,7 +5222,7 @@ components:
           minimum: 1
         type:
           type: string
-          enum: [session_created, run_accepted, model_step, context_summary, run_finished, attachment_added, workspace_restored]
+          enum: [session_created, run_accepted, model_step, context_summary, run_finished, attachment_added, workspace_restored, creativity_publish_planned]
         role:
           type: string
           enum: [system, user, assistant, tool]
@@ -5037,6 +5257,8 @@ components:
         - heartbeat_at
         - usage
       properties:
+        agent_source_space_id:
+          $ref: '#/components/schemas/ShortResourceID'
         id:
           $ref: '#/components/schemas/ShortResourceID'
         space_id:
@@ -5085,6 +5307,10 @@ components:
           type: string
         workspace_snapshot_committed:
           type: boolean
+        workspace_snapshot_id:
+          type: string
+          format: uuid
+          description: Present only when the Run's workspace snapshot is committed.
         workspace_cleanup:
           type: boolean
         started_at:
@@ -5104,6 +5330,61 @@ components:
             - type: 'null'
         usage:
           $ref: '#/components/schemas/RuntimeUsage'
+    CreativityAvailability:
+      type: object
+      additionalProperties: false
+      required: [available]
+      properties:
+        available:
+          type: boolean
+    CreativityPublishEntry:
+      type: object
+      additionalProperties: false
+      required: [name, action]
+      properties:
+        name:
+          type: string
+        action:
+          type: string
+          enum: [create, update, reference]
+        id:
+          type: string
+        version_id:
+          type: string
+          format: uuid
+        label:
+          type: string
+        status:
+          description: Result of this confirmation attempt; omitted from the preview.
+          type: string
+          enum: [published, referenced, draft_saved, failed, unprocessed, unknown]
+    CreativityPublishManifest:
+      type: object
+      additionalProperties: false
+      required: [agent, skills, model_id]
+      properties:
+        agent:
+          $ref: '#/components/schemas/CreativityPublishEntry'
+        skills:
+          type: array
+          items:
+            $ref: '#/components/schemas/CreativityPublishEntry'
+        model_id:
+          type: string
+          format: uuid
+        model_locked:
+          type: boolean
+          description: The model selected for this snapshot is saved in the publish plan.
+    CreativityPublishError:
+      allOf:
+        - $ref: '#/components/schemas/Error'
+        - type: object
+          properties:
+            details:
+              type: object
+              properties:
+                result:
+                  $ref: '#/components/schemas/CreativityPublishManifest'
     RuntimeSession:
       type: object
       additionalProperties: false
@@ -5122,6 +5403,35 @@ components:
         hide:
           type: boolean
           default: false
+        creativity:
+          type: object
+          additionalProperties: false
+          properties:
+            target_agent_id:
+              $ref: '#/components/schemas/ShortResourceID'
+            target_version_id:
+              type: string
+              format: uuid
+            target_draft_revision:
+              type: integer
+              format: int64
+            skill_bases:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                required: [skill_id, version_id]
+                properties:
+                  skill_id:
+                    $ref: '#/components/schemas/ShortResourceID'
+                  version_id:
+                    type: string
+                    format: uuid
+        agent_source_space_id:
+          $ref: '#/components/schemas/ShortResourceID'
+        agent_name:
+          description: Published Agent name for a cross-space session.
+          type: string
         id:
           $ref: '#/components/schemas/ShortResourceID'
         space_id:
@@ -5261,6 +5571,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RuntimeArtifact'
+    WorkspaceEntryView:
+      type: object
+      additionalProperties: false
+      required: [directory, entries, text]
+      properties:
+        directory:
+          type: boolean
+        entries:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, directory]
+            properties:
+              name:
+                type: string
+              directory:
+                type: boolean
+        text:
+          type: string
+        status:
+          type: string
+          enum: [binary, too_large]
     RuntimeRestored:
       type: object
       additionalProperties: false
@@ -5426,6 +5759,9 @@ components:
           type: string
           pattern: ^[A-Za-z0-9._:-]{1,128}$
         agent_id:
+          $ref: '#/components/schemas/ShortResourceID'
+        agent_source_space_id:
+          description: Optional source of a public Agent. When different from the session space, omit version_id to use its published default.
           $ref: '#/components/schemas/ShortResourceID'
         version_id:
           type: string

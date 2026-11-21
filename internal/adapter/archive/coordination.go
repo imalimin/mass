@@ -138,7 +138,12 @@ func (r *Runtime) CheckRun(ctx context.Context, snapshot run.Snapshot) error {
 	if v.CancelRequested {
 		return run.ErrCancelled
 	}
-	model, err := r.DB.Model(ctx, snapshot.ActorID, snapshot.SpaceID, snapshot.Definition.Model.ID)
+	var model identity.Model
+	if v.AgentSourceSpaceID == "" {
+		model, err = r.DB.Model(ctx, v.ActorID, v.SpaceID, v.Definition.Model.ID)
+	} else {
+		model, err = r.DB.SharedRunModel(ctx, v.ActorID, v.SpaceID, v.AgentSourceSpaceID, v.Definition.Model.ID)
+	}
 	if err != nil {
 		return err
 	}

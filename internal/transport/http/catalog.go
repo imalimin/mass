@@ -227,6 +227,20 @@ func registerCatalog(register func(string, bool, endpoint), registerMedia func(s
 			return svc.Repo.CatalogState(r.Context(), u.ID, r.PathValue("space_id"), kind, r.PathValue("id"), r.PathValue("version_id"), "delete", false)
 		})
 		if kind == "agent" {
+			register("PUT "+base+"/{id}/visibility", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+				var input struct {
+					Visibility catalog.Visibility `json:"visibility"`
+				}
+				if err := decodeBody(w, r, &input); err != nil {
+					return err
+				}
+				definition, err := svc.SetAgentVisibility(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("id"), input.Visibility)
+				if err != nil {
+					return err
+				}
+				writeJSON(w, 200, definition)
+				return nil
+			})
 			register("PUT "+base+"/{id}/default-version", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 				var b struct {
 					VersionID string `json:"version_id"`

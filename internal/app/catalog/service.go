@@ -135,8 +135,18 @@ func (s *Service) Upload(ctx context.Context, actor, space, kind, id, path, medi
 	return s.saveDraft(ctx, actor, space, d, &a, raw)
 }
 func (s *Service) Publish(ctx context.Context, actor, space, kind, id, label string, revision int64, debug bool) (Version, error) {
+	return s.publish(ctx, actor, space, kind, id, label, revision, debug, nil)
+}
+
+func (s *Service) publish(ctx context.Context, actor, space, kind, id, label string, revision int64, debug bool, base *string) (Version, error) {
 	if (!debug && label != "" && !ValidLabel(label)) || (debug && kind != "agent") {
 		return Version{}, ErrConfig
+	}
+	commit := func(v *Version) error {
+		if base != nil {
+			return s.Repo.(projectCatalog).CatalogPublishBasedOn(ctx, actor, space, v, *base)
+		}
+		return s.Repo.CatalogPublish(ctx, actor, space, v)
 	}
 	if kind == "skill" {
 		d, err := s.Draft(ctx, actor, space, kind, id)
@@ -157,7 +167,7 @@ func (s *Service) Publish(ctx context.Context, actor, space, kind, id, label str
 			return Version{}, err
 		}
 		v := Version{ID: uuid.NewString(), DefinitionID: id, Label: label, ContentID: o.ID, SHA256: o.SHA256, CreatedAt: time.Now().UTC().Truncate(time.Microsecond), Bundle: skillBundle(d)}
-		err = s.Repo.CatalogPublish(ctx, actor, space, &v)
+		err = commit(&v)
 		return v, err
 	}
 	b, err := s.Repo.CatalogPrepare(ctx, actor, space, id, revision)
@@ -178,7 +188,7 @@ func (s *Service) Publish(ctx context.Context, actor, space, kind, id, label str
 		label = ""
 	}
 	v := Version{ID: versionID, DefinitionID: id, Label: label, Debug: debug, ContentID: o.ID, SHA256: o.SHA256, CreatedAt: time.Now().UTC().Truncate(time.Microsecond), Bundle: b}
-	err = s.Repo.CatalogPublish(ctx, actor, space, &v)
+	err = commit(&v)
 	return v, err
 }
 func (s *Service) Version(ctx context.Context, actor, space, kind, id, version string) (Version, error) {
@@ -231,6 +241,10 @@ func (s *Service) loadVersion(ctx context.Context, actor, space, kind string, v 
 		return err
 	}
 	defer f.Close()
+	return decodeAgentVersion(f, v)
+}
+
+func decodeAgentVersion(f io.Reader, v *Version) error {
 	raw, err := io.ReadAll(io.LimitReader(f, 1<<20))
 	if err != nil {
 		return err
@@ -272,7 +286,7 @@ func (s *Service) Copy(ctx context.Context, actor, space, kind, id, name string)
 
 func newDefinition(kind, name string) Definition {
 	if kind == "agent" {
-		return Definition{ID: storage.NewShortID(), Kind: kind, Name: name}
+		return Definition{ID: storage.NewShortID(), Kind: kind, Name: name, Visibility: VisibilitySpace}
 	}
 	return Definition{ID: uuid.NewString(), Kind: kind, Name: name}
 }

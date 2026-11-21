@@ -1,11 +1,11 @@
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { agentSessionsPath } from '../../app/routes'
+import { agentSessionsPath, creativitySessionPath } from '../../app/routes'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CORE_SCHEMA, load } from 'js-yaml'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { APIError, list, request, type Schema } from '../../lib/api'
+import { APIError, list, newRequestKey, request, type Schema } from '../../lib/api'
 import { SkillWorkspace, assetPayload, maxResourceBytes, resourceParent, skillDocument } from './SkillWorkspace'
 const CodeEditor = lazy(() => import('./CodeEditor'))
 type Kind = 'agent' | 'skill'
@@ -38,6 +38,31 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
   const [name, setName] = useState('')
   const importInput = useRef<HTMLInputElement>(null)
   const client = useQueryClient(), base = `/spaces/${space.id}/${kind}s`
+  const creativityBase = `/spaces/${space.id}/creativity`
+  const availability = useQuery({
+    queryKey: ['private', space.id, 'creativity'], enabled: kind === 'agent',
+    queryFn: ({ signal }) => request<Schema['CreativityAvailability']>(creativityBase, 'GET', undefined, signal),
+  })
+  const iterationKey = useRef<{ target: string; key: string } | null>(null)
+  const iterate = useMutation({
+    mutationFn: (target: string) => {
+      if (iterationKey.current?.target !== target) iterationKey.current = { target, key: newRequestKey() }
+      return request<Schema['RuntimeSession']>(`${creativityBase}/sessions`, 'POST', {
+        idempotency_key: iterationKey.current.key, target_agent_id: target,
+      })
+    },
+    onSuccess: session => {
+      iterationKey.current = null
+      client.setQueryData(['private', space.id, session.id, 'session'], session)
+      navigate(creativitySessionPath(space.id, session.id))
+    },
+    onError: error => {
+      if (error instanceof APIError && error.code === 'iteration_draft_changed') iterationKey.current = null
+    },
+  })
+  const iterationButton = (id: string, name?: string) => <button type="button" className="secondary"
+    disabled={!availability.data?.available || iterate.isPending} aria-label={name ? `在创意中迭代 ${name}` : undefined}
+    onClick={() => iterate.mutate(id)}>{iterate.isPending && iterate.variables === id ? '正在恢复…' : '在创意中迭代'}</button>
   const query = useQuery({ queryKey: ['private', space.id, kind, 'list'], queryFn: ({ signal }) => list<Schema['Definition']>(base, signal), refetchInterval: q => q.state.error ? false : 5000 })
   const refresh = () => { void client.invalidateQueries({ queryKey: ['private', space.id] }) }
   const select = (id: string) => navigate(`${base}/${id}`)
@@ -46,7 +71,12 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
     mutationFn: (file: File) => request<Draft>(`${base}/import?${new URLSearchParams({ filename: file.name })}`, 'POST', new Blob([file], { type: 'application/zip' })),
     onSuccess: d => { select(d.id); refresh() },
   })
-  return <section className="panel catalog">{selected ? <><Link className="text-link back-link" to={base}>← 返回 {kind === 'skill' ? 'Skills' : 'Agents'} 列表</Link><DefinitionEditor key={`${kind}-${selected}`} space={space.id} kind={kind} id={selected} onCopied={select} refresh={refresh} /></> : <>
+  return <section className="panel catalog">
+    {kind === 'agent' && availability.data && !availability.data.available && <p className="muted">创作 Agent 暂不可用，无法开始创意迭代。</p>}
+    {(iterate.error || availability.error) && <p role="alert">{(iterate.error || availability.error)?.message}</p>}
+    {selected ? <><Link className="text-link back-link" to={base}>← 返回 {kind === 'skill' ? 'Skills' : 'Agents'} 列表</Link>
+    {kind === 'agent' && iterationButton(selected)}
+    <DefinitionEditor key={`${kind}-${selected}`} space={space.id} kind={kind} id={selected} onCopied={select} refresh={refresh} /></> : <>
     <h2>{kind === 'skill' ? 'Skill 方法库' : 'Agent 定义'}</h2><p className="muted">保存草稿后发布独立版本。Agent 始终绑定指定的 Skill 版本。</p>
     <form className="inline-form" onSubmit={e => { e.preventDefault(); create.mutate() }}>
       <label>定义名称<input value={name} onChange={e => setName(e.target.value)} pattern={String.raw`[a-z][a-z0-9_\-]{0,63}`} aria-describedby="definition-name-hint" placeholder="例如 report_writer" required /></label>
@@ -66,6 +96,7 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
     {[query.error, create.error, importSkill.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}
     <div className="definition-list">{query.data?.map(d => kind === 'agent' ? <div className="agent-entry" key={d.id}>
       <Link className="resource-link" to={`${base}/${d.id}`}>{d.name}{d.archived ? '（已归档）' : ''}</Link>
+      {iterationButton(d.id, d.name)}
       <Link className="agent-chat-link" to={agentSessionsPath(space.id, d.id)} aria-label={`打开 ${d.name} 的会话`} title="会话与运行">
         <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 4H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2v3l4-3h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2Z" /><path d="M8 11.5h8" /></svg>
       </Link>
@@ -156,6 +187,14 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
     onError: failed,
   })
   const mutateState = useMutation({ mutationFn: ({ suffix, body }: { suffix: string; body: unknown }) => request(`${base}/${suffix}`, 'PUT', body), onSuccess: async () => { accept(await request<Draft>(`${base}/draft`)); setNotice('状态已更新') } })
+  const visibility = useMutation({
+    mutationFn: (value: Schema['AgentVisibility']) => request<Schema['Definition']>(`${base}/visibility`, 'PUT', { visibility: value }),
+    onSuccess: definition => {
+      setDraft(current => ({ ...current, visibility: definition.visibility }))
+      setNotice('权限范围已更新')
+      refresh()
+    },
+  })
   const copy = useMutation({ mutationFn: () => request<Draft>(`${base}/copy`, 'POST', { name: copyName }), onSuccess: d => { refresh(); onCopied(d.id) } })
   const upload = useMutation({
     mutationFn: async ({ target, bytes, edited, creating }: { target: string; bytes: Blob; edited?: Asset; creating?: boolean }) => {
@@ -216,6 +255,14 @@ function EditorForm({ space, kind, id, initial, refresh, onCopied }: { space: st
     {changed && <p className="muted">请先保存当前修改。</p>}
   </div>
   return <div className="definition-editor"><h3>{draft.name} · {kind === 'agent' ? 'Agent' : 'Skill'}</h3><p className="muted">草稿{kind === 'agent' && ` revision ${draft.revision}`}{changed ? ' · 有未保存修改' : ' · 已保存'}{draft.archived ? ' · 已归档' : ''}</p>
+    {kind === 'agent' && <div className="inline-form">
+      <label>权限范围<select value={draft.visibility ?? 'space'} disabled={pending || visibility.isPending}
+        aria-describedby="agent-visibility-hint" onChange={event => visibility.mutate(event.target.value === 'public' ? 'public' : 'space')}>
+        <option value="space">空间内</option><option value="public">公开</option>
+      </select></label>
+      <p id="agent-visibility-hint" className="muted">设为公开后，其他空间可使用已发布的默认版本。绑定的 Skill 内容可能通过 Agent 输出被其他空间的用户看到。</p>
+      {visibility.error && <p role="alert">{visibility.error.message}</p>}
+    </div>}
     {kind === 'skill' ? <SkillWorkspace space={space} markdown={doc.markdown} assets={doc.assets ?? []} directories={doc.directories} activePath={activePath} edits={resourceEdits}
       documentChanged={documentChanged} pending={pending} archived={draft.archived} previewControl={previewToggle} preview={previewContent}
       uploadForm={uploadForm} onSelect={selectSkillPath} onCreateDirectory={directory => save.mutateAsync({ directory })} onMarkdownChange={changeMarkdown}

@@ -1,20 +1,33 @@
 .agent-conversation-page { max-width: none; min-width: 0; margin: 0; padding: 0; }
+.creativity-home { display: grid; align-content: center; justify-items: center; min-height: min(56vh, 520px); }
+.creativity-home form { display: flex; align-items: flex-end; gap: 10px; width: min(100%, 680px); padding: 12px; border: 1px solid #dce5df; border-radius: 20px; background: #fff; }
+.creativity-home textarea { flex: 1; min-width: 0; min-height: 64px; padding: 6px; border: 0; resize: vertical; background: transparent; }
 .session-workspace {
+  position: relative;
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template: auto minmax(0, 1fr) / minmax(0, 1fr);
   height: 100dvh;
   min-height: 0;
   background: #fff;
 }
 .session-rail {
-  display: flex;
+  display: none;
+  position: absolute;
+  z-index: 3;
+  top: 44px;
+  left: 10px;
+  width: min(270px, calc(100% - 20px));
+  max-height: calc(100% - 54px);
   flex-direction: column;
   min-height: 0;
   min-width: 0;
   padding: 16px 12px;
   background: #f6f8f7;
-  border-right: 1px solid #e3e8e5;
+  border: 1px solid #dce5df;
+  border-radius: 9px;
+  box-shadow: 0 8px 24px #203a2c23;
 }
+.session-rail.is-open { display: flex; }
 .session-rail-top { padding-bottom: 14px; border-bottom: 1px solid #e3e8e5; }
 .session-rail-top a {
   align-items: center;
@@ -25,7 +38,6 @@
   font-weight: 600;
 }
 .session-rail-top a.active { color: #21483a; background: #e1eee7; }
-.session-rail-top .agent-back { margin-bottom: 6px; background: transparent; font-weight: 400; }
 .session-links { overflow: auto; min-height: 0; padding-top: 15px; }
 .session-links h2, .session-links > p { font-size: 12px; margin: 0 9px 7px; color: #566461; }
 .session-links a {
@@ -41,7 +53,21 @@
 .session-links a:is(:hover, .active) { background: #e7eeea; color: #22493b; }
 .session-links a.active { font-weight: 600; }
 .session-links small { color: #8a5840; margin: 3px 0 0; }
-.session-mobile-nav { display: none; }
+.session-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; border-bottom: 1px solid #e3e8e5; }
+.session-toolbar button, .workspace-preview header button { padding: 4px 9px; font-size: 12px; }
+.session-file-layout { display: grid; grid-template-columns: minmax(0, 1fr) clamp(150px, 19vw, 260px); min-height: 0; min-width: 0; }
+.session-file-layout:has(> .workspace-preview) { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) clamp(150px, 19vw, 260px); }
+.workspace-tree, .workspace-preview { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-left: 1px solid #e3e8e5; background: #f8faf9; }
+.workspace-preview { background: #fff; }
+.workspace-tree header, .workspace-preview header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px; min-height: 44px; border-bottom: 1px solid #e3e8e5; }
+.workspace-tree header strong, .workspace-preview header strong { font-size: 13px; overflow-wrap: anywhere; }
+.workspace-preview header button { flex-shrink: 0; }
+.workspace-pane-body { overflow: auto; padding: 8px; font-size: 13px; }
+.workspace-pane-body ul { list-style: none; padding-left: 12px; margin: 0; }
+.workspace-pane-body > ul { padding: 0; }
+.workspace-tree li button { display: block; width: 100%; text-align: left; font-size: inherit; color: #31463d; background: transparent; padding: 4px; border: 0; overflow-wrap: anywhere; }
+.workspace-tree li button:is(:hover, [aria-current]) { background: #e7eeea; }
+.workspace-preview pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .session-loading { padding: 18px 24px; }
 .conversation-page { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 .conversation-header { border-bottom: 1px solid #edf0ef; padding: 13px 24px; min-height: 60px; align-items: center; }
@@ -139,6 +165,8 @@
 .workspace-notice .actions button { padding: 5px 8px; margin: 0; border: 1px solid #e4c4ba; }
 .run-details-dialog { position: fixed; inset: 0 0 0 auto; margin: 0; width: min(560px, 100vw); height: 100dvh; max-width: none; max-height: none; padding: 20px; border: 0; border-left: 1px solid #dce5df; overflow: auto; color: #26313a; }
 .run-details-dialog::backdrop { background: #14202b55; }
+.creativity-publish-dialog { inset: 0; margin: auto; width: min(530px, calc(100vw - 32px)); height: max-content; max-height: calc(100dvh - 32px); border: 1px solid #dce5df; border-radius: 12px; }
+.creativity-publish-dialog li { margin: 8px 0; overflow-wrap: anywhere; }
 .run-details-dialog header { margin-bottom: 16px; }
 .run-details-dialog h2 { margin: 0; }
 .run-details-dialog .trace { margin-top: 16px; }
@@ -151,16 +179,9 @@
 .run-copy-id { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .run-copy-id code { min-width: 0; }
 .run-copy-id button { padding: 4px 8px; font-size: 12px; }
-@media (max-width: 1080px) and (min-width: 701px) {
-  .session-workspace { grid-template-columns: 170px minmax(0, 1fr); }
-}
 @media (max-width: 700px) {
-  .session-workspace { position: relative; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  .session-mobile-nav { display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; }
-  .session-mobile-nav button { padding: 4px 9px; font-size: 12px; }
-  .session-rail-top .agent-back { display: none; }
-  .session-rail { display: none; position: absolute; z-index: 3; top: 35px; left: 10px; width: min(270px, calc(100% - 20px)); max-height: calc(100% - 45px); border: 1px solid #dce5df; border-radius: 9px; box-shadow: 0 8px 24px #203a2c23; }
-  .session-rail.is-open { display: flex; }
+  .session-file-layout, .session-file-layout:has(> .workspace-preview) { position: relative; grid-template-columns: minmax(0, 1fr) minmax(92px, 26vw); }
+  .workspace-preview { position: absolute; inset: 0; z-index: 2; }
   .conversation-header { min-height: 48px; padding: 8px 12px; gap: 7px; }
   .conversation-header h1 { font-size: 15px; }
   .conversation-actions { gap: 4px 8px; }

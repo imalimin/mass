@@ -62,6 +62,11 @@ func (c *Catalog) load(ctx context.Context, space string) (catalogIndex, error) 
 	if errors.Is(err, storage.ErrBlobNotFound) {
 		err = nil
 	}
+	for _, definition := range index {
+		if definition != nil && definition.Kind == "agent" && definition.Visibility == "" {
+			definition.Visibility = catalog.VisibilitySpace
+		}
+	}
 	return index, err
 }
 
@@ -82,9 +87,12 @@ func (c *Catalog) save(ctx context.Context, actor, space, action, target string,
 	}
 	_, err = c.Blobs.Overwrite(ctx, Key(c.Prefix, space, "catalog.json"), bytes.NewReader(raw), int64(len(raw)), "application/json")
 	if err != nil {
-		return err
+		return &catalog.IndexWriteError{Err: err}
 	}
-	return c.Audit(ctx, actor, space, action, target)
+	if err := c.Audit(ctx, actor, space, action, target); err != nil {
+		return &catalog.IndexWriteError{Err: err, Committed: true}
+	}
+	return nil
 }
 
 func findDefinition(index catalogIndex, kind, id string) (*definition, error) {
@@ -132,6 +140,9 @@ func (c *Catalog) CatalogCreate(ctx context.Context, actor, space string, input 
 	index, err := c.authorized(ctx, actor, space)
 	if err != nil {
 		return err
+	}
+	if index[input.ID] != nil {
+		return identity.ErrConflict
 	}
 	for _, d := range index {
 		if d.Kind == input.Kind && d.Name == input.Name {
@@ -188,6 +199,14 @@ func (c *Catalog) CatalogDraft(ctx context.Context, actor, space, kind, id strin
 }
 
 func (c *Catalog) CatalogSave(ctx context.Context, actor, space string, input catalog.Draft) error {
+	return c.saveDraft(ctx, actor, space, input, nil)
+}
+
+func (c *Catalog) CatalogSaveBasedOn(ctx context.Context, actor, space string, input catalog.Draft, base string) error {
+	return c.saveDraft(ctx, actor, space, input, &base)
+}
+
+func (c *Catalog) saveDraft(ctx context.Context, actor, space string, input catalog.Draft, base *string) error {
 	defer c.lock(space)()
 	index, err := c.authorized(ctx, actor, space)
 	if err != nil {
@@ -197,7 +216,7 @@ func (c *Catalog) CatalogSave(ctx context.Context, actor, space string, input ca
 	if err != nil {
 		return err
 	}
-	if input.Revision != d.Revision {
+	if input.Revision != d.Revision || !matchesFormalBase(d, base) {
 		return catalog.ErrDraft
 	}
 	if d.Archived {
@@ -231,8 +250,7 @@ func (c *Catalog) prepare(ctx context.Context, actor, space string, d *definitio
 	if err != nil {
 		return catalog.Bundle{}, err
 	}
-	if !model.Enabled || model.Provider != "ark" || cfg.Context.MaxInputTokens+cfg.Context.MaxTokens > model.ContextWindow ||
-		cfg.Context.MaxTokens > model.MaxOutputTokens {
+	if !cfg.SupportsModel(model) {
 		return catalog.Bundle{}, identity.ErrCapability
 	}
 	b := catalog.Bundle{FormatVersion: 1, Kind: d.Kind, DefinitionID: d.ID, Name: d.Name, Revision: d.Revision, Document: draft.Document,
@@ -280,6 +298,14 @@ func nextLabel(versions []*version) string {
 }
 
 func (c *Catalog) CatalogPublish(ctx context.Context, actor, space string, input *catalog.Version) error {
+	return c.publish(ctx, actor, space, input, nil)
+}
+
+func (c *Catalog) CatalogPublishBasedOn(ctx context.Context, actor, space string, input *catalog.Version, base string) error {
+	return c.publish(ctx, actor, space, input, &base)
+}
+
+func (c *Catalog) publish(ctx context.Context, actor, space string, input *catalog.Version, base *string) error {
 	defer c.lock(space)()
 	index, err := c.authorized(ctx, actor, space)
 	if err != nil {
@@ -290,7 +316,7 @@ func (c *Catalog) CatalogPublish(ctx context.Context, actor, space string, input
 	if err != nil {
 		return err
 	}
-	if d.Revision != b.Revision || d.Archived {
+	if d.Revision != b.Revision || d.Archived || !matchesFormalBase(d, base) {
 		return catalog.ErrDraft
 	}
 	ref := d.Draft
@@ -378,6 +404,45 @@ func (c *Catalog) CatalogVersions(ctx context.Context, actor, space, kind, id st
 		}
 	}
 	return catalogPage(items, q.Limit, func(v catalog.Version) string { return v.ID }), nil
+}
+
+func (c *Catalog) LatestFormalVersion(ctx context.Context, actor, space, kind, id string) (catalog.Version, bool, error) {
+	index, err := c.authorized(ctx, actor, space)
+	if err != nil {
+		return catalog.Version{}, false, err
+	}
+	d, err := findDefinition(index, kind, id)
+	if err != nil {
+		return catalog.Version{}, false, err
+	}
+	latest, published := latestFormal(d)
+	if d.Kind == "skill" && d.Archived {
+		return catalog.Version{}, published, nil
+	}
+	return latest, published, nil
+}
+
+func matchesFormalBase(d *definition, base *string) bool {
+	if base == nil {
+		return true
+	}
+	latest, published := latestFormal(d)
+	return latest.ID == *base && (*base != "" || !published)
+}
+
+func latestFormal(d *definition) (catalog.Version, bool) {
+	var latest catalog.Version
+	var published bool
+	for _, candidate := range d.Versions {
+		if candidate.Debug {
+			continue
+		}
+		published = true
+		if !candidate.Archived && (latest.ID == "" || !candidate.CreatedAt.Before(latest.CreatedAt)) {
+			latest = candidate.metadata(d.ID)
+		}
+	}
+	return latest, published
 }
 
 func (c *Catalog) references(ctx context.Context, index catalogIndex, skillVersion string) ([]catalog.Reference, error) {

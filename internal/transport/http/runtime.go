@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"mime"
@@ -39,15 +40,17 @@ type RuntimeRepository interface {
 	RuntimeCleanupPlan(context.Context, string, string, string) (run.CleanupPlan, error)
 }
 type RuntimeOptions struct {
-	DiagnosticLog *diagnostic.Store
-	Service       *sessionapp.Service
-	Repo          RuntimeRepository
-	UI            *agui.Projector
-	Trace         *trace.Archive
-	Workspaces    *resource.RunWorkspaces
-	Snapshots     *resource.SnapshotStore
-	Finisher      *resource.Finisher
-	Cancel        func(string)
+	CreativityAgentID    string
+	CreativityAgentSpace string
+	DiagnosticLog        *diagnostic.Store
+	Service              *sessionapp.Service
+	Repo                 RuntimeRepository
+	UI                   *agui.Projector
+	Trace                *trace.Archive
+	Workspaces           *resource.RunWorkspaces
+	Snapshots            *resource.SnapshotStore
+	Finisher             *resource.Finisher
+	Cancel               func(string)
 }
 
 type runResponse struct {
@@ -64,9 +67,17 @@ type sessionResponse struct {
 
 func (r *RuntimeOptions) runResponse(v run.View) any {
 	if _, ok := r.Repo.(sessionDiagnostics); ok {
-		return runResponse{View: v, SnapshotCommitted: v.WorkspaceSnapshotID != "" && v.FinishedAt != nil}
+		return committedRunResponse(v)
 	}
 	return v
+}
+
+func committedRunResponse(v run.View) runResponse {
+	response := runResponse{View: v, SnapshotCommitted: v.WorkspaceSnapshotID != "" && v.FinishedAt != nil}
+	if response.SnapshotCommitted {
+		response.SnapshotID = &v.WorkspaceSnapshotID
+	}
+	return response
 }
 
 func (r *RuntimeOptions) sessionResponse(v run.Session) any {
@@ -111,6 +122,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 	}
 	svc := runtime.Service
 	base := "/api/v1/spaces/{space_id}"
+	registerCreativity(register, options, base)
 	register("POST "+base+"/sessions/{session_id}/attachments", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		var b struct {
 			Name      string `json:"name"`
@@ -186,6 +198,29 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		writeJSON(w, 200, runtime.sessionResponse(v))
 		return nil
 	})
+	register("GET "+base+"/sessions/{session_id}/workspace/files", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		space, session := r.PathValue("space_id"), r.PathValue("session_id")
+		viewSession, err := svc.Repo.RuntimeSession(r.Context(), u.ID, space, session)
+		if err != nil {
+			return err
+		}
+		if err := svc.PrepareIteration(r.Context(), u.ID, viewSession); err != nil {
+			return err
+		}
+		path := r.URL.Query().Get("path")
+		if path == "" {
+			path = "."
+		}
+		view, err := runtime.Workspaces.Browse(r.Context(), u.ID, viewSession, path, runtime.Snapshots)
+		if errors.Is(err, storage.ErrBlobNotFound) {
+			return identity.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		writeJSON(w, 200, view)
+		return nil
+	})
 	register("POST "+base+"/sessions/{session_id}/runs", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		var b sessionapp.SubmitInput
 		if err := decodeCatalog(w, r, &b, 1<<20); err != nil {
@@ -211,7 +246,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if _, ok := runtime.Repo.(sessionDiagnostics); ok {
 			output := make([]runResponse, 0, len(page.Items))
 			for _, item := range page.Items {
-				output = append(output, runResponse{View: item, SnapshotCommitted: item.WorkspaceSnapshotID != "" && item.FinishedAt != nil})
+				output = append(output, committedRunResponse(item))
 			}
 			writeJSON(w, 200, map[string]any{"items": output, "next_cursor": page.NextCursor})
 		} else {

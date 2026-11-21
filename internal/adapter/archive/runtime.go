@@ -44,17 +44,18 @@ type Runtime struct {
 
 type conversation struct {
 	sync.Mutex
-	loaded      bool
-	records     []json.RawMessage
-	session     run.Session
-	definition  run.Definition
-	runs        map[string]*runState
-	events      []journal.Event
-	attachments map[string]run.Attachment
-	blobs       map[string]Ref
-	snapshots   map[string]storage.Snapshot
-	maintenance bool
-	active      string
+	loaded       bool
+	records      []json.RawMessage
+	session      run.Session
+	definition   run.Definition
+	runs         map[string]*runState
+	events       []journal.Event
+	attachments  map[string]run.Attachment
+	blobs        map[string]Ref
+	snapshots    map[string]storage.Snapshot
+	publishPlans map[string]run.CreativityPublishPlan
+	maintenance  bool
+	active       string
 }
 
 type runState struct {
@@ -271,6 +272,12 @@ func (r *Runtime) rehydrate(s *conversation, records []json.RawMessage) error {
 			e := journal.New(s.session.ActorID, "workspace.restored", d.RunID, journal.RestoreData{SnapshotID: d.SnapshotID, Reason: d.Reason})
 			e.EventID, e.OccurredAt = d.EventID, d.OccurredAt
 			s.append(e)
+		case sessionlog.PublishPlanned:
+			var entry sessionlog.Planned
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return err
+			}
+			s.rememberPublishPlan(entry.Plan)
 		}
 	}
 	return nil
@@ -294,9 +301,11 @@ func (r *Runtime) restoreCreated(s *conversation, d sessionlog.Created) {
 	s.definition = d.Definition.Runtime(d.AgentID, d.VersionID)
 	ref := r.remember(d.SpaceID, stable(d.SessionID, "definition"), "session.definition", s.definition)
 	ref.Role = "definition"
-	s.session = run.Session{ID: d.SessionID, SpaceID: d.SpaceID, ActorID: d.ActorID, Title: d.Title,
+	s.session = run.Session{ID: d.SessionID, SpaceID: d.SpaceID, ActorID: d.ActorID, Title: d.Title, Creativity: d.Creativity,
+		AgentSourceSpaceID: d.AgentSourceSpaceID, AgentName: d.AgentName,
 		DefinitionID: d.AgentID, VersionID: d.VersionID, DefinitionRef: ref, CreatedAt: d.CreatedAt}
-	e := journal.New(d.ActorID, "session.created", "", journal.SessionData{DefinitionRef: &ref,
+	e := journal.New(d.ActorID, "session.created", "", journal.SessionData{DefinitionRef: &ref, Creativity: d.Creativity,
+		AgentSourceSpaceID: d.AgentSourceSpaceID, AgentName: d.AgentName,
 		DefinitionID: d.AgentID, VersionID: d.VersionID, Title: d.Title}, ref)
 	e.EventID, e.OccurredAt = d.EventID, d.CreatedAt
 	s.append(e)
@@ -322,7 +331,8 @@ func (r *Runtime) restoreAccepted(s *conversation, d sessionlog.Accepted) {
 		def.Skills[i].Markdown, def.Skills[i].Resources = "", nil
 	}
 	v := run.Snapshot{ID: d.RunID, SpaceID: s.session.SpaceID, SessionID: s.session.ID, ActorID: d.ActorID,
-		DefinitionRef: s.session.DefinitionRef, UserEventID: d.UserEventID, WorkspaceCleanup: d.WorkspaceCleanup, Definition: def, Build: d.Execution.Build,
+		AgentSourceSpaceID: s.session.AgentSourceSpaceID,
+		DefinitionRef:      s.session.DefinitionRef, UserEventID: d.UserEventID, WorkspaceCleanup: d.WorkspaceCleanup, Definition: def, Build: d.Execution.Build,
 		Profile: "mass-agui-v1", MapperVersion: 1, ParserVersion: 1, CreatedAt: d.AcceptedAt}
 	if d.BaseSnapshotID != nil {
 		v.BaseSnapshotID = *d.BaseSnapshotID

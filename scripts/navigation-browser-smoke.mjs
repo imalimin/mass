@@ -13,15 +13,19 @@ const sessions = [
   { id: 'session-two', definition_id: 'definition-one' },
   { id: 'session-three', definition_id: 'definition-two' },
 ].map(s => ({ ...s, space_id: 'space-one', title: '旧会话名称', version_id: 'version-one', workspace_error: '', created_at: '2026-10-25T00:00:00Z' }))
+sessions.push({ ...sessions[0], id: 'session-shared', title: 'session-shared', space_id: 'space-two', agent_source_space_id: 'space-one', agent_name: 'report-agent' })
 const usage = { input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_write_tokens: null }
+const creativitySnapshot = '02c1a2c3-dc3c-4ab2-8724-d7f2a68bf755'
+const publishModel = { id: 'd8626872-6a61-44ae-95f7-50db3ec58caf', name: '发布测试模型' }
 const runs = ['run-one', 'run-two'].map((id, i) => ({ id, session_id: 'session-one', created_at: `2026-10-25T00:00:0${i}Z`, status: 'succeeded', usage, error: '', workspace_snapshot_id: '' }))
 const messages = Array.from({ length: 32 }, (_, index) => {
   const sequence = String(index + 1)
   return { id: `message-${sequence}`, run_id: '', source_event_id: `event-${sequence}`, sequence, role: index % 2 ? 'assistant' : 'user', content: `会话消息 ${sequence}`, truncated: false }
 })
 const pageOf = items => ({ items, next_cursor: null, has_more: false, next_after: '0' })
-let signedIn = true, createdSpaces = 0, firstRunRejected = false
-const requests = [], unexpected = [], models = [], modelKeys = new Map()
+let signedIn = true, createdSpaces = 0, firstRunRejected = false, agentVisibility = 'space'
+let publishCalls = 0, pendingModelSelection = false
+const requests = [], unexpected = [], models = [], modelKeys = new Map(), creativePrompts = []
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost'), path = url.pathname
   const json = (body, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)) }
@@ -42,7 +46,7 @@ const server = createServer(async (req, res) => {
     if (path.endsWith('/members') && req.method === 'POST') return json({ code: 'forbidden' }, 403)
     if (path.endsWith('/members')) return json(pageOf([{ id: 'alice', username: 'alice', is_owner: true }]))
     if (/\/models(?:\/[^/]+)?$/.test(path)) {
-      if (req.method === 'GET') return json(pageOf(models))
+      if (req.method === 'GET') return json(pageOf(pendingModelSelection && url.searchParams.has('available') ? [publishModel] : models))
       let raw = ''; for await (const chunk of req) raw += chunk
       const body = JSON.parse(raw), id = path.endsWith('/models') ? `model-${models.length + 1}` : path.split('/').at(-1)
       assert.ok(!('credential_id' in body) && !('endpoint' in body), 'UI retained separate credential binding')
@@ -65,7 +69,28 @@ const server = createServer(async (req, res) => {
     ]))
     if (path.endsWith('/definition-one/debug-snapshots')) return json(pageOf([{ id: 'debug-one', debug: true, created_at: '2026-10-27T00:00:00Z' }]))
     if (/\/(versions|debug-snapshots)$/.test(path)) return json(pageOf([]))
-    if (path.endsWith('/draft')) return json({ id: path.split('/').at(-2), kind: path.includes('/agents/') ? 'agent' : 'skill', name: path.includes('definition-two') ? 'other-agent' : path.includes('/agents/') ? 'report-agent' : 'extract-skill', revision: 1, default_version_id: 'version-one', archived: false, document: { markdown: '# Navigation fixture', config_yaml: '{}', assets: [] } })
+    if (path.endsWith('/agents/definition-one/visibility') && req.method === 'PUT') {
+      let body = ''; for await (const chunk of req) body += chunk
+      agentVisibility = JSON.parse(body).visibility
+      return json({ visibility: agentVisibility })
+    }
+    if (path.endsWith('/draft')) return json({ id: path.split('/').at(-2), kind: path.includes('/agents/') ? 'agent' : 'skill', name: path.includes('definition-two') ? 'other-agent' : path.includes('/agents/') ? 'report-agent' : 'extract-skill', revision: 1, default_version_id: 'version-one', archived: false, visibility: agentVisibility, document: { markdown: '# Navigation fixture', config_yaml: '{}', assets: [] } })
+    if (path.endsWith('/creativity')) return json({ available: path.includes('/space-one/') })
+    if (path.endsWith('/creativity/sessions') && req.method === 'POST') {
+      let body = ''; for await (const chunk of req) body += chunk
+      const input = JSON.parse(body)
+      if (input.target_agent_id) {
+        assert.equal(input.target_agent_id, 'definition-one')
+        assert.ok(input.idempotency_key)
+        const session = { ...sessions[0], id: 'session-iterate', title: 'session-iterate', creativity: { target_agent_id: input.target_agent_id, target_version_id: 'version-two' } }
+        sessions.push(session)
+        return json(session, 201)
+      }
+      assert.deepEqual(Object.keys(input), ['idempotency_key']); assert.ok(input.idempotency_key)
+      const session = { ...sessions[0], id: 'session-creative', title: 'session-creative', creativity: {} }
+      sessions.push(session)
+      return json(session, 201)
+    }
     if (path.endsWith('/sessions') && req.method === 'POST') {
       let body = ''; for await (const chunk of req) body += chunk
       const input = JSON.parse(body)
@@ -76,7 +101,7 @@ const server = createServer(async (req, res) => {
       sessions.push(session)
       return json(session, 201)
     }
-    if (path.endsWith('/sessions')) return json(pageOf(sessions.filter(s => s.definition_id === path.split('/').at(-2))))
+    if (path.endsWith('/sessions')) return json(pageOf(sessions.filter(s => s.space_id === path.split('/')[4] && s.definition_id === path.split('/').at(-2))))
     if (path.endsWith('/messages')) {
       const all = path.includes('session-one') ? messages : [], before = Number(url.searchParams.get('before_sequence'))
       const eligible = all.filter(m => !before || Number(m.sequence) < before), limit = Number(url.searchParams.get('limit')) || 20
@@ -84,7 +109,43 @@ const server = createServer(async (req, res) => {
       return json({ items, has_more: eligible.length > limit, next_after: items.at(-1)?.sequence ?? '0' })
     }
     if (path.endsWith('/workspace-snapshots')) return json({ items: [] })
-    if (/\/sessions\/session-(one|two|three|new)$/.test(path)) return json(sessions.find(s => path.endsWith(s.id)))
+    if (path.endsWith('/workspace/files')) {
+      const entry = url.searchParams.get('path')
+      if (entry === '.') return json({ directory: true, entries: [{ name: 'AGENTS.md', directory: false }, { name: 'skills', directory: true }] })
+      if (entry === 'AGENTS.md') return json({ directory: false, text: '# Navigation fixture' })
+      if (entry === 'skills') return json({ directory: true, entries: [{ name: 'report-writer', directory: true }] })
+      if (entry === 'skills/report-writer') return json({ directory: true, entries: [{ name: 'SKILL.md', directory: false }] })
+      if (entry === 'skills/report-writer/SKILL.md') return json({ directory: false, text: '# Report writer' })
+    }
+    if (/\/sessions\/session-(one|two|three|new|creative|shared|iterate)$/.test(path)) return json(sessions.find(s => path.endsWith(s.id)))
+    if (path.endsWith('/session-creative/runs') && req.method === 'POST') {
+      let body = ''; for await (const chunk of req) body += chunk
+      creativePrompts.push(JSON.parse(body))
+      const run = { ...runs[0], id: 'run-creative', session_id: 'session-creative', user_event_id: 'creative-message', workspace_snapshot_committed: true, workspace_snapshot_id: creativitySnapshot }
+      runs.push(run)
+      return json(run, 202)
+    }
+    if (path.endsWith('/session-creative/publish')) {
+      const manifest = { model_id: publishModel.id, model_locked: publishCalls > 0, agent: { name: 'report-agent', action: 'create' }, skills: [{ name: 'report-writer', action: 'update' }] }
+      if (req.method === 'GET') {
+        assert.equal(url.searchParams.get('workspace_snapshot_id'), creativitySnapshot)
+        if (!url.searchParams.has('model_id') && !publishCalls) {
+          pendingModelSelection = true
+          return json({ code: 'publish_model_required' }, 400)
+        }
+        assert.ok(publishCalls > 0 || url.searchParams.get('model_id') === publishModel.id)
+        return json(manifest)
+      }
+      let body = ''; for await (const chunk of req) body += chunk
+      assert.deepEqual(JSON.parse(body), { workspace_snapshot_id: creativitySnapshot, ...(publishCalls ? {} : { model_id: publishModel.id }) })
+      const skills = [{ ...manifest.skills[0], label: 'v2', status: 'published' }]
+      if (++publishCalls === 1) return json({
+        code: 'content_unavailable', message: 'Agent report-agent：Content unavailable',
+        details: { result: { ...manifest, model_locked: true, agent: { ...manifest.agent, status: 'draft_saved' }, skills } },
+      }, 503)
+      pendingModelSelection = false
+      return json({ ...manifest, agent: { ...manifest.agent, label: 'v1', status: 'published' }, skills })
+    }
     if (path.endsWith('/session-new/runs') && req.method === 'POST') {
       if (!firstRunRejected) {
         firstRunRejected = true
@@ -95,8 +156,8 @@ const server = createServer(async (req, res) => {
       return json(run, 202)
     }
     if (path.endsWith('/runs')) return json(pageOf(runs.filter(r => path.endsWith('/' + r.session_id + '/runs'))))
-    if (/\/runs\/run-(one|two|new)$/.test(path)) return json(runs.find(r => path.endsWith(r.id)))
-    if (path.endsWith('/ui-snapshot')) return json({ session_id: path.includes('/run-new/') ? 'session-new' : 'session-one', cursor: '0', source_sequence: '0', protocol_profile: 'mass-agui-v1', mapper_version: 1, parser_version: 1, closed: true, state: { status: 'succeeded', cancel_requested: false, error: '', usage, messages: [], tools: [], artifacts: [] } })
+    if (/\/runs\/run-(one|two|new|creative)$/.test(path)) return json(runs.find(r => path.endsWith(r.id)))
+    if (path.endsWith('/ui-snapshot')) return json({ session_id: runs.find(r => path.includes(`/${r.id}/`))?.session_id, cursor: '0', source_sequence: '0', protocol_profile: 'mass-agui-v1', mapper_version: 1, parser_version: 1, closed: true, state: { status: 'succeeded', cancel_requested: false, error: '', usage, messages: [], tools: [], artifacts: [] } })
     unexpected.push(path); return json({ code: 'not_found' }, 404)
   }
   try {
@@ -114,12 +175,63 @@ try {
   const errors = []; page.on('pageerror', e => errors.push(e.message))
   const nav = label => page.locator('.app-sidebar').getByRole('link', { name: label, exact: true })
   const heading = text => expect(page.getByRole('heading', { level: 1 })).toHaveText(text)
+  const openHistory = () => page.getByRole('button', { name: '会话列表', exact: true }).click()
   // The oldest space is deliberately on the second API page and has a later ID.
-  await page.goto(url + '/'); await heading('空间概览'); await expect(page).toHaveURL(url + '/spaces/space-two')
+  await page.goto(url + '/'); await heading('创意'); await expect(page).toHaveURL(url + '/spaces/space-two')
+  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
   await expect(page.getByLabel('切换空间')).toHaveValue('space-two')
+  const beforeSharedSession = requests.length
+  await page.goto(url + '/spaces/space-two/agents/definition-one/sessions/session-shared')
+  await heading('session-shared'); await expect(page.getByLabel('输入任务')).toBeVisible()
+  assert.ok(!requests.slice(beforeSharedSession).some(path => path.endsWith('/draft')), 'shared session requested a draft')
   await page.goto(url + '/login'); await expect(page).toHaveURL(url + '/spaces/space-two')
   await page.goto(url + '/spaces?space=space-one')
-  await expect(page).toHaveURL(url + '/spaces/space-one'); await heading('空间概览')
+  await expect(page).toHaveURL(url + '/spaces/space-one'); await heading('创意')
+  await page.getByLabel('新建 Agent 的要求').fill('做一个报告 Agent')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page).toHaveURL(url + '/spaces/space-one/creativity/sessions/session-creative')
+  await expect(page.getByText('做一个报告 Agent', { exact: true })).toHaveCount(1)
+  await expect(page.getByRole('navigation', { name: '会话列表' })).toHaveCount(0)
+  await page.reload(); await heading('session-creative')
+  await page.getByLabel('输入任务').fill('继续调试')
+  await page.getByRole('button', { name: 'skills', exact: true }).click()
+  await page.getByRole('button', { name: 'report-writer', exact: true }).click()
+  await page.getByRole('button', { name: 'SKILL.md', exact: true }).click()
+  await expect(page.getByRole('region', { name: '只读文件预览' })).toContainText('# Report writer')
+  await page.getByRole('button', { name: 'AGENTS.md' }).click()
+  await expect(page.getByRole('region', { name: '只读文件预览' })).toContainText('# Navigation fixture')
+  await page.getByRole('button', { name: '关闭预览', exact: true }).click()
+  await expect(page.getByRole('region', { name: '只读文件预览' })).toHaveCount(0)
+  await expect(page.getByLabel('输入任务')).toHaveValue('继续调试')
+  await expect(page.getByRole('button', { name: 'SKILL.md', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '去发布', exact: true }).click()
+  const publishDialog = page.getByRole('dialog', { name: '发布 Agent 和 Skills' })
+  await expect(publishDialog.getByLabel('发布模型')).toBeVisible()
+  await expect(publishDialog.getByRole('button', { name: '确认发布' })).toBeDisabled()
+  await expect(publishDialog.getByRole('list')).toHaveCount(0)
+  await publishDialog.getByLabel('发布模型').selectOption(publishModel.id)
+  await expect(publishDialog).toContainText('report-writer — 编辑并发新版')
+  await expect(publishDialog.locator('input, textarea')).toHaveCount(0)
+  await publishDialog.getByRole('button', { name: '确认发布' }).click()
+  await expect(publishDialog.getByRole('alert')).toContainText('Agent report-agent')
+  await expect(publishDialog).toContainText('report-agent — 草稿已保存，未发布')
+  await expect(publishDialog).toContainText('report-writer — 已发布 · v2')
+  await expect(publishDialog.getByLabel('发布模型')).toHaveCount(0)
+  await expect(publishDialog).toContainText('本次发布已固定模型：')
+  await publishDialog.getByRole('button', { name: '重试发布' }).click()
+  await expect(publishDialog).toContainText('report-agent — 已发布 · v1')
+  await expect(publishDialog).toContainText('report-writer — 已发布 · v2')
+  await expect(publishDialog).toContainText('发布完成')
+  await publishDialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await expect(page.getByLabel('输入任务')).toHaveValue('继续调试')
+  await expect(page.getByRole('button', { name: 'SKILL.md', exact: true })).toBeVisible()
+  assert.equal(creativePrompts.length, 1)
+  assert.equal(creativePrompts[0].text, '做一个报告 Agent')
+  assert.ok(creativePrompts[0].idempotency_key)
+  await page.getByRole('link', { name: '← 创意' }).click(); await heading('创意')
+  await nav('空间概览').click(); await heading('空间概览')
+  await expect(page).toHaveURL(url + '/spaces/space-one/overview')
+  await nav('创意').click(); await heading('创意')
   await expect(page.getByLabel('新空间名称')).toHaveCount(0)
   await expect(page.getByLabel('已有账号用户名')).toHaveCount(0)
   const settings = page.getByRole('button', { name: '账号设置', exact: true })
@@ -165,10 +277,26 @@ try {
   await expect(page.getByLabel('定义名称')).toHaveCount(0)
   await page.reload(); await page.getByRole('heading', { name: 'extract-skill · Skill' }).waitFor()
   await nav('Agents').click(); await page.getByRole('link', { name: 'report-agent', exact: true }).click(); await page.getByRole('heading', { name: 'report-agent · Agent' }).waitFor()
+  await expect(page.getByLabel('权限范围')).toHaveValue('space')
+  await page.getByLabel('权限范围').selectOption('public')
+  await expect(page.getByText('权限范围已更新')).toBeVisible()
+  await expect(page.getByLabel('权限范围')).toHaveValue('public')
   await expect(nav('会话与运行')).toHaveCount(0)
+  await page.getByRole('button', { name: '在创意中迭代', exact: true }).click()
+  await expect(page).toHaveURL(url + '/spaces/space-one/creativity/sessions/session-iterate')
+  await expect(page.getByText('正在迭代：report-agent')).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '会话列表' })).toHaveCount(0)
+  await expect(page.getByLabel('输入任务')).toHaveValue('')
+  await expect(page.getByRole('button', { name: '去发布', exact: true })).toBeDisabled()
+  await page.getByRole('button', { name: 'AGENTS.md' }).click()
+  await expect(page.getByRole('region', { name: '只读文件预览' })).toContainText('# Navigation fixture')
+  await page.reload()
+  await expect(page.getByText('正在迭代：report-agent')).toBeVisible()
+  await page.getByRole('link', { name: '← 创意' }).click()
   await nav('Agents').click()
   await page.getByRole('link', { name: '打开 other-agent 的会话', exact: true }).click()
   await expect(page.locator('.app-sidebar')).toHaveCount(0)
+  await openHistory()
   await expect(page.getByRole('link', { name: 'session-three', exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: 'session-one', exact: true })).toHaveCount(0)
   await page.goto(url + '/spaces/space-one/agents/definition-two/sessions/session-one')
@@ -194,15 +322,19 @@ try {
   await expect(page.getByRole('heading', { name: 'session-new', exact: true })).toBeVisible()
   await expect(page.getByText('First message', { exact: true })).toHaveCount(1)
   await expect(page.getByLabel('Agent 版本')).toHaveCount(0)
+  await openHistory()
   await page.getByRole('link', { name: '新建会话', exact: true }).click()
   await expect(page.getByLabel('输入任务')).toHaveValue('')
   await expect(page.getByLabel('Agent 版本')).toHaveValue('version-two')
   await page.goto(url + '/spaces/space-one/agents/definition-one/sessions?version=debug-one')
   await expect(page.getByLabel('Agent 版本')).toHaveValue('debug-one')
+  await openHistory()
   await page.getByRole('link', { name: 'session-one', exact: true }).click()
   await expect(page.getByLabel('Agent 版本')).toHaveCount(0)
   await expect(page).toHaveURL(url + '/spaces/space-one/agents/definition-one/sessions/session-one'); await page.getByRole('heading', { name: 'session-one', exact: true }).waitFor()
+  await openHistory()
   await expect(page.getByRole('link', { name: 'session-one', exact: true })).toHaveAttribute('aria-current', 'page')
+  await openHistory()
   await expect(page.getByText('会话消息 32', { exact: true })).toBeVisible()
   await expect(page.getByText('会话消息 1', { exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: '加载更早的消息', exact: true }).click()
@@ -219,7 +351,7 @@ try {
   await page.reload(); await expect(page.getByLabel('查看运行')).toHaveValue('run-one')
   await page.goto(url + '/spaces?space=space-one&session=session-one&run=run-two')
   await expect(page).toHaveURL(url + '/spaces/space-one/agents/definition-one/sessions/session-one?run=run-two'); await expect(page.getByLabel('查看运行')).toHaveValue('run-two')
-  await page.keyboard.press('Escape'); await page.getByRole('link', { name: 'session-two', exact: true }).click()
+  await page.keyboard.press('Escape'); await openHistory(); await page.getByRole('link', { name: 'session-two', exact: true }).click()
   await page.getByRole('heading', { name: 'session-two', exact: true }).waitFor(); await expect(page).not.toHaveURL(/\?run=/)
   await page.setViewportSize({ width: 390, height: 844 })
   await expect(page.getByRole('navigation', { name: '会话列表' })).toBeHidden()
@@ -232,18 +364,18 @@ try {
   await page.getByRole('link', { name: '← Agents', exact: true }).click()
   await heading('Agents')
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.getByLabel('切换空间').selectOption('space-two'); await heading('空间概览'); await expect(page.getByRole('heading', { name: 'session-two', exact: true })).toHaveCount(0)
+  await page.getByLabel('切换空间').selectOption('space-two'); await heading('创意'); await expect(page.getByRole('heading', { name: 'session-two', exact: true })).toHaveCount(0)
   await expect(nav('供应商凭证')).toHaveCount(0)
   await page.goto(url + '/spaces/space-two/credentials'); await heading('模型配置'); await expect(page).toHaveURL(url + '/spaces/space-two/models'); await expect(page.getByLabel('API Key', { exact: true })).toHaveCount(0)
   assert.ok(!requests.includes('/api/v1/spaces/space-two/credentials'), 'member requested owner credentials')
-  await page.getByLabel('切换空间').selectOption('space-one'); await heading('空间概览')
-  await page.goto(url + '/spaces?view=all'); await heading('空间概览'); await expect(page).toHaveURL(url + '/spaces/space-two')
+  await page.getByLabel('切换空间').selectOption('space-one'); await heading('创意')
+  await page.goto(url + '/spaces?view=all'); await heading('创意'); await expect(page).toHaveURL(url + '/spaces/space-two')
   await expect(page.getByRole('region', { name: '空间列表' })).toHaveCount(0)
   await expect(page.getByLabel('切换空间').locator('option')).toHaveCount(2)
   await expect(page.getByLabel('切换空间')).not.toContainText('我的空间')
-  await page.getByLabel('切换空间').selectOption('space-one'); await heading('空间概览')
+  await page.getByLabel('切换空间').selectOption('space-one'); await heading('创意')
   await mkdir('.cache', { recursive: true }); await page.screenshot({ path: '.cache/navigation-desktop.png', fullPage: true })
-  await page.setViewportSize({ width: 390, height: 844 }); await page.reload(); await heading('空间概览')
+  await page.setViewportSize({ width: 390, height: 844 }); await page.reload(); await heading('创意')
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile overview overflow')
   await nav('评测集').click(); await heading('评测集')
   await nav('实验').click(); await heading('实验')
@@ -257,7 +389,7 @@ try {
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '账号设置', exact: true }).click(); await page.getByRole('button', { name: '退出登录', exact: true }).click(); await page.getByRole('heading', { name: '登录 MASS' }).waitFor()
   await page.getByLabel('用户名', { exact: true }).fill('alice'); await page.getByLabel('密码', { exact: true }).fill('synthetic-navigation-password'); await page.getByRole('button', { name: '登录', exact: true }).click()
-  await heading('空间概览'); await expect(page).toHaveURL(url + '/spaces/space-two')
+  await heading('创意'); await expect(page).toHaveURL(url + '/spaces/space-two')
   await settings.click(); await page.getByRole('button', { name: '退出登录', exact: true }).click(); await page.getByRole('heading', { name: '登录 MASS' }).waitFor()
   await page.goto(url + '/spaces/space-one/sessions/session-two'); await page.getByRole('heading', { name: '登录 MASS' }).waitFor()
   await page.getByLabel('用户名', { exact: true }).fill('alice'); await page.getByLabel('密码', { exact: true }).fill('synthetic-navigation-password'); await page.getByRole('button', { name: '登录', exact: true }).click()
@@ -284,6 +416,6 @@ try {
   await page.getByLabel('切换空间').selectOption('created-space-2'); await expect(page).toHaveURL(url + '/spaces/created-space-2')
   await expect(page.getByLabel('切换空间').locator('option')).toHaveCount(2)
   assert.deepEqual(errors, []); assert.deepEqual(unexpected, []); assert.ok(!requests.some(path => path.includes('/credentials')), 'UI called removed credential API')
-  console.log('Navigation browser flow passed: separate pages, deep links, reload, browser history, legacy links, session/run scoping, role-aware navigation, membership revocation, modal space creation, per-model Base URL and API Key, key retention and rotation, login return and mobile layout. In-memory API only.')
+  console.log('Navigation browser flow passed: Creativity entry, first prompt, workspace preview, deep links, reload, legacy links, session/run scoping, role-aware navigation, membership revocation, space creation, model settings, login return and mobile layout. In-memory API only.')
 } catch (e) { await mkdir('.cache', { recursive: true }); await page?.screenshot({ path: '.cache/navigation-failure.png', fullPage: true }); throw e }
 finally { await browser?.close(); server.closeAllConnections(); await new Promise(done => server.close(done)) }

@@ -1,10 +1,22 @@
 import type { components } from './api.generated'
 export type Schema = components['schemas']
 export class APIError extends Error {
-  constructor(public status: number, public code: string) {
-    super(({ run_active: '会话正在运行或维护文件，请稍后重试。', run_state_conflict: '运行状态已变化，请刷新。', runtime_unavailable: '执行服务暂不可用，请联系管理员。', context_summary_failed: '上下文摘要失败，历史原文已保留。请检查 Trace 或调整容量。', context_overflow: '完整上下文超出配置容量，请缩小输入或新建会话。', unsupported_tool: '所选工具或版本不可用，请更新 Agent 工具配置。', invalid_cursor: '事件历史游标无效，请重新同步。', workspace_unavailable: '本地目录不可用，可恢复最近已提交快照。', draft_conflict: '草稿已更新，请比较差异后重新编辑。', version_conflict: '此版本号已经发布，请使用新的版本号。', version_referenced: '此版本正在被引用，不能删除或归档默认版本。', invalid_definition: '请检查定义内容、准确版本、资源路径及配置限额。', skill_document_missing: 'ZIP 根目录必须包含 SKILL.md。', content_unavailable: '持久化内容暂不可用，请稍后重试。', unauthenticated: '登录已失效，请重新登录。', forbidden: '没有访问权限，或成员资格已被撤销。', conflict: '内容已变更，请刷新后重试。', not_found: '未找到账号或资源。', invalid_request: '请检查输入内容。', unsupported_capability: '模型能力或端点不受支持。', rate_limited: '登录尝试过于频繁，请稍后重试。' } as Record<string, string>)[code] ?? '操作未完成，请稍后重试。')
+  constructor(public status: number, public code: string, detail?: string, public details?: Schema['Error']['details']) {
+    const localized: Record<string, string | undefined> = {
+      agent_not_public: '该 Agent 当前不允许跨空间使用，或固定的正式版本已不可用。',
+      iteration_draft_changed: '原草稿修订已不可用，请从 Agent 管理页重新开始迭代。',
+      iteration_version_unavailable: detail,
+      publish_project_file: detail,
+      publish_snapshot_not_current: '请选择最近一轮已提交的工作区快照。',
+      publish_model_required: 'Agent 尚未绑定模型，请先选择模型。',
+      publish_model_unavailable: '所选模型不可用或不满足 Agent 的上下文和输出限制，请重新选择。',
+      publish_model_locked: '此快照已有发布计划，请使用已确认的模型继续。',
+    }
+    super(localized[code] || ({ run_active: '会话正在运行或维护文件，请稍后重试。', run_state_conflict: '运行状态已变化，请刷新。', runtime_unavailable: '执行服务暂不可用，请联系管理员。', context_summary_failed: '上下文摘要失败，历史原文已保留。请检查 Trace 或调整容量。', context_overflow: '完整上下文超出配置容量，请缩小输入或新建会话。', unsupported_tool: '所选工具或版本不可用，请更新 Agent 工具配置。', invalid_cursor: '事件历史游标无效，请重新同步。', workspace_unavailable: '本地目录不可用，可恢复最近已提交快照。', draft_conflict: '草稿已更新，请比较差异后重新编辑。', version_conflict: '此版本号已经发布，请使用新的版本号。', version_referenced: '此版本正在被引用，不能删除或归档默认版本。', invalid_definition: '请检查定义内容、准确版本、资源路径及配置限额。', skill_document_missing: 'ZIP 根目录必须包含 SKILL.md。', content_unavailable: '持久化内容暂不可用，请稍后重试。', unauthenticated: '登录已失效，请重新登录。', forbidden: '没有访问权限，或成员资格已被撤销。', conflict: '内容已变更，请刷新后重试。', not_found: '未找到账号或资源。', invalid_request: '请检查输入内容。', unsupported_capability: '模型能力或端点不受支持。', rate_limited: '登录尝试过于频繁，请稍后重试。' } as Record<string, string>)[code] || '操作未完成，请稍后重试。')
   }
 }
+export const newRequestKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
+
 export async function request<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
   const binary = body instanceof Blob
   const response = await fetch(`/api/v1${path}`, {
@@ -13,8 +25,10 @@ export async function request<T>(path: string, method = 'GET', body?: unknown, s
     body: binary ? body : body === undefined ? undefined : JSON.stringify(body),
   })
   if (!response.ok) {
-    const data = await response.json().catch(() => ({})) as { code?: string }
-    const error = new APIError(response.status, data.code ?? 'unknown')
+    const data = await response.json().catch(() => ({})) as Partial<Schema['Error']>
+    const error = new APIError(response.status, data.code ?? 'unknown', data.message, data.details)
+    const item = path.endsWith('/publish') && data.message?.match(/^(Agent|Skill) [a-z][a-z0-9_-]{0,63}：/)
+    if (item) error.message = item[0] + error.message
     if (response.status === 401 && !path.startsWith('/auth/')) window.dispatchEvent(new Event('mass-session-expired'))
     throw error
   }

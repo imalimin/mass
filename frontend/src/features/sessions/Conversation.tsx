@@ -2,8 +2,9 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 're
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { agentSessionsPath } from '../../app/routes'
-import { list, request, type Schema } from '../../lib/api'
+import { list, newRequestKey, request, type Schema } from '../../lib/api'
 import { useRunStream } from './useRunStream'
+import { CreativityPublish } from './CreativityPublish'
 
 const Trace = lazy(() => import('../debug/Trace'))
 const SafeMarkdown = lazy(() => import('../debug/SafeMarkdown'))
@@ -22,20 +23,23 @@ const toolStatuses: Record<string, string> = {
 }
 const isActive = (status?: string) => status === 'queued' || status === 'running'
 const atBottom = (viewport: HTMLElement) => viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 56
-const newRequestKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
 
-export function Conversation({ space, agent, sessionID, onCreated }: {
-  space: string; agent: Schema['DefinitionDraft']; sessionID: string
-  onCreated: (sessionID: string) => void
+export function Conversation({ space, agent, sessionID, onCreated, initialPrompt, onInitialAccepted, enablePublish }: {
+  space: string; agent: Pick<Schema['DefinitionDraft'], 'id' | 'name' | 'archived'>; sessionID: string
+  onCreated?: (sessionID: string) => void
+  initialPrompt?: { text: string; key: string }
+  onInitialAccepted?: () => void
+  enablePublish?: boolean
 }) {
   const [params, setParams] = useSearchParams(), chosenRun = params.get('run') ?? ''
-  const [text, setText] = useState(''), [files, setFiles] = useState<File[]>([])
+  const [text, setText] = useState(initialPrompt?.text ?? ''), [files, setFiles] = useState<File[]>([])
   const [accepted, setAccepted] = useState<SubmittedMessage>()
   const [selectedVersion, setSelectedVersion] = useState<string>()
   const [createdSession, setCreatedSession] = useState<Schema['RuntimeSession']>()
   const navigate = useNavigate()
   const [showDetails, setShowDetails] = useState(!!chosenRun)
   const [generation, setGeneration] = useState(0)
+  const [publishing, setPublishing] = useState(false)
   const client = useQueryClient(), base = `/spaces/${space}`, sessionURL = `${base}/sessions/${sessionID}`
   const sessionKey = ['private', space, sessionID], runsKey = [...sessionKey, 'runs'], messagesKey = [...sessionKey, 'messages']
   const viewport = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), follow = useRef(true)
@@ -43,6 +47,7 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
   const olderScroll = useRef<{ top: number; height: number; pageCount: number } | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null), fileInput = useRef<HTMLInputElement>(null)
   const requestKey = useRef<{ text: string; files: File[]; key: string } | null>(null)
+  const initialAttempted = useRef(false)
   const cleanupKey = useRef<string | null>(null)
   const createKey = useRef<{ version: string; key: string } | null>(null)
   const uploaded = useRef(new WeakMap<File, Attachment>())
@@ -111,7 +116,10 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
   useEffect(() => {
     if (!runID) return
     void client.invalidateQueries({ queryKey: ['private', space, sessionID, 'messages'] })
-    if (ended) void client.invalidateQueries({ queryKey: ['private', space, sessionID, 'session'] })
+    if (ended) {
+      void client.invalidateQueries({ queryKey: ['private', space, sessionID, 'session'] })
+      void client.invalidateQueries({ queryKey: ['private', space, sessionID, 'workspace-files'] })
+    }
   }, [client, space, sessionID, runID, ended])
 
   const [fileError, setFileError] = useState('')
@@ -146,6 +154,7 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
       return { target, run, attachments }
     },
     onSuccess: ({ target, run, attachments }, draft) => {
+      if (initialPrompt && !draft.workspaceCleanup) onInitialAccepted?.()
       setAccepted({ run, text: draft.text, attachments })
       if (draft.workspaceCleanup) {
         cleanupKey.current = null
@@ -176,7 +185,15 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
 
   const validVersion = !!createdSession || versions.data?.some(version => version.id === versionID)
   const canSend = (sessionID ? ownsSession && runs.isSuccess && !session.data?.workspace_error : !agent.archived && validVersion)
-    && !busy && !submit.isPending && !!text.trim()
+    && !busy && !publishing && !submit.isPending && !!text.trim()
+  const submitMessage = submit.mutate
+  useEffect(() => {
+    if (!initialPrompt || initialAttempted.current || !canSend || text !== initialPrompt.text || files.length) return
+    initialAttempted.current = true
+    const draft = { ...initialPrompt, files }
+    requestKey.current = draft
+    submitMessage(draft)
+  }, [canSend, files, initialPrompt, submitMessage, text])
   const send = () => {
     if (!canSend) return
     if (requestKey.current?.text !== text || requestKey.current.files !== files) requestKey.current = { text, files, key: newRequestKey() }
@@ -184,7 +201,7 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
     submit.mutate(requestKey.current, {
       onSuccess: ({ target }) => {
         if (!sessionID && target) {
-          onCreated(target.id)
+          onCreated?.(target.id)
           navigate(agentSessionsPath(space, agent.id, target.id), { replace: true })
         }
       },
@@ -264,6 +281,9 @@ export function Conversation({ space, agent, sessionID, onCreated }: {
       <h1>{sessionID || agent.name}</h1>
       <div className="conversation-actions">
         {sessionID && <button type="button" className="secondary" disabled={!latest} onClick={() => setShowDetails(true)}>运行详情</button>}
+        {enablePublish && <CreativityPublish space={space} sessionID={sessionID} busy={busy || workspaceActionPending}
+          snapshot={currentRun?.workspace_snapshot_committed ? currentRun.workspace_snapshot_id ?? '' : ''}
+          onPublishing={setPublishing} />}
       </div>
     </header>
     <div className="conversation-body" ref={viewport} tabIndex={0} aria-label="对话记录" onScroll={event => {

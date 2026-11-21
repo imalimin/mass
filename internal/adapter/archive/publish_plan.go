@@ -1,0 +1,45 @@
+package archive
+
+import (
+	"context"
+
+	"github.com/imalimin/mass/internal/domain/run"
+	"github.com/imalimin/mass/internal/domain/storage"
+	"github.com/imalimin/mass/internal/resource/sessionlog"
+)
+
+func (s *conversation) rememberPublishPlan(plan run.CreativityPublishPlan) {
+	if s.publishPlans == nil {
+		s.publishPlans = make(map[string]run.CreativityPublishPlan)
+	}
+	s.publishPlans[plan.SnapshotID] = plan
+}
+
+func (r *Runtime) CreativityPublishPlan(ctx context.Context, actor, space, session, snapshot string) (run.CreativityPublishPlan, error) {
+	s, err := r.memberSession(ctx, actor, space, session)
+	if err != nil {
+		return run.CreativityPublishPlan{}, err
+	}
+	defer s.Unlock()
+	return s.publishPlans[snapshot], nil
+}
+
+func (r *Runtime) SaveCreativityPublishPlan(ctx context.Context, actor, space, session string, plan run.CreativityPublishPlan) error {
+	s, err := r.memberSession(ctx, actor, space, session)
+	if err != nil {
+		return err
+	}
+	defer s.Unlock()
+	if !s.maintenance || s.active != "" || s.session.LatestSnapshotID != plan.SnapshotID {
+		return storage.ErrConflict
+	}
+	if _, exists := s.publishPlans[plan.SnapshotID]; exists {
+		return r.uploadLocal(ctx, s)
+	}
+	entry := sessionlog.Planned{Header: sessionlog.Header{Seq: int64(len(s.records)) + 1, Type: sessionlog.PublishPlanned, Role: "system"}, Plan: plan}
+	err = r.commit(ctx, s, "", entry)
+	if int64(len(s.records)) == entry.Seq {
+		s.rememberPublishPlan(plan)
+	}
+	return err
+}

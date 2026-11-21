@@ -99,12 +99,15 @@ func (j *Journal) ReadRun(ctx context.Context, actor, space, session, runID stri
 }
 
 type SessionData struct {
-	Hide             bool         `json:"hide,omitempty"`
-	SourceSnapshotID string       `json:"source_snapshot_id,omitempty"`
-	DefinitionRef    *storage.Ref `json:"definition_ref,omitempty"`
-	DefinitionID     string       `json:"definition_id,omitempty"`
-	VersionID        string       `json:"version_id,omitempty"`
-	Title            string       `json:"title,omitempty"`
+	AgentSourceSpaceID string          `json:"agent_source_space_id,omitempty"`
+	AgentName          string          `json:"agent_name,omitempty"`
+	Hide               bool            `json:"hide,omitempty"`
+	Creativity         *run.Creativity `json:"creativity,omitempty"`
+	SourceSnapshotID   string          `json:"source_snapshot_id,omitempty"`
+	DefinitionRef      *storage.Ref    `json:"definition_ref,omitempty"`
+	DefinitionID       string          `json:"definition_id,omitempty"`
+	VersionID          string          `json:"version_id,omitempty"`
+	Title              string          `json:"title,omitempty"`
 }
 type FinishData struct {
 	Status               string             `json:"status"`
@@ -158,6 +161,9 @@ func Validate(e Proposed) error {
 		var d SessionData
 		err = Decode(e.Data, &d)
 		if d.SourceSnapshotID != "" && !storage.ValidID(d.SourceSnapshotID) {
+			return storage.ErrSchema
+		}
+		if d.AgentSourceSpaceID != "" && !storage.ValidShortID(d.AgentSourceSpaceID) {
 			return storage.ErrSchema
 		}
 		if e.RunID != "" || len(d.Title) > 200 {

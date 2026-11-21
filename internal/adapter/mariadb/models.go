@@ -82,3 +82,12 @@ func (s *Store) ResolveModelSecret(ctx context.Context, actor, space, model stri
 	})
 	return
 }
+
+func (s *Store) SharedRunModel(ctx context.Context, actor, space, source, model string) (m identity.Model, err error) {
+	err = s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, "SELECT "+modelColumns+",m.secret_binding_id,m.key_id,m.ciphertext FROM model_configs m WHERE m.space_id=? AND m.id=? AND m.enabled=TRUE", source, model).Scan(
+			&m.ID, &m.Name, &m.Provider, &m.ModelID, &m.BaseURL, &m.ContextWindow, &m.MaxOutputTokens, &m.Temperature, &m.Enabled, &m.Revision,
+			&m.SecretBindingID, &m.KeyID, &m.Ciphertext)
+	})
+	return
+}

@@ -22,6 +22,8 @@ type RunWorkspaces struct {
 	Repo       runBaseSnapshotReader
 	Content    *ContentStore
 	Journal    *journal.Journal
+	Iteration  func(context.Context, string, string, string, func(string, []byte) error) (bool, error)
+	Limits     storage.Limits
 	mu         sync.Mutex
 	ready      map[string]bool
 }
@@ -78,6 +80,14 @@ func (w *RunWorkspaces) Ensure(ctx context.Context, s run.Snapshot) ([]string, e
 	}
 	var missing []string
 	err = w.Workspaces.With(ctx, s.SpaceID, s.SessionID, func(dir WorkspaceDir) error {
+		if !ready && snapshot.ID == "" {
+			if w.Available(s.SpaceID, s.SessionID) {
+				return nil
+			}
+			if seeded, err := w.seedIteration(ctx, s.ActorID, s.SpaceID, s.SessionID, dir); seeded || err != nil {
+				return err
+			}
+		}
 		if !ready {
 			if err := restoreWorkspace(ctx, w.Content, s.ActorID, s.SpaceID, dir, snapshot, manifest); err != nil {
 				return err
@@ -117,7 +127,9 @@ func (w *RunWorkspaces) Ensure(ctx context.Context, s run.Snapshot) ([]string, e
 }
 func (w *RunWorkspaces) RestoreIdle(ctx context.Context, actor, space, session string, snapshots *SnapshotStore) error {
 	w.Forget(space, session)
-	if err := snapshots.Restore(ctx, actor, space, session); err != nil {
+	if err := snapshots.restore(ctx, actor, space, session, func(ctx context.Context, dir WorkspaceDir) (bool, error) {
+		return w.seedIteration(ctx, actor, space, session, dir)
+	}); err != nil {
 		return err
 	}
 	w.Mark(space, session)

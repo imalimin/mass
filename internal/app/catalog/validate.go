@@ -82,10 +82,22 @@ func ValidateDocument(kind, name string, doc Document, publish bool) (*Config, e
 	if !publish && strings.TrimSpace(doc.ConfigYAML) == "" {
 		return nil, nil
 	}
-	var tree yaml.Node
-	dec := yaml.NewDecoder(strings.NewReader(doc.ConfigYAML))
-	if err := dec.Decode(&tree); err != nil {
+	var c Config
+	if strictYAML(doc.ConfigYAML, &c) != nil || c.SchemaVersion != 1 || c.Name != name || !storage.ValidID(c.Model) || len(c.Skills) > 32 || len(c.Tools) > len(Tools) {
 		return nil, ErrConfig
+	}
+	c.Context.Normalize()
+	return validateConfig(c)
+}
+
+func strictYAML(raw string, value any) error {
+	var tree yaml.Node
+	dec := yaml.NewDecoder(strings.NewReader(raw))
+	if err := dec.Decode(&tree); err != nil {
+		return ErrConfig
+	}
+	if len(tree.Content) != 1 || tree.Content[0].Kind != yaml.MappingNode {
+		return ErrConfig
 	}
 	var walk func(*yaml.Node, int) bool
 	walk = func(n *yaml.Node, depth int) bool {
@@ -110,19 +122,18 @@ func ValidateDocument(kind, name string, doc Document, publish bool) (*Config, e
 		return true
 	}
 	if !walk(&tree, 0) {
-		return nil, ErrConfig
+		return ErrConfig
 	}
 	var extra yaml.Node
 	if dec.Decode(&extra) != io.EOF {
-		return nil, ErrConfig
+		return ErrConfig
 	}
-	dec = yaml.NewDecoder(strings.NewReader(doc.ConfigYAML))
+	dec = yaml.NewDecoder(strings.NewReader(raw))
 	dec.KnownFields(true)
-	var c Config
-	if dec.Decode(&c) != nil || c.SchemaVersion != 1 || c.Name != name || !storage.ValidID(c.Model) || len(c.Skills) > 32 || len(c.Tools) > len(Tools) {
-		return nil, ErrConfig
-	}
-	c.Context.Normalize()
+	return dec.Decode(value)
+}
+
+func validateConfig(c Config) (*Config, error) {
 	ids := map[string]bool{}
 	for _, r := range c.Skills {
 		if !storage.ValidID(r.ID) || !ValidLabel(r.Version) || ids[r.ID] {

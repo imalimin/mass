@@ -88,6 +88,8 @@ func (r *Runtime) AcceptRuntimeRequest(ctx context.Context, actor, space, operat
 		}
 		defer r.inline.Delete(space + "/" + d.DefinitionRef.ObjectID)
 		created := sessionlog.Created{Header: sessionlog.Header{Seq: 1, Type: sessionlog.SessionCreated, Role: "system"},
+			AgentSourceSpaceID: d.AgentSourceSpaceID, AgentName: d.AgentName,
+			Creativity:    d.Creativity,
 			SchemaVersion: 1, SessionID: batch.SessionID, SpaceID: space, AgentID: d.DefinitionID, VersionID: d.VersionID,
 			CreatedAt: e.OccurredAt, ActorID: actor, Title: d.Title, EventID: e.EventID, Definition: sessionlog.FixedDefinition(fromJSON[run.Definition](raw))}
 		s := newConversation()

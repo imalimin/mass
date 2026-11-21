@@ -24,6 +24,13 @@ func validateServiceConfig(data []byte, getenv func(string) string) error {
 	return c.ValidateService(getenv)
 }
 
+func TestCreativityConfig(t *testing.T) {
+	config, err := ParseConfig([]byte("creativity:\n  agent_id: author\n  agent_workspace_id: origin\n"))
+	if err != nil || config.Creativity.AgentID != "author" || config.Creativity.AgentWorkspaceID != "origin" {
+		t.Fatalf("unexpected creativity config: %+v, %v", config.Creativity, err)
+	}
+}
+
 func TestConfig(t *testing.T) {
 	data, err := os.ReadFile("../../configs/mass.example.yaml")
 	if err != nil {

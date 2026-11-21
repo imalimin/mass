@@ -17,11 +17,103 @@ import (
 	"testing"
 	"time"
 
+	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
 	"github.com/imalimin/mass/internal/resource"
 )
 
 func sha(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
+
+func TestBrowseWorkspace(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	manager, err := New(base, storage.Limits{MaxArchiveFileBytes: 1 << 20, MaxTotalBytes: 2 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	space, session := storage.NewShortID(), storage.NewShortID()
+	scope := run.Session{SpaceID: space, ID: session}
+	workspaces := &resource.RunWorkspaces{Workspaces: manager}
+	view, err := workspaces.Browse(ctx, "", scope, ".", nil)
+	if err != nil || !view.Directory || len(view.Entries) > 0 || manager.Exists(space, session) {
+		t.Fatalf("browse missing workspace: %+v, %v", view, err)
+	}
+	if err := manager.With(ctx, space, session, func(dir resource.WorkspaceDir) error {
+		if err := dir.Root().Mkdir("skills", 0700); err != nil {
+			return err
+		}
+		files := map[string][]byte{
+			"AGENTS.md":       []byte("# 指令\n"),
+			"skills/empty.md": {},
+			"skills/data.bin": {0xff, 0},
+			"skills/large.md": bytes.Repeat([]byte("a"), (256<<10)+1),
+		}
+		for name, data := range files {
+			if err := dir.Root().WriteFile(name, data, 0600); err != nil {
+				return err
+			}
+		}
+		return dir.Root().Symlink("AGENTS.md", "alias.md")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	view, err = workspaces.Browse(ctx, "", scope, ".", nil)
+	want := []resource.WorkspaceEntry{{Name: "AGENTS.md"}, {Name: "skills", Directory: true}}
+	if err != nil || !view.Directory || !slices.Equal(view.Entries, want) {
+		t.Fatalf("browse root: %+v, %v", view, err)
+	}
+	for _, item := range []struct {
+		path, text, status string
+		wantError          error
+	}{
+		{path: "AGENTS.md", text: "# 指令\n"},
+		{path: "skills/empty.md"},
+		{path: "skills/data.bin", status: "binary"},
+		{path: "skills/large.md", status: "too_large"},
+		{path: "skills/missing.md", wantError: storage.ErrBlobNotFound},
+		{path: "alias.md", wantError: storage.ErrWorkspace},
+		{path: "../outside", wantError: storage.ErrInvalid},
+	} {
+		t.Run(item.path, func(t *testing.T) {
+			view, err := workspaces.Browse(ctx, "", scope, item.path, nil)
+			if !errors.Is(err, item.wantError) || view.Directory || view.Text != item.text || view.Status != item.status {
+				t.Fatalf("browse path: %+v, %v", view, err)
+			}
+		})
+	}
+}
+
+func TestWithMissingWorkspace(t *testing.T) {
+	ctx := context.Background()
+	manager, err := New(t.TempDir(), storage.Limits{MaxArchiveFileBytes: 16, MaxTotalBytes: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	space, session := storage.NewShortID(), storage.NewShortID()
+	failed := errors.New("snapshot unavailable")
+	err = manager.WithMissing(ctx, space, session, func(dir resource.WorkspaceDir) error {
+		if err := dir.Root().WriteFile("partial.txt", []byte("partial"), 0600); err != nil {
+			return err
+		}
+		return failed
+	})
+	if !errors.Is(err, failed) || manager.Exists(space, session) {
+		t.Fatalf("failed recovery left a workspace: %v", err)
+	}
+	if err := manager.WithMissing(ctx, space, session, func(dir resource.WorkspaceDir) error {
+		return dir.Root().WriteFile("restored.txt", []byte("restored"), 0600)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.WithMissing(ctx, space, session, func(resource.WorkspaceDir) error {
+		return errors.New("must not restore over an existing directory")
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func archive(t *testing.T, headers []*tar.Header, contents []string) []byte {
 	t.Helper()
 	var b bytes.Buffer

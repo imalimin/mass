@@ -188,6 +188,10 @@ func (s *SnapshotStore) commit(ctx context.Context, actor string, r SaveRequest,
 // Restore loads the target session's committed pointer, including a snapshot
 // selected in session.created. It never inherits source conversation events.
 func (s *SnapshotStore) Restore(ctx context.Context, actor, space, session string) (err error) {
+	return s.restore(ctx, actor, space, session, nil)
+}
+
+func (s *SnapshotStore) restore(ctx context.Context, actor, space, session string, seed func(context.Context, WorkspaceDir) (bool, error)) (err error) {
 	ctx, cancel := context.WithTimeout(ctx, s.Timeout)
 	defer cancel()
 	ctx = diagnostic.WithRun(ctx, s.DiagnosticLog, run.Snapshot{SpaceID: space, SessionID: session})
@@ -208,8 +212,17 @@ func (s *SnapshotStore) Restore(ctx context.Context, actor, space, session strin
 		if err != nil {
 			return err
 		}
-		if err = restoreWorkspace(ctx, s.Content, actor, space, dir, snapshot, manifest); err != nil {
-			return err
+		var seeded bool
+		if id == "" && seed != nil {
+			seeded, err = seed(ctx, dir)
+			if err != nil {
+				return err
+			}
+		}
+		if !seeded {
+			if err = restoreWorkspace(ctx, s.Content, actor, space, dir, snapshot, manifest); err != nil {
+				return err
+			}
 		}
 		raw, _ := json.Marshal(journal.RestoreData{SnapshotID: id, Reason: "explicit_restore"})
 		eventID := uuid.NewString()
