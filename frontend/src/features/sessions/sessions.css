@@ -10,25 +10,18 @@
   min-height: 0;
   background: #fff;
 }
+.session-workspace--history { grid-template-columns: clamp(160px, 17vw, 244px) minmax(0, 1fr); }
 .session-rail {
-  display: none;
-  position: absolute;
-  z-index: 3;
-  top: 44px;
-  left: 10px;
-  width: min(270px, calc(100% - 20px));
-  max-height: calc(100% - 54px);
+  display: flex;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
   padding: 16px 12px;
   background: #f6f8f7;
-  border: 1px solid #dce5df;
-  border-radius: 9px;
-  box-shadow: 0 8px 24px #203a2c23;
+  border-right: 1px solid #dce5df;
 }
-.session-rail.is-open { display: flex; }
 .session-rail-top { padding-bottom: 14px; border-bottom: 1px solid #e3e8e5; }
+.session-rail-top:empty { display: none; }
 .session-rail-top a {
   align-items: center;
   gap: 9px;
@@ -53,8 +46,8 @@
 .session-links a:is(:hover, .active) { background: #e7eeea; color: #22493b; }
 .session-links a.active { font-weight: 600; }
 .session-links small { color: #8a5840; margin: 3px 0 0; }
-.session-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; border-bottom: 1px solid #e3e8e5; }
-.session-toolbar button, .workspace-preview header button { padding: 4px 9px; font-size: 12px; }
+.session-toolbar { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; border-bottom: 1px solid #e3e8e5; }
+.workspace-preview header button { padding: 4px 9px; font-size: 12px; }
 .session-file-layout { display: grid; grid-template-columns: minmax(0, 1fr) clamp(150px, 19vw, 260px); min-height: 0; min-width: 0; }
 .session-file-layout:has(> .workspace-preview) { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) clamp(150px, 19vw, 260px); }
 .workspace-tree, .workspace-preview { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-left: 1px solid #e3e8e5; background: #f8faf9; }
@@ -180,6 +173,12 @@
 .run-copy-id code { min-width: 0; }
 .run-copy-id button { padding: 4px 8px; font-size: 12px; }
 @media (max-width: 700px) {
+  .session-workspace--history { grid-template-columns: clamp(80px, 23vw, 144px) minmax(0, 1fr); }
+  .session-rail { padding: 10px 4px; }
+  .session-rail-top a, .session-links a { padding-inline: 6px; }
+  .session-rail-top a { gap: 4px; font-size: 12px; }
+  .session-workspace--history .composer-tools { flex-wrap: wrap; gap: 6px; }
+  .session-workspace--history .composer-tools > button { margin-inline-start: auto; }
   .session-file-layout, .session-file-layout:has(> .workspace-preview) { position: relative; grid-template-columns: minmax(0, 1fr) minmax(92px, 26vw); }
   .workspace-preview { position: absolute; inset: 0; z-index: 2; }
   .conversation-header { min-height: 48px; padding: 8px 12px; gap: 7px; }

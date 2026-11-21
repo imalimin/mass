@@ -13,13 +13,11 @@ export function SessionWorkspace({ space }: { space: string }) {
 }
 
 function AgentConversations({ space, agentID, sessionID }: { space: string; agentID: string; sessionID: string }) {
-  const [showSessions, setShowSessions] = useState(false)
   const [startedSession, setStartedSession] = useState('')
   const [draftNumber, setDraftNumber] = useState(0)
   const startNew = () => {
     setStartedSession('')
     setDraftNumber(n => n + 1)
-    setShowSessions(false)
   }
   const current = useQuery({
     queryKey: ['private', space, sessionID, 'session'],
@@ -41,13 +39,11 @@ function AgentConversations({ space, agentID, sessionID }: { space: string; agen
     refetchInterval: q => q.state.error ? false : 5000,
   })
   const recent = [...(sessions.data ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))
-  return <div className="session-workspace">
+  return <div className="session-workspace session-workspace--history">
     <div className="session-toolbar">
       <Link className="text-link" to={spacePath(space, 'agents')}>← Agents</Link>
-      <button className="secondary" type="button" aria-expanded={showSessions} aria-controls="session-list"
-        onClick={() => setShowSessions(open => !open)}>会话列表</button>
     </div>
-    <nav id="session-list" aria-label="会话列表" className={`session-rail${showSessions ? ' is-open' : ''}`}>
+    <nav aria-label="会话列表" className="session-rail">
       <div className="session-rail-top">
         {!sharedAgent && agent.data && !agent.data.archived && <NavLink end to={agentSessionsPath(space, agentID)} aria-label="新建会话"
           onClick={startNew}><span aria-hidden="true">+</span> 新建会话</NavLink>}
@@ -55,7 +51,7 @@ function AgentConversations({ space, agentID, sessionID }: { space: string; agen
       <div className="session-links">
         <h2>会话</h2>
         {recent.map(s => <NavLink key={s.id} to={s.creativity ? creativitySessionPath(space, s.id) : agentSessionsPath(space, agentID, s.id)} end
-          onClick={() => { if (s.id !== sessionID) setStartedSession(''); setShowSessions(false) }} title={s.id}>
+          onClick={() => { if (s.id !== sessionID) setStartedSession('') }} title={s.id}>
           {s.id}{s.workspace_error && <small>文件待恢复</small>}
         </NavLink>)}
         {sessions.isPending && <p role="status">正在读取会话…</p>}
