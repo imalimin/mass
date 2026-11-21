@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type MutationKey } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { agentSessionsPath } from '../../app/routes'
 import { APIError, list, newRequestKey, request, type Schema } from '../../lib/api'
@@ -27,8 +27,8 @@ function ManifestEntries({ manifest, debug = false }: { manifest: PublishManifes
   </ul>
 }
 
-export function CreativityPublish({ space, sessionID, busy, snapshot, onPublishing }: {
-  space: string; sessionID: string; busy: boolean; snapshot: string; onPublishing: (pending: boolean) => void
+export function CreativityPublish({ space, sessionID, busy, snapshot, mutationKey }: {
+  space: string; sessionID: string; busy: boolean; snapshot: string; mutationKey: MutationKey
 }) {
   const [params, setParams] = useSearchParams()
   const selected = params.get('publish') ?? ''
@@ -39,13 +39,12 @@ export function CreativityPublish({ space, sessionID, busy, snapshot, onPublishi
   const navigate = useNavigate()
   const client = useQueryClient()
   const debug = useMutation({
+    mutationKey,
     mutationFn: ({ snapshotID, modelID, key }: { snapshotID: string; modelID: string; key: string }) =>
       request<Schema['RuntimeSession']>(`/spaces/${space}/creativity/sessions/${sessionID}/draft-debug`, 'POST', {
         workspace_snapshot_id: snapshotID, idempotency_key: key, ...(modelID ? { model_id: modelID } : {}),
       }),
-    onMutate: () => onPublishing(true),
     onSettled: (session, error) => {
-      onPublishing(false)
       if (!session && !publishResult(error)) return
       void client.invalidateQueries({ queryKey: ['private', space, 'agent', 'list'] })
       void client.invalidateQueries({ queryKey: ['private', space, 'skill', 'list'] })
@@ -84,7 +83,7 @@ export function CreativityPublish({ space, sessionID, busy, snapshot, onPublishi
     <button ref={publishButton} type="button" disabled={busy || !snapshot || debug.isPending} onClick={() => select(snapshot)}
       title={!snapshot ? '最近一轮 Run 提交工作区快照后才能发布' : undefined}>去发布</button>
     {selected && <PublishDialog key={selected} space={space} sessionID={sessionID} selected={selected}
-      available={!busy && !debug.isPending && selected === snapshot} close={() => select('')} onPublishing={onPublishing} />}
+      available={!busy && !debug.isPending && selected === snapshot} close={() => select('')} mutationKey={mutationKey} />}
     {!debug.isIdle && <DraftDebugDialog space={space} chooseModel={chooseDebugModel}
       available={!busy && debug.variables?.snapshotID === snapshot} pending={debug.isPending || debug.isSuccess}
       error={debug.error} modelID={debug.variables?.modelID ?? ''} start={tryDraft} close={closeDebug} />}
@@ -138,8 +137,8 @@ function useAvailableModels(space: string, enabled: boolean) {
   })
 }
 
-function PublishDialog({ space, sessionID, selected, available, close, onPublishing }: {
-  space: string; sessionID: string; selected: string; available: boolean; close: () => void; onPublishing: (pending: boolean) => void
+function PublishDialog({ space, sessionID, selected, available, close, mutationKey }: {
+  space: string; sessionID: string; selected: string; available: boolean; close: () => void; mutationKey: MutationKey
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const client = useQueryClient()
@@ -153,12 +152,11 @@ function PublishDialog({ space, sessionID, selected, available, close, onPublish
     retry: false,
   })
   const confirm = useMutation({
+    mutationKey,
     mutationFn: (choice: string) => request<PublishManifest>(url, 'POST', {
       workspace_snapshot_id: selected, ...(choice ? { model_id: choice } : {}),
     }),
-    onMutate: () => onPublishing(true),
     onSettled: (data, error) => {
-      onPublishing(false)
       if (!data && !publishResult(error)) return
       void client.invalidateQueries({ queryKey: ['private', space, 'agent', 'list'] })
       void client.invalidateQueries({ queryKey: ['private', space, 'skill', 'list'] })

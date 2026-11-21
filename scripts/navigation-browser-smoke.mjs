@@ -27,6 +27,7 @@ const pageOf = items => ({ items, next_cursor: null, has_more: false, next_after
 let signedIn = true, createdSpaces = 0, firstRunRejected = false, agentVisibility = 'space'
 let publishCalls = 0, pendingModelSelection = false, debugKey, debugSubmittedRun = false, debugSaved = false, debugFailed = false
 const directDebug = Promise.withResolvers()
+const firstPublish = Promise.withResolvers()
 const requests = [], unexpected = [], models = [], modelKeys = new Map(), creativePrompts = []
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost'), path = url.pathname
@@ -170,10 +171,13 @@ const server = createServer(async (req, res) => {
       let body = ''; for await (const chunk of req) body += chunk
       assert.deepEqual(JSON.parse(body), { workspace_snapshot_id: creativitySnapshot, ...(manifest.model_locked ? {} : { model_id: publishModel.id }) })
       const skills = [{ ...manifest.skills[0], label: 'v2', status: 'published' }]
-      if (++publishCalls === 1) return json({
-        code: 'content_unavailable', message: 'Agent report-agent：Content unavailable',
-        details: { result: { ...manifest, model_locked: true, agent: { ...manifest.agent, status: 'draft_saved' }, skills } },
-      }, 503)
+      if (++publishCalls === 1) {
+        await firstPublish.promise
+        return json({
+          code: 'content_unavailable', message: 'Agent report-agent：Content unavailable',
+          details: { result: { ...manifest, model_locked: true, agent: { ...manifest.agent, status: 'draft_saved' }, skills } },
+        }, 503)
+      }
       pendingModelSelection = false
       return json({ ...manifest, agent: { ...manifest.agent, label: 'v1', status: 'published' }, skills })
     }
@@ -240,6 +244,12 @@ try {
   await expect(page.getByRole('navigation', { name: '会话列表' })).toHaveCount(0)
   await page.reload(); await heading('session-creative')
   await copySessionID('session-creative')
+  const creativityToolbar = page.locator('.session-toolbar').filter({ has: page.getByRole('link', { name: '← 创意', exact: true }) })
+  const tryButton = creativityToolbar.getByRole('button', { name: '去试试', exact: true })
+  const publishButton = creativityToolbar.getByRole('button', { name: '去发布', exact: true })
+  const conversationHeader = page.locator('.conversation-header')
+  await expect(conversationHeader.getByRole('button', { name: '运行详情', exact: true })).toBeVisible()
+  await expect(conversationHeader.getByRole('button', { name: /^(去试试|去发布)$/ })).toHaveCount(0)
   await page.getByLabel('输入任务').fill('继续调试')
   await page.getByRole('button', { name: 'skills', exact: true }).click()
   await page.getByRole('button', { name: 'report-writer', exact: true }).click()
@@ -261,13 +271,13 @@ try {
   await expect(page.getByRole('region', { name: '只读文件预览' })).toHaveCount(0)
   await expect(page.getByLabel('输入任务')).toHaveValue('继续调试')
   await expect(page.getByRole('button', { name: 'SKILL.md', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '去发布', exact: true }).click()
+  await publishButton.click()
   const publishDialog = page.getByRole('dialog', { name: '发布 Agent 和 Skills' })
   await expect(publishDialog.getByLabel('发布模型')).toBeVisible()
   await expect(publishDialog.getByRole('button', { name: '确认发布' })).toBeDisabled()
   await expect(publishDialog.getByRole('list')).toHaveCount(0)
   await publishDialog.getByRole('button', { name: '关闭', exact: true }).click()
-  await page.getByRole('button', { name: '去试试', exact: true }).click()
+  await tryButton.click()
   const debugDialog = page.getByRole('dialog', { name: '草稿调试' })
   await expect(debugDialog.getByLabel('调试模型')).toBeVisible()
   await debugDialog.getByLabel('调试模型').selectOption(publishModel.id)
@@ -279,10 +289,14 @@ try {
   await expect(page.getByLabel('输入任务')).toBeVisible()
   assert.equal(debugSubmittedRun, false)
   await page.getByRole('link', { name: '← 返回创意会话' }).click(); await heading('session-creative')
+  await page.getByLabel('输入任务').fill('继续调试')
+  const sendTask = page.getByLabel('发送任务', { exact: true })
+  await expect(sendTask).toBeEnabled()
   try {
-    await page.getByRole('button', { name: '去试试', exact: true }).click()
+    await tryButton.click()
     await expect(debugDialog).toBeVisible()
     await expect(debugDialog.getByRole('status')).toHaveText('正在校验并准备调试会话…')
+    await expect(sendTask).toBeDisabled()
   } finally {
     directDebug.resolve()
   }
@@ -302,10 +316,16 @@ try {
   await page.getByLabel('输入任务').fill('继续调试')
   await page.getByRole('button', { name: 'skills', exact: true }).click()
   await page.getByRole('button', { name: 'report-writer', exact: true }).click()
-  await page.getByRole('button', { name: '去发布', exact: true }).click()
+  await publishButton.click()
   await expect(publishDialog).toContainText('report-writer — 编辑并发新版')
   await expect(publishDialog.locator('input, textarea')).toHaveCount(0)
-  await publishDialog.getByRole('button', { name: '确认发布' }).click()
+  try {
+    await expect(sendTask).toBeEnabled()
+    await publishDialog.getByRole('button', { name: '确认发布' }).click()
+    await expect(sendTask).toBeDisabled()
+  } finally {
+    firstPublish.resolve()
+  }
   await expect(publishDialog.getByRole('alert')).toContainText('Agent report-agent')
   await expect(publishDialog).toContainText('report-agent — 草稿已保存，未发布')
   await expect(publishDialog).toContainText('report-writer — 已发布 · v2')
@@ -316,6 +336,7 @@ try {
   await expect(publishDialog).toContainText('report-writer — 已发布 · v2')
   await expect(publishDialog).toContainText('发布完成')
   await publishDialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await expect(sendTask).toBeEnabled()
   await expect(page.getByLabel('输入任务')).toHaveValue('继续调试')
   await expect(page.getByRole('button', { name: 'SKILL.md', exact: true })).toBeVisible()
   assert.equal(creativePrompts.length, 1)
@@ -380,8 +401,8 @@ try {
   await expect(page.getByText('正在迭代：report-agent')).toBeVisible()
   await expect(page.getByRole('navigation', { name: '会话列表' })).toHaveCount(0)
   await expect(page.getByLabel('输入任务')).toHaveValue('')
-  await expect(page.getByRole('button', { name: '去发布', exact: true })).toBeDisabled()
-  await expect(page.getByRole('button', { name: '去试试', exact: true })).toBeDisabled()
+  await expect(publishButton).toBeDisabled()
+  await expect(tryButton).toBeDisabled()
   await page.getByRole('button', { name: 'AGENTS.md' }).click()
   await expect(preview.getByRole('heading', { name: 'Navigation fixture', exact: true })).toBeVisible()
   await page.reload()
@@ -419,6 +440,7 @@ try {
   await expect(page.getByLabel('Agent 版本')).toHaveCount(0)
   await page.getByRole('link', { name: '新建会话', exact: true }).click()
   await expect(page.getByLabel('输入任务')).toHaveValue('')
+  await expect(page.getByRole('button', { name: /^(去试试|去发布)$/ })).toHaveCount(0)
   await expect(page.getByLabel('Agent 版本')).toHaveValue('version-two')
   await page.goto(url + '/spaces/space-one/agents/definition-one/sessions?version=debug-one')
   await expect(page.getByLabel('Agent 版本')).toHaveValue('debug-one')

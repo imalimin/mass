@@ -4,7 +4,6 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { agentSessionsPath } from '../../app/routes'
 import { list, newRequestKey, request, type Schema } from '../../lib/api'
 import { useRunStream } from './useRunStream'
-import { CreativityPublish } from './CreativityPublish'
 
 const Trace = lazy(() => import('../debug/Trace'))
 const SafeMarkdown = lazy(() => import('../debug/SafeMarkdown'))
@@ -24,12 +23,15 @@ const toolStatuses: Record<string, string> = {
 const isActive = (status?: string) => status === 'queued' || status === 'running'
 const atBottom = (viewport: HTMLElement) => viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 56
 
-export function Conversation({ space, agent, sessionID, onCreated, initialPrompt, onInitialAccepted, enablePublish }: {
+export type ConversationWorkspaceState = { sessionID: string; busy: boolean; committedSnapshotID: string }
+
+export function Conversation({ space, agent, sessionID, onCreated, initialPrompt, onInitialAccepted, submitBlocked, onWorkspaceStateChange }: {
   space: string; agent: Pick<Schema['DefinitionDraft'], 'id' | 'name' | 'archived'>; sessionID: string
   onCreated?: (sessionID: string) => void
   initialPrompt?: { text: string; key: string }
   onInitialAccepted?: () => void
-  enablePublish?: boolean
+  submitBlocked?: boolean
+  onWorkspaceStateChange?: (state: ConversationWorkspaceState) => void
 }) {
   const [params, setParams] = useSearchParams(), chosenRun = params.get('run') ?? ''
   const [text, setText] = useState(initialPrompt?.text ?? ''), [files, setFiles] = useState<File[]>([])
@@ -39,7 +41,6 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
   const navigate = useNavigate()
   const [showDetails, setShowDetails] = useState(!!chosenRun)
   const [generation, setGeneration] = useState(0)
-  const [publishing, setPublishing] = useState(false)
   const client = useQueryClient(), base = `/spaces/${space}`, sessionURL = `${base}/sessions/${sessionID}`
   const sessionKey = ['private', space, sessionID], runsKey = [...sessionKey, 'runs'], messagesKey = [...sessionKey, 'messages']
   const viewport = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), follow = useRef(true)
@@ -182,10 +183,15 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
     onSuccess: () => { void client.invalidateQueries({ queryKey: sessionKey }); void client.invalidateQueries({ queryKey: ['private', space, 'sessions'] }) },
   })
   const workspaceActionPending = workspaceAction.isPending || submit.isPending
+  const workspaceBusy = busy || workspaceActionPending
+  const committedSnapshotID = currentRun?.workspace_snapshot_committed ? currentRun.workspace_snapshot_id ?? '' : ''
+  useLayoutEffect(() => {
+    onWorkspaceStateChange?.({ sessionID, busy: workspaceBusy, committedSnapshotID })
+  }, [onWorkspaceStateChange, sessionID, workspaceBusy, committedSnapshotID])
 
   const validVersion = !!createdSession || versions.data?.some(version => version.id === versionID)
   const canSend = (sessionID ? ownsSession && runs.isSuccess && !session.data?.workspace_error : !agent.archived && validVersion)
-    && !busy && !publishing && !submit.isPending && !!text.trim()
+    && !busy && !submitBlocked && !submit.isPending && !!text.trim()
   const submitMessage = submit.mutate
   useEffect(() => {
     if (!initialPrompt || initialAttempted.current || !canSend || text !== initialPrompt.text || files.length) return
@@ -285,9 +291,6 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
       </div>
       <div className="conversation-actions">
         {sessionID && <button type="button" className="secondary" disabled={!latest} onClick={() => setShowDetails(true)}>运行详情</button>}
-        {enablePublish && <CreativityPublish space={space} sessionID={sessionID} busy={busy || workspaceActionPending}
-          snapshot={currentRun?.workspace_snapshot_committed ? currentRun.workspace_snapshot_id ?? '' : ''}
-          onPublishing={setPublishing} />}
       </div>
     </header>
     <div className="conversation-body" ref={viewport} tabIndex={0} aria-label="对话记录" onScroll={event => {

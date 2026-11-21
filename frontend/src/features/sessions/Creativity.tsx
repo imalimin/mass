@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { creativitySessionPath, spacePath } from '../../app/routes'
 import { newRequestKey, request, type Schema } from '../../lib/api'
-import { Conversation } from './Conversation'
+import { Conversation, type ConversationWorkspaceState } from './Conversation'
+import { CreativityPublish } from './CreativityPublish'
 import { WorkspaceFiles } from './WorkspaceFiles'
 
 export function CreativityHome({ space }: { space: string }) {
@@ -41,6 +42,10 @@ export function CreativityHome({ space }: { space: string }) {
 
 export function CreativityConversation({ space }: { space: string }) {
   const { sessionId = '' } = useParams(), location = useLocation(), navigate = useNavigate()
+  const [workspaceState, setWorkspaceState] = useState<ConversationWorkspaceState>()
+  const workspace = workspaceState?.sessionID === sessionId ? workspaceState : undefined
+  const workspaceMutationKey = ['private', space, sessionId, 'creativity-workspace']
+  const submitBlocked = useIsMutating({ mutationKey: workspaceMutationKey }) > 0
   const session = useQuery({
     queryKey: ['private', space, sessionId, 'session'],
     queryFn: ({ signal }) => request<Schema['RuntimeSession']>(`/spaces/${space}/sessions/${sessionId}`, 'GET', undefined, signal),
@@ -52,14 +57,19 @@ export function CreativityConversation({ space }: { space: string }) {
     queryFn: ({ signal }) => request<Schema['DefinitionDraft']>(`/spaces/${space}/agents/${target}/draft`, 'GET', undefined, signal),
   })
   return <div className="session-workspace">
-    <div className="session-toolbar">
+    <div className="session-toolbar creativity-toolbar">
       <Link className="text-link" to={spacePath(space)}>← 创意</Link>
-      {target && <span>正在迭代：{definition.data?.name ?? target}</span>}
+      <div className="creativity-toolbar-actions">
+        {target && <span>正在迭代：{definition.data?.name ?? target}</span>}
+        {session.data?.creativity && !session.isError && <CreativityPublish key={sessionId} space={space} sessionID={sessionId}
+          busy={workspace?.busy ?? false} snapshot={workspace?.committedSnapshotID ?? ''} mutationKey={workspaceMutationKey} />}
+      </div>
     </div>
     <WorkspaceFiles space={space} sessionID={session.data?.creativity ? sessionId : ''}>
       {session.data?.creativity
-        ? <Conversation key={sessionId} space={space} sessionID={sessionId} initialPrompt={prompt} enablePublish
+        ? <Conversation key={sessionId} space={space} sessionID={sessionId} initialPrompt={prompt} submitBlocked={submitBlocked}
           agent={{ id: session.data.definition_id, name: session.data.agent_name ?? '创作 Agent', archived: false }}
+          onWorkspaceStateChange={setWorkspaceState}
           onInitialAccepted={() => navigate(location.pathname + location.search, { replace: true, state: null })} />
         : <p className="session-loading" role={session.isPending ? 'status' : 'alert'}>
           {session.error?.message ?? (session.isPending ? '正在读取会话…' : '此会话不属于创意。')}

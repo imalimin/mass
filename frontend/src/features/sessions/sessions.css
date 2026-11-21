@@ -47,6 +47,9 @@
 .session-links a.active { font-weight: 600; }
 .session-links small { color: #8a5840; margin: 3px 0 0; }
 .session-toolbar { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; border-bottom: 1px solid #e3e8e5; }
+.creativity-toolbar { flex-wrap: wrap; gap: 6px 12px; }
+.creativity-toolbar-actions { min-width: 0; margin-inline-start: auto; }
+.creativity-toolbar-actions > span { overflow-wrap: anywhere; }
 .workspace-preview header button { padding: 4px 9px; font-size: 12px; }
 .session-file-layout { display: grid; grid-template-columns: minmax(0, 1fr) clamp(150px, 19vw, 260px); min-height: 0; min-width: 0; }
 .session-file-layout:has(> .workspace-preview) { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) clamp(150px, 19vw, 260px); }
@@ -71,9 +74,9 @@
 .conversation-header h1 { font-size: 17px; margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .conversation-copy-id { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; flex: none; }
 .conversation-title [role="status"] { font-size: 12px; white-space: nowrap; }
-.conversation-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px 14px; }
-.conversation-actions a, .conversation-actions button { white-space: nowrap; }
-.conversation-actions button { font-size: 12px; padding: 6px 10px; }
+.conversation-actions, .creativity-toolbar-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px 14px; }
+:is(.conversation-actions, .creativity-toolbar-actions) :is(a, button) { white-space: nowrap; }
+:is(.conversation-actions, .creativity-toolbar-actions) button { font-size: 12px; padding: 6px 10px; }
 .conversation-body { min-height: 0; min-width: 0; overflow: auto; overflow-anchor: none; scrollbar-gutter: stable; }
 .conversation-body:focus-visible { outline: 2px solid #88c8b4; outline-offset: -2px; }
 .conversation-content { width: min(100%, 820px); min-height: 100%; margin: 0 auto; padding: 26px 24px; }
@@ -189,8 +192,8 @@
   .workspace-preview { position: absolute; inset: 0; z-index: 2; }
   .conversation-header { min-height: 48px; padding: 8px 12px; gap: 7px; }
   .conversation-header h1 { font-size: 15px; }
-  .conversation-actions { gap: 4px 8px; }
-  .conversation-actions a, .conversation-actions button { font-size: 11px; }
+  .conversation-actions, .creativity-toolbar-actions { gap: 4px 8px; }
+  :is(.conversation-actions, .creativity-toolbar-actions) :is(a, button) { font-size: 11px; }
   .conversation-content { padding: 16px 12px; }
   .composer-dock { padding-inline: 12px; }
   .composer-hint { display: none; }
