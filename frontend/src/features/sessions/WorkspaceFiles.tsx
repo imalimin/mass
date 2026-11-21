@@ -1,8 +1,10 @@
-import { useState, type ReactNode } from 'react'
+import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { APIError, request, type Schema } from '../../lib/api'
 
 type WorkspaceScope = { space: string; sessionID: string }
+
+const SafeMarkdown = lazy(() => import('../debug/SafeMarkdown'))
 
 function useEntry({ space, sessionID }: WorkspaceScope, path: string) {
   return useQuery({
@@ -39,6 +41,8 @@ function WorkspaceDirectory({ scope, path, expanded, toggle, selected, select }:
 
 function WorkspacePreview({ scope, path, close }: { scope: WorkspaceScope; path: string; close: () => void }) {
   const query = useEntry(scope, path)
+  const [showSource, setShowSource] = useState(false)
+  let markdown = false
   let body: ReactNode
   if (query.isError) {
     body = <p role="alert">{query.error instanceof APIError && query.error.status === 404 ? '此文件已不存在。' : query.error.message}</p>
@@ -49,10 +53,22 @@ function WorkspacePreview({ scope, path, close }: { scope: WorkspaceScope; path:
   } else if (query.data.status) {
     body = <p role="status">{query.data.status === 'too_large' ? '文件超过预览大小限制。' : '仅支持预览 UTF-8 文本。'}</p>
   } else {
-    body = <pre>{query.data.text || '（空文件）'}</pre>
+    markdown = /\.md$/i.test(path)
+    const text = query.data.text
+    body = markdown && !showSource && text
+      ? <Suspense fallback={<p role="status">正在渲染 Markdown…</p>}><SafeMarkdown text={text} showSource={false} /></Suspense>
+      : <pre>{text || '（空文件）'}</pre>
   }
   return <section className="workspace-preview" aria-label="只读文件预览">
-    <header><strong title={path}>{path}</strong><button type="button" className="secondary" onClick={close}>关闭预览</button></header>
+    <header>
+      <strong title={path}>{path}</strong>
+      <div className="workspace-preview-actions">
+        {markdown && <button type="button" className="secondary" onClick={() => setShowSource(value => !value)}>
+          {showSource ? '渲染展示' : '查看原文'}
+        </button>}
+        <button type="button" className="secondary" onClick={close}>关闭预览</button>
+      </div>
+    </header>
     <div className="workspace-pane-body">{body}</div>
   </section>
 }
@@ -73,7 +89,7 @@ function WorkspacePanes({ scope }: { scope: WorkspaceScope }) {
     return next
   })
   return <>
-    {selected && <WorkspacePreview scope={scope} path={selected} close={() => select('')} />}
+    {selected && <WorkspacePreview key={selected} scope={scope} path={selected} close={() => select('')} />}
     <aside className="workspace-tree" aria-label="工作目录">
       <header><strong>工作目录</strong></header>
       <div className="workspace-pane-body">

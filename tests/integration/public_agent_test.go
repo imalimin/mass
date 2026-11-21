@@ -135,7 +135,7 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	must(err)
 	agent, err := catalogue.Create(ctx, owner.ID, source.ID, "agent", "shared-agent")
 	must(err)
-	conf := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Tools: []string{"read_skill_resource", "write_file"}, Skills: []catalog.SkillRef{{ID: skill.ID, Version: "v1"}}}
+	conf := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Tools: []string{"read_skill_resource", "write_file", "update_plan"}, Skills: []catalog.SkillRef{{ID: skill.ID, Version: "v1"}}}
 	conf.Context = catalog.ContextConfig{MaxInputTokens: 20000, MaxTokens: 1024, Compression: "summary"}
 	conf.Limits.MaxSteps, conf.Limits.TimeoutSeconds = 6, 30
 	publish := func(label string) catalog.Version {
@@ -206,6 +206,8 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 			tool, args = "write_file", fmt.Sprintf(`{"path":"skills/source-skill/guide.txt","content":"improved Skill","media_type":"text/plain","expected_sha256":"%x"}`, sha256.Sum256([]byte("latest skill resource")))
 		case iteration && len(toolMessages) == 2:
 			tool, args = "write_file", `{"path":"skills/extra-skill/SKILL.md","content":"---\nname: extra-skill\ndescription: Extra fixture.\n---\nUse the extra skill.","media_type":"text/plain","expected_sha256":"missing"}`
+		case iteration && len(toolMessages) == 3:
+			tool, args = "update_plan", `{"expected_revision":0,"steps":[{"id":"review","title":"Review changes","status":"completed"}]}`
 		case !iteration && len(toolMessages) == 0:
 			tool, args = "read_skill_resource", fmt.Sprintf(`{"skill_binding_id":%q,"path":"guide.txt"}`, skillVersion.ID)
 		case !iteration && len(toolMessages) == 1:
@@ -220,10 +222,14 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 		}
 		return []*schema.Message{reply}, nil
 	}}}
-	options, lifecycle, err := bootstrap.StartRuntime(ctx, config, db.Store, auth, catalogue, content, manager, snapshots, "public-test", logger,
-		sharedModelTransport{Transport: fake, key: providerKey, model: model.ID, source: source.ID, target: target.ID}, sessions)
+	modelTransport := sharedModelTransport{Transport: fake, key: providerKey, model: model.ID, source: source.ID, target: target.ID}
+	options, lifecycle, err := bootstrap.StartRuntime(ctx, config, db.Store, auth, catalogue, content, manager, snapshots, "public-test", logger, modelTransport, sessions)
 	must(err)
-	defer lifecycle.Close(context.Background())
+	defer func() {
+		if lifecycle != nil {
+			lifecycle.Close(context.Background())
+		}
+	}()
 	handler := transport.NewHandler(fstest.MapFS{"index.html": {Data: []byte("test")}}, "public-test", logger, transport.IdentityOptions{Service: auth, Origin: "http://mass.test", Catalog: catalogue, Runtime: options})
 	request := func(method, path, cookie string, body any, status int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -352,6 +358,17 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	}
 	if accepted.Status != "succeeded" || accepted.WorkspaceSnapshotID == "" {
 		t.Fatalf("iteration did not commit its workspace: status=%s error=%s snapshot_error=%s", accepted.Status, accepted.Error, accepted.SnapshotError)
+	}
+	planEvents, err := snapshots.Journal.ReadRun(ctx, owner.ID, source.ID, iteration.ID, accepted.ID, 0, nil, 100)
+	must(err)
+	var writtenPlan journal.Event
+	for _, event := range planEvents.Events {
+		if event.Type == "plan.updated" {
+			writtenPlan = event
+		}
+	}
+	if writtenPlan.OperationID == "" || writtenPlan.CausationID == "" {
+		t.Fatal("first iteration did not record the plan and its tool call")
 	}
 	removeIterationWorkspace := func() {
 		var dirPath string
@@ -695,6 +712,16 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	if !strings.Contains(blockedPreview.Body.String(), "Skill 已归档："+skill.Name) {
 		t.Fatal(blockedPreview.Body.String())
 	}
+
+	must(lifecycle.Close(ctx))
+	sessions = &archiveadapter.Runtime{DB: db.Store, Objects: objects, CatalogObject: catalogStore.Lookup,
+		Log: &sessionlog.Store{Root: t.TempDir(), Prefix: "shared", Blobs: blobs}}
+	objects.Lookups = []archiveadapter.ObjectLookup{catalogStore.Lookup, sessions.Lookup}
+	content.Inline = sessions
+	snapshots.Repo, snapshots.Journal.Repo = sessions, sessions
+	options, lifecycle, err = bootstrap.StartRuntime(ctx, config, db.Store, auth, catalogue, content, manager, snapshots, "public-test", logger, modelTransport, sessions)
+	must(err)
+	handler = transport.NewHandler(fstest.MapFS{"index.html": {Data: []byte("test")}}, "public-test", logger, transport.IdentityOptions{Service: auth, Origin: "http://mass.test", Catalog: catalogue, Runtime: options})
 	must(json.Unmarshal(request("POST", iterationPath+"/runs", ownerCookie, map[string]string{
 		"idempotency_key": uuid.NewString(), "text": "Continue after archiving",
 	}, 202).Body.Bytes(), &accepted))
@@ -703,8 +730,19 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 		accepted, err = sessions.RuntimeRun(ctx, owner.ID, source.ID, accepted.ID)
 		must(err)
 	}
-	if accepted.Status != "succeeded" || accepted.WorkspaceSnapshotID == "" {
-		t.Fatalf("archiving a project Skill broke the existing conversation: %+v", accepted)
+	if accepted.Status != "succeeded" || accepted.FinalResponseEventID == "" || accepted.WorkspaceSnapshotID == "" {
+		t.Fatalf("existing conversation failed after archive reload: status=%s error=%s snapshot_error=%s", accepted.Status, accepted.Error, accepted.SnapshotError)
+	}
+	replayedEvents, err := snapshots.Journal.ReadRun(ctx, owner.ID, source.ID, iteration.ID, writtenPlan.RunID, 0, nil, 100)
+	must(err)
+	var replayedPlan journal.Event
+	for _, event := range replayedEvents.Events {
+		if event.Type == "plan.updated" {
+			replayedPlan = event
+		}
+	}
+	if replayedPlan.OperationID != writtenPlan.OperationID || replayedPlan.CausationID != writtenPlan.CausationID {
+		t.Fatalf("replayed plan lost tool call provenance: operation=%q causation=%q", replayedPlan.OperationID, replayedPlan.CausationID)
 	}
 	assertFile("skills/source-skill/guide.txt", "improved Skill")
 }

@@ -17,6 +17,7 @@ sessions.push({ ...sessions[0], id: 'session-shared', title: 'session-shared', s
 const usage = { input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_write_tokens: null }
 const creativitySnapshot = '02c1a2c3-dc3c-4ab2-8724-d7f2a68bf755'
 const publishModel = { id: 'd8626872-6a61-44ae-95f7-50db3ec58caf', name: '发布测试模型' }
+const skillMarkdown = '# Report writer\n\n- **Weekly highlights**\n'
 const runs = ['run-one', 'run-two'].map((id, i) => ({ id, session_id: 'session-one', created_at: `2026-10-25T00:00:0${i}Z`, status: 'succeeded', usage, error: '', workspace_snapshot_id: '' }))
 const messages = Array.from({ length: 32 }, (_, index) => {
   const sequence = String(index + 1)
@@ -112,11 +113,12 @@ const server = createServer(async (req, res) => {
     if (path.endsWith('/workspace-snapshots')) return json({ items: [] })
     if (path.endsWith('/workspace/files')) {
       const entry = url.searchParams.get('path')
-      if (entry === '.') return json({ directory: true, entries: [{ name: 'AGENTS.md', directory: false }, { name: 'skills', directory: true }] })
+      if (entry === '.') return json({ directory: true, entries: [{ name: 'AGENTS.md', directory: false }, { name: 'agent.yaml', directory: false }, { name: 'skills', directory: true }] })
       if (entry === 'AGENTS.md') return json({ directory: false, text: '# Navigation fixture' })
+      if (entry === 'agent.yaml') return json({ directory: false, text: 'schema_version: 1' })
       if (entry === 'skills') return json({ directory: true, entries: [{ name: 'report-writer', directory: true }] })
       if (entry === 'skills/report-writer') return json({ directory: true, entries: [{ name: 'SKILL.md', directory: false }] })
-      if (entry === 'skills/report-writer/SKILL.md') return json({ directory: false, text: '# Report writer' })
+      if (entry === 'skills/report-writer/SKILL.md') return json({ directory: false, text: skillMarkdown })
     }
     if (/\/sessions\/session-(one|two|three|new|creative|shared|iterate|debug|debug-direct)$/.test(path)) return json(sessions.find(s => path.endsWith(s.id)))
     if (path.endsWith('/session-creative/runs') && req.method === 'POST') {
@@ -202,9 +204,16 @@ let browser, page
 try {
   browser = await chromium.launch({ headless: true, channel: 'chromium' })
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url })
   const errors = []; page.on('pageerror', e => errors.push(e.message))
   const nav = label => page.locator('.app-sidebar').getByRole('link', { name: label, exact: true })
   const heading = text => expect(page.getByRole('heading', { level: 1 })).toHaveText(text)
+  const copySessionID = async id => {
+    const title = page.locator('.conversation-title')
+    await title.getByRole('button', { name: '复制会话 ID' }).click()
+    await expect(title.getByRole('status')).toHaveText('已复制')
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), id)
+  }
   const historyRail = page.getByRole('navigation', { name: '会话列表' })
   const expectHistoryOnLeft = async () => {
     const conversationPage = page.locator('.conversation-page')
@@ -230,13 +239,24 @@ try {
   await expect(page.getByText('做一个报告 Agent', { exact: true })).toHaveCount(1)
   await expect(page.getByRole('navigation', { name: '会话列表' })).toHaveCount(0)
   await page.reload(); await heading('session-creative')
+  await copySessionID('session-creative')
   await page.getByLabel('输入任务').fill('继续调试')
   await page.getByRole('button', { name: 'skills', exact: true }).click()
   await page.getByRole('button', { name: 'report-writer', exact: true }).click()
   await page.getByRole('button', { name: 'SKILL.md', exact: true }).click()
-  await expect(page.getByRole('region', { name: '只读文件预览' })).toContainText('# Report writer')
+  const preview = page.getByRole('region', { name: '只读文件预览' })
+  await expect(preview.getByRole('heading', { name: 'Report writer', exact: true })).toBeVisible()
+  await expect(preview.getByRole('listitem')).toHaveText('Weekly highlights')
+  await preview.getByRole('button', { name: '查看原文' }).click()
+  await expect(preview.locator('pre')).toHaveJSProperty('textContent', skillMarkdown)
+  await preview.getByRole('button', { name: '渲染展示' }).click()
+  await expect(preview.getByRole('heading', { name: 'Report writer', exact: true })).toBeVisible()
+  await preview.getByRole('button', { name: '查看原文' }).click()
   await page.getByRole('button', { name: 'AGENTS.md' }).click()
-  await expect(page.getByRole('region', { name: '只读文件预览' })).toContainText('# Navigation fixture')
+  await expect(preview.getByRole('heading', { name: 'Navigation fixture', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'agent.yaml', exact: true }).click()
+  await expect(preview.locator('pre')).toHaveText('schema_version: 1')
+  await expect(preview.getByRole('button', { name: '查看原文' })).toHaveCount(0)
   await page.getByRole('button', { name: '关闭预览', exact: true }).click()
   await expect(page.getByRole('region', { name: '只读文件预览' })).toHaveCount(0)
   await expect(page.getByLabel('输入任务')).toHaveValue('继续调试')
@@ -363,7 +383,7 @@ try {
   await expect(page.getByRole('button', { name: '去发布', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: '去试试', exact: true })).toBeDisabled()
   await page.getByRole('button', { name: 'AGENTS.md' }).click()
-  await expect(page.getByRole('region', { name: '只读文件预览' })).toContainText('# Navigation fixture')
+  await expect(preview.getByRole('heading', { name: 'Navigation fixture', exact: true })).toBeVisible()
   await page.reload()
   await expect(page.getByText('正在迭代：report-agent')).toBeVisible()
   await page.getByRole('link', { name: '← 创意' }).click()
@@ -379,6 +399,7 @@ try {
   await heading('Agents')
   await page.getByRole('link', { name: '打开 report-agent 的会话', exact: true }).click()
   await expect(page.getByLabel('Agent 版本')).toBeVisible()
+  await expect(page.getByRole('button', { name: '复制会话 ID' })).toHaveCount(0)
   await expect(page.getByLabel('会话名称')).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'session-three', exact: true })).toHaveCount(0)
   await expect(page.getByLabel('Agent 版本')).toHaveValue('version-two')
@@ -404,9 +425,10 @@ try {
   await page.getByRole('link', { name: 'session-one', exact: true }).click()
   await expect(page.getByLabel('Agent 版本')).toHaveCount(0)
   await expect(page).toHaveURL(url + '/spaces/space-one/agents/definition-one/sessions/session-one'); await page.getByRole('heading', { name: 'session-one', exact: true }).waitFor()
+  await copySessionID('session-one')
   await expect(page.getByRole('link', { name: 'session-one', exact: true })).toHaveAttribute('aria-current', 'page')
   await page.getByRole('button', { name: 'AGENTS.md', exact: true }).click()
-  await expect(page.getByRole('region', { name: '只读文件预览' })).toBeVisible()
+  await expect(preview.getByRole('heading', { name: 'Navigation fixture', exact: true })).toBeVisible()
   await expectHistoryOnLeft()
   await page.getByRole('button', { name: '关闭预览', exact: true }).click()
   await expect(page.getByText('会话消息 32', { exact: true })).toBeVisible()

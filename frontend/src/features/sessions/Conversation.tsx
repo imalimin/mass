@@ -279,7 +279,10 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
   const draftRevision = session.data?.draft_revision ?? createdSession?.draft_revision
   return <section className="conversation-page">
     <header className="conversation-header">
-      <h1>{sessionID || agent.name}</h1>
+      <div className="conversation-title">
+        <h1>{sessionID || agent.name}</h1>
+        {sessionID && <CopyIDButton label="会话" value={sessionID} icon />}
+      </div>
       <div className="conversation-actions">
         {sessionID && <button type="button" className="secondary" disabled={!latest} onClick={() => setShowDetails(true)}>运行详情</button>}
         {enablePublish && <CreativityPublish space={space} sessionID={sessionID} busy={busy || workspaceActionPending}
@@ -564,6 +567,13 @@ function RunDetails({ space, session, chosenRun, runs, current, onSelect, onClos
 }
 
 function CopyableRunID({ label, value }: { label: string; value: string }) {
+  return <dd className="run-copy-id">
+    <code>{value}</code>
+    <CopyIDButton label={label} value={value} />
+  </dd>
+}
+
+function CopyIDButton({ label, value, icon = false }: { label: string; value: string; icon?: boolean }) {
   const [feedback, setFeedback] = useState('')
   const copy = async () => {
     try {
@@ -573,9 +583,16 @@ function CopyableRunID({ label, value }: { label: string; value: string }) {
       setFeedback('复制失败')
     }
   }
-  return <dd className="run-copy-id">
-    <code>{value}</code>
-    <button type="button" className="secondary" aria-label={`复制${label} ID`} onClick={copy}>复制</button>
+  const title = `复制${label} ID`
+  return <>
+    <button type="button" className={icon ? 'secondary conversation-copy-id' : 'secondary'}
+      aria-label={title} title={icon ? title : undefined} onClick={copy}>
+      {icon ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"
+        strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="8" y="8" width="12" height="12" rx="2" />
+        <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+      </svg> : '复制'}
+    </button>
     <span className="muted" role="status">{feedback}</span>
-  </dd>
+  </>
 }

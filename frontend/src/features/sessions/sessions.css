@@ -54,17 +54,23 @@
 .workspace-preview { background: #fff; }
 .workspace-tree header, .workspace-preview header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px; min-height: 44px; border-bottom: 1px solid #e3e8e5; }
 .workspace-tree header strong, .workspace-preview header strong { font-size: 13px; overflow-wrap: anywhere; }
+.workspace-preview header { flex-wrap: wrap; }
+.workspace-preview-actions { display: flex; gap: 6px; margin-inline-start: auto; }
 .workspace-preview header button { flex-shrink: 0; }
 .workspace-pane-body { overflow: auto; padding: 8px; font-size: 13px; }
-.workspace-pane-body ul { list-style: none; padding-left: 12px; margin: 0; }
-.workspace-pane-body > ul { padding: 0; }
+.workspace-tree .workspace-pane-body ul { list-style: none; padding-left: 12px; margin: 0; }
+.workspace-tree .workspace-pane-body > ul { padding: 0; }
 .workspace-tree li button { display: block; width: 100%; text-align: left; font-size: inherit; color: #31463d; background: transparent; padding: 4px; border: 0; overflow-wrap: anywhere; }
 .workspace-tree li button:is(:hover, [aria-current]) { background: #e7eeea; }
 .workspace-preview pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.workspace-preview .safe-markdown > :first-child { margin-top: 0; }
 .session-loading { padding: 18px 24px; }
 .conversation-page { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 .conversation-header { border-bottom: 1px solid #edf0ef; padding: 13px 24px; min-height: 60px; align-items: center; }
+.conversation-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .conversation-header h1 { font-size: 17px; margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.conversation-copy-id { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; flex: none; }
+.conversation-title [role="status"] { font-size: 12px; white-space: nowrap; }
 .conversation-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px 14px; }
 .conversation-actions a, .conversation-actions button { white-space: nowrap; }
 .conversation-actions button { font-size: 12px; padding: 6px 10px; }

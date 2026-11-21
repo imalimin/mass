@@ -433,6 +433,8 @@ func (r *Runtime) restoreStep(s *conversation, d sessionlog.Step) {
 			plan := fromJSON[run.Plan](result.Data)
 			if plan.Revision != 0 {
 				e := journal.New(a, "plan.updated", d.RunID, plan)
+				e.OperationID = tool.CallID
+				e.CausationID = d.EventID
 				e.OccurredAt = when
 				s.append(e)
 			}
