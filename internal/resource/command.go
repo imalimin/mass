@@ -19,18 +19,39 @@ type CommandOutput struct {
 }
 
 type CommandService struct {
-	Workspaces Workspaces
-	Execute    func(context.Context, string, string, []string, int) (CommandOutput, error)
+	Workspaces     Workspaces
+	Execute        func(context.Context, string, string, []string, int) (CommandOutput, error)
+	ExecuteWithEnv func(context.Context, string, string, []string, []string, int) (CommandOutput, error)
+	Env            func(run.Snapshot) ([]string, func(), error)
 }
 
 func (c *CommandService) Run(ctx context.Context, s run.Snapshot, name string, args []string) (run.ToolResult, error) {
 	commandCtx, cancel := context.WithTimeout(ctx, time.Duration(s.Definition.ToolPolicy.TimeoutMS)*time.Millisecond)
 	defer cancel()
+	var extraEnv []string
+	if c.Env != nil {
+		var cleanup func()
+		var envErr error
+		extraEnv, cleanup, envErr = c.Env(s)
+		if envErr != nil {
+			result := dataResult(CommandOutput{Detail: envErr.Error()}, "none")
+			result.Status, result.Error = "failed", "command_failed"
+			return result, context.Cause(ctx)
+		}
+		if cleanup != nil {
+			defer cleanup()
+		}
+	}
 	var out CommandOutput
 	started := time.Now()
+	maxLog := min(s.Definition.ToolPolicy.MaxLogBytes, 64<<10)
 	err := c.Workspaces.With(commandCtx, s.SpaceID, s.SessionID, func(dir WorkspaceDir) error {
 		var err error
-		out, err = c.Execute(commandCtx, dir.Root().Name(), name, args, min(s.Definition.ToolPolicy.MaxLogBytes, 64<<10))
+		if c.ExecuteWithEnv != nil {
+			out, err = c.ExecuteWithEnv(commandCtx, dir.Root().Name(), name, args, extraEnv, maxLog)
+		} else {
+			out, err = c.Execute(commandCtx, dir.Root().Name(), name, args, maxLog)
+		}
 		return err
 	})
 	out.Duration = time.Since(started).Milliseconds()

@@ -23,7 +23,7 @@ func decodeCatalog(w http.ResponseWriter, r *http.Request, v any, limit int64) e
 	}
 	return nil
 }
-func registerCatalog(register func(string, bool, endpoint), registerMedia func(string, bool, string, endpoint), options IdentityOptions, query func(*http.Request, identity.User) (identity.Query, int, string, error)) {
+func registerCatalog(register func(string, bool, endpoint), registerMedia func(string, bool, string, endpoint), registerResourceBearer func(string, endpoint), options IdentityOptions, query func(*http.Request, identity.User) (identity.Query, int, string, error)) {
 	svc := options.Catalog
 	if svc == nil {
 		return
@@ -42,16 +42,32 @@ func registerCatalog(register func(string, bool, endpoint), registerMedia func(s
 	})
 	for _, kind := range []string{"agent", "skill"} {
 		base := "/api/v1/spaces/{space_id}/" + kind + "s"
-		register("GET "+base, true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		registerResourceBearer("GET "+base, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+			includeDescription := false
+			if kind == "skill" {
+				raw := r.URL.Query().Get("include_description")
+				if raw != "" && raw != "true" && raw != "false" {
+					return identity.ErrInvalid
+				}
+				includeDescription = raw == "true"
+			}
 			q, n, scope, e := query(r, u)
 			if e != nil {
 				return e
 			}
-			items, e := svc.Repo.CatalogList(r.Context(), u.ID, r.PathValue("space_id"), kind, q)
+			space := r.PathValue("space_id")
+			items, e := svc.Repo.CatalogList(r.Context(), u.ID, space, kind, q)
 			if e != nil {
 				return e
 			}
-			writeJSON(w, 200, identity.Paginate(options.Service, scope, items, n, func(v catalog.Definition) string { return v.ID }))
+			page := identity.Paginate(options.Service, scope, items, n, func(v catalog.Definition) string { return v.ID })
+			if includeDescription {
+				for i := range page.Items {
+					desc := svc.SkillDescription(r.Context(), u.ID, space, page.Items[i].ID)
+					page.Items[i].Description = &desc
+				}
+			}
+			writeJSON(w, 200, page)
 			return nil
 		})
 		register("POST "+base, true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
@@ -136,7 +152,7 @@ func registerCatalog(register func(string, bool, endpoint), registerMedia func(s
 			if debug {
 				path = base + "/{id}/debug-snapshots"
 			}
-			register("GET "+path, true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+			listVersions := func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 				q, n, scope, e := query(r, u)
 				if e != nil {
 					return e
@@ -147,7 +163,12 @@ func registerCatalog(register func(string, bool, endpoint), registerMedia func(s
 				}
 				writeJSON(w, 200, identity.Paginate(options.Service, scope, items, n, func(v catalog.Version) string { return v.ID }))
 				return nil
-			})
+			}
+			if kind == "skill" && !debug {
+				registerResourceBearer("GET "+path, listVersions)
+			} else {
+				register("GET "+path, true, listVersions)
+			}
 			register("POST "+path, true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 				var b struct {
 					ExpectedRevision int64  `json:"expected_revision"`

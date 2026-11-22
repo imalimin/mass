@@ -78,3 +78,21 @@ func (c *Config) configureLAN(privateIPs []netip.Addr, requested netip.Addr, por
 func httpOrigin(address string) string {
 	return "http://" + strings.TrimSuffix(address, ":80")
 }
+
+func localAPIBaseURL(c Config) string {
+	if c.lanLoopback != "" {
+		return httpOrigin(c.lanLoopback)
+	}
+	addr := strings.TrimSpace(c.HTTP.Listen)
+	if addr == "" {
+		return ""
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return httpOrigin(addr)
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return httpOrigin(net.JoinHostPort(host, port))
+}

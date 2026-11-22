@@ -25,12 +25,18 @@ import (
 )
 
 type endpoint func(http.ResponseWriter, *http.Request, identity.User) error
+type PlatformTool struct {
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Description string `json:"description"`
+}
 type IdentityOptions struct {
 	Evaluation     *evaluation.Service
 	Catalog        *catalog.Service
 	Runtime        *RuntimeOptions
 	Storage        *StorageOptions
 	Service        *identity.Service
+	Tools          []PlatformTool
 	Origin         string
 	LoopbackOrigin string
 	Secure         bool
@@ -226,7 +232,7 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 	register := func(pattern string, auth bool, fn endpoint) {
 		registerMedia(pattern, auth, "application/json", fn)
 	}
-	registerBearer := func(pattern string, fn endpoint) {
+	registerBearerScoped := func(pattern string, scopes []string, fn endpoint) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
 			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -239,7 +245,7 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 					apiError(w, authErr, logger)
 					return
 				}
-				principal, err := svc.AuthenticateBearer(ctx, bearer, r.PathValue("space_id"))
+				principal, err := svc.AuthenticateBearer(ctx, bearer, r.PathValue("space_id"), scopes...)
 				if err != nil {
 					apiError(w, err, logger)
 					return
@@ -269,6 +275,12 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 				apiError(w, err, logger)
 			}
 		})
+	}
+	registerOpenAPIBearer := func(pattern string, fn endpoint) {
+		registerBearerScoped(pattern, []string{identity.BearerScopeOpenAPI}, fn)
+	}
+	registerResourceBearer := func(pattern string, fn endpoint) {
+		registerBearerScoped(pattern, []string{identity.BearerScopeOpenAPI, identity.BearerScopeRunRead}, fn)
 	}
 	register("POST /api/v1/auth/login", false, func(w http.ResponseWriter, r *http.Request, _ identity.User) error {
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
@@ -338,12 +350,15 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 			}
 		}
 		scope := u.ID + ":" + r.URL.Path + ":" + r.URL.Query().Get("available")
+		if inc := r.URL.Query().Get("include_description"); inc != "" {
+			scope += ":include_description=" + inc
+		}
 		q, err := svc.Query(scope, r.URL.Query().Get("cursor"), limit)
 		return q, limit, scope, err
 	}
-	registerCatalog(register, registerMedia, options, query)
+	registerCatalog(register, registerMedia, registerResourceBearer, options, query)
 	registerEvaluation(register, options, query)
-	registerRuntime(mux, register, registerBearer, options, query, token, logger)
+	registerRuntime(mux, register, registerOpenAPIBearer, options, query, token, logger)
 	register("GET /api/v1/spaces/{space_id}/openapi/tokens", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		q, n, scope, err := query(r, u)
 		if err != nil {
@@ -458,7 +473,7 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 		w.WriteHeader(204)
 		return nil
 	})
-	register("GET /api/v1/spaces/{space_id}/models", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+	registerResourceBearer("GET /api/v1/spaces/{space_id}/models", func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		available := r.URL.Query().Get("available")
 		if available != "" && available != "true" && available != "false" {
 			return identity.ErrInvalid
@@ -472,6 +487,17 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 			return err
 		}
 		writeJSON(w, 200, identity.Paginate(svc, scope, items, n, func(v identity.Model) string { return v.ID }))
+		return nil
+	})
+	registerResourceBearer("GET /api/v1/spaces/{space_id}/tools", func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		if err := svc.CheckAccess(r.Context(), u.ID, r.PathValue("space_id")); err != nil {
+			return err
+		}
+		tools := options.Tools
+		if tools == nil {
+			tools = []PlatformTool{}
+		}
+		writeJSON(w, 200, map[string]any{"items": tools})
 		return nil
 	})
 	register("GET /api/v1/spaces/{space_id}/models/{id}", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {

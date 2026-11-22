@@ -34,6 +34,7 @@ type Service struct {
 	dummyHash []byte
 	mu        sync.Mutex
 	watchers  map[string]map[*watch]struct{}
+	ephemeral map[[32]byte]BearerPrincipal
 }
 type watch struct{ cancel context.CancelCauseFunc }
 

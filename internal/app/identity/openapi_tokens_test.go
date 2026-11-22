@@ -272,3 +272,58 @@ func TestOpenAPITokenLifecycleAndBearerAuth(t *testing.T) {
 		t.Fatalf("expected ErrUnauthenticated for revoked token, got %v", err)
 	}
 }
+
+func TestRunReadTokenLifecycleAndScope(t *testing.T) {
+	ctx := context.Background()
+	repo := newOpenAPITokenMemory()
+	member := User{ID: uuid.NewString(), Username: "member"}
+	spaceA := storage.NewShortID()
+	spaceB := storage.NewShortID()
+	repo.users[member.ID] = member
+	repo.members[spaceA] = map[string]bool{member.ID: true}
+	repo.members[spaceB] = map[string]bool{member.ID: true}
+
+	cipher, err := secrets.New(bytes.Repeat([]byte{6}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := New(repo, cipher, time.Hour, []byte("cursor-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tok, revoke, err := svc.IssueRunReadToken(spaceA, member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tok) != 43 {
+		t.Fatalf("expected 43-char token, got %d", len(tok))
+	}
+	// No DB or audit pollution.
+	if len(repo.tokens) != 0 || len(repo.audits) != 0 {
+		t.Fatalf("ephemeral token polluted repo: tokens=%d audits=%d", len(repo.tokens), len(repo.audits))
+	}
+
+	// Succeeds for run_read scope in spaceA.
+	p, err := svc.AuthenticateBearer(ctx, tok, spaceA, BearerScopeOpenAPI, BearerScopeRunRead)
+	if err != nil || p.Scope != BearerScopeRunRead || p.User.ID != member.ID || p.SpaceID != spaceA {
+		t.Fatalf("unexpected principal: %+v err=%v", p, err)
+	}
+
+	// Rejected with 401 for openapi-only scope.
+	if _, err := svc.AuthenticateBearer(ctx, tok, spaceA, BearerScopeOpenAPI); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("expected ErrUnauthenticated for openapi-only scope, got %v", err)
+	}
+
+	// Rejected with 403 for cross-space even with run_read scope.
+	if _, err := svc.AuthenticateBearer(ctx, tok, spaceB, BearerScopeRunRead); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden cross-space, got %v", err)
+	}
+
+	// Revoke invalidates immediately and is idempotent.
+	revoke()
+	revoke()
+	if _, err := svc.AuthenticateBearer(ctx, tok, spaceA, BearerScopeRunRead); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("expected ErrUnauthenticated after revoke, got %v", err)
+	}
+}

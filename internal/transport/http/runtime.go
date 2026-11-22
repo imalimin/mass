@@ -586,7 +586,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 				return
 			}
 			var principal identity.BearerPrincipal
-			principal, err = options.Service.AuthenticateBearer(r.Context(), bearer, space)
+			principal, err = options.Service.AuthenticateBearer(r.Context(), bearer, space, identity.BearerScopeOpenAPI)
 			if err != nil {
 				apiError(w, err, logger)
 				return
@@ -598,7 +598,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 				return
 			}
 			check = func() error {
-				_, e := options.Service.AuthenticateBearer(ctx, bearer, space)
+				_, e := options.Service.AuthenticateBearer(ctx, bearer, space, identity.BearerScopeOpenAPI)
 				return e
 			}
 		} else {

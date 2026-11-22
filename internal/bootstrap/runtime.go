@@ -191,7 +191,25 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		fileService := &resource.FileService{Workspaces: workspaces, Content: runContent, Cursors: auth, MaxBytes: 1 << 20, Limits: storage.Limits{MaxArchiveFileBytes: c.Storage.MaxObjectBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
 		fileService.EnableRunPagination()
 		code := &resource.CodeService{Engine: codeEngine, Files: fileService, Network: &resource.Network{}}
-		commands := &resource.CommandService{Workspaces: workspaces, Execute: command.Execute}
+		commands := &resource.CommandService{
+			Workspaces:     workspaces,
+			ExecuteWithEnv: command.ExecuteWithEnv,
+			Env: func(s run.Snapshot) ([]string, func(), error) {
+				apiURL := localAPIBaseURL(c)
+				if apiURL == "" || auth == nil {
+					return nil, nil, nil
+				}
+				tok, revoke, err := auth.IssueRunReadToken(s.SpaceID, s.ActorID)
+				if err != nil {
+					return nil, nil, err
+				}
+				return []string{
+					"MASS_API_URL=" + apiURL,
+					"MASS_SPACE_ID=" + s.SpaceID,
+					"MASS_RUN_TOKEN=" + tok,
+				}, revoke, nil
+			},
+		}
 		sources := &resource.Sources{Files: fileService, Journal: runJournal, SharedSkillAsset: catalogue.ReadPublicAgentSkillAsset}
 		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: sources, Code: code, Command: commands, Journal: runJournal}, Control: budget, Journal: runJournal, Trace: recorder}
 		return &executor.Executor{Planner: contextPlanner, Model: gateway, Tools: tools, Control: budget}, nil

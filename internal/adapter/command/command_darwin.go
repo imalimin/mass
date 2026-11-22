@@ -18,6 +18,10 @@ import (
 )
 
 func Execute(ctx context.Context, workspace, name string, args []string, maxOutput int) (resource.CommandOutput, error) {
+	return ExecuteWithEnv(ctx, workspace, name, args, nil, maxOutput)
+}
+
+func ExecuteWithEnv(ctx context.Context, workspace, name string, args []string, extraEnv []string, maxOutput int) (resource.CommandOutput, error) {
 	var out resource.CommandOutput
 	path, err := exec.LookPath(name)
 	if err != nil {
@@ -50,7 +54,7 @@ func Execute(ctx context.Context, workspace, name string, args []string, maxOutp
 	argv = append(argv, "--", path)
 	cmd := exec.CommandContext(ctx, "/usr/bin/sandbox-exec", append(argv, args...)...)
 	cmd.Dir = workspace
-	cmd.Env = []string{"PATH=" + pathEnv, "HOME=" + tmp, "TMPDIR=" + tmp, "LANG=en_US.UTF-8"}
+	cmd.Env = append([]string{"PATH=" + pathEnv, "HOME=" + tmp, "TMPDIR=" + tmp, "LANG=en_US.UTF-8"}, extraEnv...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return killGroup(cmd.Process.Pid) }
 	// A child that keeps an output descriptor open must not hold up Wait.

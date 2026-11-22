@@ -25,6 +25,7 @@ import (
 	"github.com/imalimin/mass/internal/journal"
 	"github.com/imalimin/mass/internal/resource"
 	"github.com/imalimin/mass/internal/resource/sessionlog"
+	"github.com/imalimin/mass/internal/runtime/tool/registry"
 	httptransport "github.com/imalimin/mass/internal/transport/http"
 	"github.com/imalimin/mass/internal/transport/http/ui"
 )
@@ -121,9 +122,19 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 	}
 	defer listener.Close()
 	listeners := []net.Listener{listener}
+	toolSpecs := registry.Specs()
+	platformTools := make([]httptransport.PlatformTool, 0, len(toolSpecs))
+	for _, spec := range toolSpecs {
+		platformTools = append(platformTools, httptransport.PlatformTool{
+			Name:        spec.Name,
+			Version:     spec.Version,
+			Description: spec.Description,
+		})
+	}
 	identityOptions := httptransport.IdentityOptions{
 		Service: service, Origin: strings.TrimSuffix(c.HTTP.PublicURL, "/"), Secure: c.Auth.CookieSecure,
 		Storage: storageOptions, Catalog: catalogue, Runtime: runtimeOptions, Evaluation: evaluations,
+		Tools: platformTools,
 	}
 	if c.lanLoopback != "" {
 		loopback, err := net.Listen("tcp", c.lanLoopback)

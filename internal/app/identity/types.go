@@ -66,10 +66,17 @@ type OpenAPITokenSecret struct {
 	ID    string `json:"id"`
 	Token string `json:"token"`
 }
+
+const (
+	BearerScopeOpenAPI = "openapi"
+	BearerScopeRunRead = "run_read"
+)
+
 type BearerPrincipal struct {
 	User    User
 	SpaceID string
 	TokenID string
+	Scope   string
 }
 type Page[T any] struct {
 	Items      []T     `json:"items"`

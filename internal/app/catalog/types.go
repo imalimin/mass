@@ -38,6 +38,7 @@ type Definition struct {
 	Visibility       Visibility `json:"visibility,omitempty"`
 	LatestVersion    string     `json:"latest_version,omitempty"`
 	UpdatedAt        time.Time  `json:"updated_at,omitzero"`
+	Description      *string    `json:"description,omitempty"`
 }
 
 type Visibility string

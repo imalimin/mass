@@ -228,6 +228,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/spaces/{space_id}/tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listPlatformTools"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/spaces/{space_id}/model-capabilities": {
         parameters: {
             query?: never;
@@ -1251,6 +1267,8 @@ export interface components {
              * @description Most recent recorded definition change, when available in the definition list.
              */
             updated_at?: string;
+            /** @description Optional Skill description extracted from SKILL.md frontmatter when include_description=true. */
+            description?: string;
         };
         DefinitionAsset: {
             path: string;
@@ -2063,6 +2081,14 @@ export interface components {
             items: components["schemas"]["EvaluationCaseView"][];
             next_cursor: string | null;
         };
+        PlatformTool: {
+            name: string;
+            version: string;
+            description: string;
+        };
+        PlatformToolList: {
+            items: components["schemas"]["PlatformTool"][];
+        };
         OpenAPIToken: {
             id: components["schemas"]["ResourceID"];
             name: string;
@@ -2808,6 +2834,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OpenAPIToken"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listPlatformTools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Supported platform tools available to space members and Skill CLIs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformToolList"];
                 };
             };
             /** @description Request rejected or dependency unavailable. */
@@ -4312,6 +4369,8 @@ export interface operations {
             query?: {
                 cursor?: string;
                 limit?: number;
+                /** @description When true, includes description extracted from SKILL.md frontmatter for each returned skill. */
+                include_description?: boolean;
             };
             header?: never;
             path: {

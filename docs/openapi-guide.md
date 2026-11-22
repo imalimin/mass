@@ -33,7 +33,9 @@
 
 ### 2.2 开放接口清单
 
-首版仅以下 **5 个接口**支持 Bearer 鉴权（路径均以 `/api/v1/spaces/{space_id}` 为前缀）：
+以下 **10 个接口**支持 Bearer 鉴权（路径均以 `/api/v1/spaces/{space_id}` 为前缀）：
+
+**会话接口（仅空间 OpenAPI Token）：**
 
 | 方法 | 路径 | 用途 | 成功状态码 |
 | --- | --- | --- | --- |
@@ -43,7 +45,19 @@
 | `GET` | `/runs/{run_id}/events` | 通过 SSE 订阅增量回复与终态事件 | `200` |
 | `GET` | `/sessions/{session_id}/messages` | 分页读取会话历史消息 | `200` |
 
-> 其他所有 `/api/v1/...` 接口（含空间查询、模型配置、OpenAPI Token 管理等）仅支持网页 Cookie 鉴权；携带 `Authorization` 头调用这些接口将返回 `401`。
+**空间只读资源接口（空间 OpenAPI Token 与 Skill CLI 短时 Token 均可调用）：**
+
+| 方法 | 路径 | 用途 | 成功状态码 |
+| --- | --- | --- | --- |
+| `GET` | `/skills` | 分页读取当前空间 Skills 列表（可选 `include_description=true` 返回 `SKILL.md` frontmatter 中的 `description`） | `200` |
+| `GET` | `/skills/{id}/versions` | 分页读取指定 Skill 的已发布版本列表 | `200` |
+| `GET` | `/agents` | 分页读取当前空间 Agents 列表 | `200` |
+| `GET` | `/models` | 分页读取当前空间模型列表（支持 `available=true`，不含敏感密钥） | `200` |
+| `GET` | `/tools` | 读取平台受支持的内置 Tools 列表（`name`、`version`、`description`） | `200` |
+
+> 其他所有 `/api/v1/...` 接口（含 Skill 草稿、写配置、OpenAPI Token 管理等）仅支持网页 Cookie 鉴权；携带 `Authorization` 头调用这些接口将返回 `401`。
+>
+> 在平台内通过 `run_command` 运行 Skill CLI 时，运行时会自动注入 `MASS_API_URL`、`MASS_SPACE_ID` 和命令级短时只读 `MASS_RUN_TOKEN`（退出即失效，仅可访问上述 5 个只读资源接口）。
 
 ### 2.3 授权范围与幂等
 
@@ -228,6 +242,36 @@ curl -fsS "$MASS_URL/api/v1/spaces/$SPACE_ID/sessions/$SESSION_ID/messages?limit
 ```
 
 > 单条消息正文超过 `8192` 字节时会在接口中截断并标记 `"truncated": true`；如需获取完整回复，推荐在执行阶段通过 SSE 完整接收 `TEXT_MESSAGE_CONTENT` 增量片段。
+
+---
+
+### 3.6 查询空间只读资源（Skills / Agents / Models / Tools）
+
+空间 OpenAPI Token 与 `run_command` 注入的短时 `MASS_RUN_TOKEN` 均可调用以下 5 个只读接口：
+
+```sh
+# 1. 查询当前空间 Skills（可选 include_description=true 带上 SKILL.md frontmatter 中的 description）
+curl -fsS "$MASS_URL/api/v1/spaces/$SPACE_ID/skills?limit=100&include_description=true" \
+  -H "Authorization: Bearer $BEARER_TOKEN"
+
+# 2. 查询指定 Skill 的已发布版本
+curl -fsS "$MASS_URL/api/v1/spaces/$SPACE_ID/skills/$SKILL_ID/versions?limit=20" \
+  -H "Authorization: Bearer $BEARER_TOKEN"
+
+# 3. 查询当前空间 Agents
+curl -fsS "$MASS_URL/api/v1/spaces/$SPACE_ID/agents?limit=100" \
+  -H "Authorization: Bearer $BEARER_TOKEN"
+
+# 4. 查询当前空间可用模型（仅非敏感配置字段）
+curl -fsS "$MASS_URL/api/v1/spaces/$SPACE_ID/models?available=true&limit=100" \
+  -H "Authorization: Bearer $BEARER_TOKEN"
+
+# 5. 查询平台受支持的内置 Tools（返回 name / version / description）
+curl -fsS "$MASS_URL/api/v1/spaces/$SPACE_ID/tools" \
+  -H "Authorization: Bearer $BEARER_TOKEN"
+```
+
+在 Skill CLI 中直接替换环境变量为 `$MASS_API_URL`、`$MASS_SPACE_ID` 和 `$MASS_RUN_TOKEN` 即可。
 
 ---
 

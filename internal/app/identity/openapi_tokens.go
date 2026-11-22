@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -150,14 +152,68 @@ func (s *Service) RevokeOpenAPIToken(ctx context.Context, actor, space, tokenID 
 	return nil
 }
 
-func (s *Service) AuthenticateBearer(ctx context.Context, rawToken, space string) (BearerPrincipal, error) {
+// IssueRunReadToken mints an in-memory, read-only Bearer token scoped to the
+// current run's space and actor. Calling revoke immediately invalidates it.
+func (s *Service) IssueRunReadToken(space, actorID string) (string, func(), error) {
+	if space == "" || actorID == "" {
+		return "", nil, ErrInvalid
+	}
+	var randomBytes [32]byte
+	if _, err := rand.Read(randomBytes[:]); err != nil {
+		return "", nil, err
+	}
+	rawToken := base64.RawURLEncoding.EncodeToString(randomBytes[:])
+	sum := sha256.Sum256([]byte(rawToken))
+	principal := BearerPrincipal{
+		User:    User{ID: actorID},
+		SpaceID: space,
+		TokenID: "run:" + uuid.NewString(),
+		Scope:   BearerScopeRunRead,
+	}
+	s.mu.Lock()
+	if s.ephemeral == nil {
+		s.ephemeral = map[[32]byte]BearerPrincipal{}
+	}
+	s.ephemeral[sum] = principal
+	s.mu.Unlock()
+	var once sync.Once
+	revoke := func() {
+		once.Do(func() {
+			s.mu.Lock()
+			delete(s.ephemeral, sum)
+			s.mu.Unlock()
+		})
+	}
+	return rawToken, revoke, nil
+}
+
+func (s *Service) lookupEphemeralBearer(hash []byte) (BearerPrincipal, bool) {
+	if len(hash) != sha256.Size {
+		return BearerPrincipal{}, false
+	}
+	var key [32]byte
+	copy(key[:], hash)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.ephemeral[key]
+	return p, ok
+}
+
+func (s *Service) AuthenticateBearer(ctx context.Context, rawToken, space string, allowedScopes ...string) (BearerPrincipal, error) {
 	hash, err := bearerTokenHash(rawToken)
 	if err != nil {
 		return BearerPrincipal{}, err
 	}
-	principal, err := s.Repo.AuthenticateBearerToken(ctx, hash)
-	if err != nil {
-		return BearerPrincipal{}, err
+	principal, ok := s.lookupEphemeralBearer(hash)
+	if !ok {
+		principal, err = s.Repo.AuthenticateBearerToken(ctx, hash)
+		if err != nil {
+			return BearerPrincipal{}, err
+		}
+		principal.Scope = BearerScopeOpenAPI
+	}
+	if len(allowedScopes) > 0 && !slices.Contains(allowedScopes, principal.Scope) {
+		return BearerPrincipal{}, ErrUnauthenticated
 	}
 	if principal.SpaceID != space {
 		return BearerPrincipal{}, ErrForbidden
@@ -177,7 +233,7 @@ func (s *Service) WatchBearerAccess(parent context.Context, rawToken, space stri
 		releaseToken()
 		releaseAccess()
 	}
-	if _, err := s.AuthenticateBearer(ctx, rawToken, space); err != nil {
+	if _, err := s.AuthenticateBearer(ctx, rawToken, space, BearerScopeOpenAPI); err != nil {
 		release()
 		return nil, nil, err
 	}

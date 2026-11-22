@@ -290,6 +290,7 @@ paths:
       operationId: listModels
       security:
         - SessionCookie: []
+        - BearerAuth: []
       parameters:
         - name: space_id
           in: path
@@ -641,6 +642,31 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/tools:
+    get:
+      operationId: listPlatformTools
+      security:
+        - SessionCookie: []
+        - BearerAuth: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+      responses:
+        '200':
+          description: Supported platform tools available to space members and Skill CLIs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformToolList'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/model-capabilities:
     get:
       operationId: modelCapabilities
@@ -753,6 +779,7 @@ paths:
       operationId: catalog1
       security:
         - SessionCookie: []
+        - BearerAuth: []
       parameters:
         - name: space_id
           in: path
@@ -1889,6 +1916,7 @@ paths:
       operationId: catalog19
       security:
         - SessionCookie: []
+        - BearerAuth: []
       parameters:
         - name: space_id
           in: path
@@ -1905,6 +1933,12 @@ paths:
             type: integer
             minimum: 1
             maximum: 100
+        - name: include_description
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: When true, includes description extracted from SKILL.md frontmatter for each returned skill.
       responses:
         '200':
           description: Successful definition operation.
@@ -2343,6 +2377,7 @@ paths:
       operationId: catalog25
       security:
         - SessionCookie: []
+        - BearerAuth: []
       parameters:
         - name: space_id
           in: path
@@ -4278,6 +4313,9 @@ components:
           type: string
           format: date-time
           description: Most recent recorded definition change, when available in the definition list.
+        description:
+          type: string
+          description: Optional Skill description extracted from SKILL.md frontmatter when include_description=true.
     DefinitionAsset:
       type: object
       additionalProperties: false
@@ -6561,6 +6599,30 @@ components:
           type:
             - string
             - 'null'
+    PlatformTool:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - version
+        - description
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+    PlatformToolList:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlatformTool'
     OpenAPIToken:
       type: object
       additionalProperties: false
