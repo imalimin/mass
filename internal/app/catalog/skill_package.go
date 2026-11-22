@@ -176,3 +176,128 @@ func (s *Service) writeSkillPackage(ctx context.Context, actor, space string, d 
 	d.Document.Assets = assets
 	return d, nil
 }
+
+type SkillPackageExport struct {
+	SkillID   string
+	Name      string
+	VersionID string
+	Label     string
+	Size      int64
+	File      *os.File
+}
+
+func (e *SkillPackageExport) Close() error {
+	if e == nil || e.File == nil {
+		return nil
+	}
+	name := e.File.Name()
+	err := e.File.Close()
+	_ = os.Remove(name)
+	return err
+}
+
+// ExportSkillVersionPackage builds a clean, portable ZIP for one published Skill
+// version containing SKILL.md, explicit directories, and verified assets, while
+// omitting internal platform metadata such as bundle.json.
+func (s *Service) ExportSkillVersionPackage(ctx context.Context, actor, space, id, versionID string) (*SkillPackageExport, error) {
+	version, err := s.Repo.CatalogVersion(ctx, actor, space, "skill", id, versionID)
+	if err != nil {
+		return nil, err
+	}
+	if version.Debug {
+		return nil, identity.ErrNotFound
+	}
+	object, file, err := s.Content.Read(ctx, actor, space, version.ContentID)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	bundle, err := decodeSkillBundle(object, file, version.SHA256)
+	if err != nil {
+		return nil, err
+	}
+	if bundle.DefinitionID != id || !ValidName(bundle.Name) {
+		return nil, storage.ErrIntegrity
+	}
+	if _, err := ValidateDocument("skill", bundle.Name, bundle.Document, true); err != nil {
+		return nil, err
+	}
+	source, err := resource.OpenSkillPackage(file, object)
+	if err != nil {
+		return nil, err
+	}
+	tmp, err := os.CreateTemp("", "mass-skill-export-*")
+	if err != nil {
+		return nil, err
+	}
+	cleanup := func() {
+		name := tmp.Name()
+		_ = tmp.Close()
+		_ = os.Remove(name)
+	}
+	zw := zip.NewWriter(tmp)
+	writeEntry := func(entryPath string, data []byte) error {
+		w, err := zw.Create(entryPath)
+		if err == nil {
+			_, err = w.Write(data)
+		}
+		return err
+	}
+	if err := writeEntry(resource.SkillDocumentPath, []byte(bundle.Document.Markdown)); err != nil {
+		cleanup()
+		return nil, err
+	}
+	for _, dir := range bundle.Document.Directories {
+		if _, err := zw.Create(dir + "/"); err != nil {
+			cleanup()
+			return nil, err
+		}
+	}
+	for _, asset := range bundle.Document.Assets {
+		data, err := resource.ReadSkillEntry(source, asset.Path, MaxResource)
+		if err != nil {
+			cleanup()
+			return nil, err
+		}
+		sum := sha256.Sum256(data)
+		if int64(len(data)) != asset.Size || hex.EncodeToString(sum[:]) != asset.SHA256 {
+			cleanup()
+			return nil, storage.ErrIntegrity
+		}
+		if err := writeEntry(asset.Path, data); err != nil {
+			cleanup()
+			return nil, err
+		}
+	}
+	if err := zw.Close(); err != nil {
+		cleanup()
+		return nil, err
+	}
+	info, err := tmp.Stat()
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		cleanup()
+		return nil, err
+	}
+	// Recheck current membership after remote reads.
+	current, err := s.Repo.CatalogVersion(ctx, actor, space, "skill", id, versionID)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	if current.Debug {
+		cleanup()
+		return nil, identity.ErrNotFound
+	}
+	return &SkillPackageExport{
+		SkillID:   id,
+		Name:      bundle.Name,
+		VersionID: current.ID,
+		Label:     current.Label,
+		Size:      info.Size(),
+		File:      tmp,
+	}, nil
+}

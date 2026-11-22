@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/imalimin/mass/internal/app/catalog"
 	"github.com/imalimin/mass/internal/app/identity"
 	sessionapp "github.com/imalimin/mass/internal/app/session"
 	"github.com/imalimin/mass/internal/domain/run"
@@ -32,10 +33,25 @@ func registerCreativity(register func(string, bool, endpoint), options IdentityO
 		if errors.Is(err, identity.ErrNotFound) {
 			return false, nil
 		}
-		if err != nil || draft.Archived || draft.DefaultVersionID == "" {
+		if err != nil || draft.Archived {
 			return false, err
 		}
-		version, err := repo.CatalogVersion(ctx, actor, space, "agent", draft.ID, draft.DefaultVersionID)
+		versionID := ""
+		if finder, ok := repo.(interface {
+			LatestFormalVersion(context.Context, string, string, string, string) (catalog.Version, bool, error)
+		}); ok {
+			latest, _, err := finder.LatestFormalVersion(ctx, actor, space, "agent", draft.ID)
+			if err != nil {
+				return false, err
+			}
+			versionID = latest.ID
+		} else {
+			versionID = draft.DefaultVersionID
+		}
+		if versionID == "" {
+			return false, nil
+		}
+		version, err := repo.CatalogVersion(ctx, actor, space, "agent", draft.ID, versionID)
 		if errors.Is(err, identity.ErrNotFound) {
 			return false, nil
 		}

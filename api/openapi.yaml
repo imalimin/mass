@@ -2633,6 +2633,77 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/skills/{id}/versions/{version_id}/package:
+    get:
+      operationId: downloadSkillVersionPackage
+      security:
+        - SessionCookie: []
+        - BearerAuth: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: version_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Clean Skill package ZIP containing SKILL.md, directories, and verified assets (without internal bundle.json).
+          headers:
+            X-Mass-Skill-Id:
+              schema:
+                type: string
+                format: uuid
+            X-Mass-Skill-Name:
+              schema:
+                type: string
+            X-Mass-Skill-Version-Id:
+              schema:
+                type: string
+                format: uuid
+            X-Mass-Skill-Version:
+              schema:
+                type: string
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '401':
+          description: Rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/skills/{id}/versions/{version_id}/references:
     get:
       operationId: catalog28

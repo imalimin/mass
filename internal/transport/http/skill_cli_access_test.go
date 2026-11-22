@@ -143,16 +143,35 @@ func TestSkillCLIReadOnlyResourcesAndScopes(t *testing.T) {
 
 	objects := &stubObjectRepo{objects: map[string]storage.Object{}}
 	blobs := &stubBlobStore{data: map[string][]byte{}}
-	putSkillZip := func(space, defID, name, markdown string) (string, string) {
+	putSkillZip := func(space, defID, name, markdown string, dirs []string, files map[string]string) (string, string) {
 		var buf bytes.Buffer
 		zw := zip.NewWriter(&buf)
+		assets := make([]catalog.Asset, 0, len(files))
+		for filePath, content := range files {
+			sum := sha256.Sum256([]byte(content))
+			assets = append(assets, catalog.Asset{
+				Path:      filePath,
+				SHA256:    hex.EncodeToString(sum[:]),
+				Size:      int64(len(content)),
+				MediaType: "text/plain",
+			})
+			fw, _ := zw.Create(filePath)
+			_, _ = fw.Write([]byte(content))
+		}
+		for _, dir := range dirs {
+			_, _ = zw.Create(dir + "/")
+		}
 		manifest, _ := json.Marshal(catalog.Bundle{
 			FormatVersion: 1,
 			DefinitionID:  defID,
 			Kind:          "skill",
 			Name:          name,
 			Revision:      1,
-			Bindings:      []catalog.Binding{},
+			Document: catalog.Document{
+				Assets:      assets,
+				Directories: dirs,
+			},
+			Bindings: []catalog.Binding{},
 		})
 		mw, _ := zw.Create(resource.SkillManifestPath)
 		_, _ = mw.Write(manifest)
@@ -177,10 +196,12 @@ func TestSkillCLIReadOnlyResourcesAndScopes(t *testing.T) {
 		blobs.data[key] = raw
 		return id, digest
 	}
-	verContentID, verSHA := putSkillZip(spaceA, publishedSkillID, "published-skill", "---\nname: published-skill\ndescription: From published version\n---\n# Body")
-	pubDraftContentID, _ := putSkillZip(spaceA, publishedSkillID, "published-skill", "---\ndescription: Draft override\n---\n# Draft")
-	draftContentID, _ := putSkillZip(spaceA, draftSkillID, "draft-skill", "---\ndescription: From draft markdown\n---\n# Draft")
-	noDescContentID, _ := putSkillZip(spaceA, noDescSkillID, "nodesc-skill", "# Plain skill without frontmatter")
+	verMarkdown := "---\nname: published-skill\ndescription: From published version\n---\n# Body"
+	verHelperScript := "print('hello from skill')\n"
+	verContentID, verSHA := putSkillZip(spaceA, publishedSkillID, "published-skill", verMarkdown, []string{"templates"}, map[string]string{"scripts/helper.py": verHelperScript})
+	pubDraftContentID, _ := putSkillZip(spaceA, publishedSkillID, "published-skill", "---\ndescription: Draft override\n---\n# Draft", nil, nil)
+	draftContentID, _ := putSkillZip(spaceA, draftSkillID, "draft-skill", "---\ndescription: From draft markdown\n---\n# Draft", nil, nil)
+	noDescContentID, _ := putSkillZip(spaceA, noDescSkillID, "nodesc-skill", "# Plain skill without frontmatter", nil, nil)
 
 	catRepo := &stubCatalogRepo{
 		agents: []catalog.Definition{{ID: agentID, Kind: "agent", Name: "helper-agent"}},
@@ -241,10 +262,12 @@ func TestSkillCLIReadOnlyResourcesAndScopes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 1. All 5 read-only endpoints succeed with run_read token, openapi token, and Cookie.
+	// 1. All 6 read-only endpoints succeed with run_read token, openapi token, and Cookie.
+	packagePath := "/api/v1/spaces/" + spaceA + "/skills/" + publishedSkillID + "/versions/" + verID + "/package"
 	readOnlyPaths := []string{
 		"/api/v1/spaces/" + spaceA + "/skills",
 		"/api/v1/spaces/" + spaceA + "/skills/" + publishedSkillID + "/versions",
+		packagePath,
 		"/api/v1/spaces/" + spaceA + "/agents",
 		"/api/v1/spaces/" + spaceA + "/models?available=true",
 		"/api/v1/spaces/" + spaceA + "/tools",
@@ -314,6 +337,58 @@ func TestSkillCLIReadOnlyResourcesAndScopes(t *testing.T) {
 		t.Fatalf("no-desc skill desc=%q", gotDesc[noDescSkillID])
 	}
 
+	// 3b. GET /skills/{id}/versions/{version_id}/package returns a clean ZIP (without bundle.json) and metadata headers.
+	w = do("GET", packagePath, map[string]string{"Authorization": "Bearer " + runToken}, "")
+	if w.Code != 200 {
+		t.Fatalf("package download failed: %d %s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/zip" {
+		t.Fatalf("unexpected Content-Type: %q", ct)
+	}
+	if w.Header().Get("X-Mass-Skill-Id") != publishedSkillID ||
+		w.Header().Get("X-Mass-Skill-Name") != "published-skill" ||
+		w.Header().Get("X-Mass-Skill-Version-Id") != verID ||
+		w.Header().Get("X-Mass-Skill-Version") != "v1" {
+		t.Fatalf("unexpected metadata headers: %+v", w.Header())
+	}
+	if cd := w.Header().Get("Content-Disposition"); !strings.Contains(cd, "published-skill-v1.zip") {
+		t.Fatalf("unexpected Content-Disposition: %q", cd)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	if err != nil {
+		t.Fatalf("invalid zip returned: %v", err)
+	}
+	entries := map[string]string{}
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries[f.Name] = string(raw)
+	}
+	if _, hasBundle := entries[resource.SkillManifestPath]; hasBundle {
+		t.Fatalf("exported skill zip must omit internal %s", resource.SkillManifestPath)
+	}
+	if entries[resource.SkillDocumentPath] != verMarkdown {
+		t.Fatalf("unexpected SKILL.md: %q", entries[resource.SkillDocumentPath])
+	}
+	if entries["scripts/helper.py"] != verHelperScript {
+		t.Fatalf("unexpected asset scripts/helper.py: %q", entries["scripts/helper.py"])
+	}
+	if _, hasDir := entries["templates/"]; !hasDir {
+		t.Fatalf("expected explicit directory templates/ in exported zip, got %v", entries)
+	}
+	// Missing version returns 404.
+	w = do("GET", "/api/v1/spaces/"+spaceA+"/skills/"+publishedSkillID+"/versions/"+uuid.NewString()+"/package", map[string]string{"Authorization": "Bearer " + runToken}, "")
+	if w.Code != 404 {
+		t.Fatalf("missing version package: got %d want 404", w.Code)
+	}
+
 	// 4. Cross-space requests with run_read and openapi tokens return 403.
 	for _, p := range []string{
 		"/api/v1/spaces/" + spaceB + "/skills",
@@ -321,6 +396,7 @@ func TestSkillCLIReadOnlyResourcesAndScopes(t *testing.T) {
 		"/api/v1/spaces/" + spaceB + "/agents",
 		"/api/v1/spaces/" + spaceB + "/models",
 		"/api/v1/spaces/" + spaceB + "/skills/" + publishedSkillID + "/versions",
+		"/api/v1/spaces/" + spaceB + "/skills/" + publishedSkillID + "/versions/" + verID + "/package",
 	} {
 		for _, tok := range []string{runToken, openapiCreated.Token} {
 			w := do("GET", p, map[string]string{"Authorization": "Bearer " + tok}, "")

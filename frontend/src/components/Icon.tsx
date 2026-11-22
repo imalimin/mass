@@ -3,6 +3,7 @@ const paths = {
   arrowUp: 'M12 19V5m-7 7 7-7 7 7',
   arrowDown: 'M12 5v14m-7-7 7 7 7-7',
   plus: 'M12 5v14M5 12h14',
+  minus: 'M5 12h14',
   close: 'm6 6 12 12M18 6 6 18',
   check: 'm5 12 4 4L19 6',
   chevron: 'm9 6 6 6-6 6',

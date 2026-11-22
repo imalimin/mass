@@ -51,13 +51,14 @@
 | --- | --- | --- | --- |
 | `GET` | `/skills` | 分页读取当前空间 Skills 列表（可选 `include_description=true` 返回 `SKILL.md` frontmatter 中的 `description`） | `200` |
 | `GET` | `/skills/{id}/versions` | 分页读取指定 Skill 的已发布版本列表 | `200` |
+| `GET` | `/skills/{id}/versions/{version_id}/package` | 下载指定 Skill 已发布版本的干净 ZIP 包（含 `SKILL.md`、目录与资源文件，不含内部 `bundle.json`） | `200` |
 | `GET` | `/agents` | 分页读取当前空间 Agents 列表 | `200` |
 | `GET` | `/models` | 分页读取当前空间模型列表（支持 `available=true`，不含敏感密钥） | `200` |
 | `GET` | `/tools` | 读取平台受支持的内置 Tools 列表（`name`、`version`、`description`） | `200` |
 
 > 其他所有 `/api/v1/...` 接口（含 Skill 草稿、写配置、OpenAPI Token 管理等）仅支持网页 Cookie 鉴权；携带 `Authorization` 头调用这些接口将返回 `401`。
 >
-> 在平台内通过 `run_command` 运行 Skill CLI 时，运行时会自动注入 `MASS_API_URL`、`MASS_SPACE_ID` 和命令级短时只读 `MASS_RUN_TOKEN`（退出即失效，仅可访问上述 5 个只读资源接口）。
+> 在平台内通过 `run_command` 运行 Skill CLI 时，运行时会自动注入 `MASS_API_URL`、`MASS_SPACE_ID` 和命令级短时只读 `MASS_RUN_TOKEN`（退出即失效，仅可访问上述 6 个只读资源接口）。
 
 ### 2.3 授权范围与幂等
 

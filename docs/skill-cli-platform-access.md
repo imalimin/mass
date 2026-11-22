@@ -20,8 +20,8 @@
 
 | 类型 | 存储位置 | 生命周期 | `Scope` | 适用接口 |
 | --- | --- | --- | --- | --- |
-| OpenAPI 长效 Token | 数据库 `space_openapi_tokens` | 由空间所有者创建、续期、吊销（默认 180 天） | `openapi` | 现有 5 个会话接口 + 本文 5 个只读资源接口 |
-| 命令级短时 Token | 服务端内存（不落库） | 单次 `run_command` 执行前签发，退出/超时/取消后 `defer` 立即销毁 | `run_read` | 仅限本文 5 个只读资源接口 |
+| OpenAPI 长效 Token | 数据库 `space_openapi_tokens` | 由空间所有者创建、续期、吊销（默认 180 天） | `openapi` | 现有 5 个会话接口 + 本文 6 个只读资源接口 |
+| 命令级短时 Token | 服务端内存（不落库） | 单次 `run_command` 执行前签发，退出/超时/取消后 `defer` 立即销毁 | `run_read` | 仅限本文 6 个只读资源接口 |
 
 ### 2.2 统一鉴权流程
 
@@ -78,6 +78,7 @@ curl -fsS "$MASS_API_URL/api/v1/spaces/$MASS_SPACE_ID/tools" \
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/spaces/{space_id}/skills` | 已有（[catalog.go](../internal/transport/http/catalog.go)） | 分页返回当前空间的 Skills 列表，新增可选查询参数 `include_description`（默认 `false`） |
 | `GET` | `/api/v1/spaces/{space_id}/skills/{id}/versions` | 已有（[catalog.go](../internal/transport/http/catalog.go)） | 返回指定 Skill 的已发布版本列表 |
+| `GET` | `/api/v1/spaces/{space_id}/skills/{id}/versions/{version_id}/package` | **新增** | 下载指定 Skill 已发布版本的干净 ZIP 包（含 `SKILL.md`、目录与校验通过的资源文件，不含内部 `bundle.json`），并通过响应头返回 `X-Mass-Skill-Id`、`X-Mass-Skill-Name`、`X-Mass-Skill-Version-Id`、`X-Mass-Skill-Version` |
 | `GET` | `/api/v1/spaces/{space_id}/agents` | 已有（[catalog.go](../internal/transport/http/catalog.go)） | 分页返回当前空间的 Agents 列表 |
 | `GET` | `/api/v1/spaces/{space_id}/models` | 已有（[identity.go](../internal/transport/http/identity.go)） | 分页返回当前空间模型列表（支持 `available=true`，仅返回非敏感配置字段，不含 API Key 与密文） |
 | `GET` | `/api/v1/spaces/{space_id}/tools` | **新增** | 返回平台受支持的内置 Tools 列表 |

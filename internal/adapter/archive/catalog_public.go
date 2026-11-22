@@ -31,7 +31,8 @@ func (c *Catalog) PublicAgentVersion(ctx context.Context, space, id, versionID s
 		return catalog.Definition{}, catalog.Version{}, storage.Object{}, catalog.ErrAgentNotPublic
 	}
 	if versionID == "" {
-		versionID = agent.DefaultVersionID
+		latest, _ := latestFormal(agent)
+		versionID = latest.ID
 	}
 	selected, err := findVersion(agent, versionID)
 	if err != nil || selected.Debug || selected.Archived {

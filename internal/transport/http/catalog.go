@@ -2,10 +2,13 @@ package httptransport
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"mime"
 	"net/http"
+	"strconv"
 
 	"github.com/imalimin/mass/internal/app/catalog"
 	"github.com/imalimin/mass/internal/app/identity"
@@ -195,6 +198,37 @@ func registerCatalog(register func(string, bool, endpoint), registerMedia func(s
 				writeJSON(w, 200, v)
 				return nil
 			})
+			if kind == "skill" && !debug {
+				registerResourceBearer("GET "+path+"/{version_id}/package", func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+					space := r.PathValue("space_id")
+					if err := options.Service.CheckAccess(r.Context(), u.ID, space); err != nil {
+						return err
+					}
+					exported, err := svc.ExportSkillVersionPackage(r.Context(), u.ID, space, r.PathValue("id"), r.PathValue("version_id"))
+					if err != nil {
+						return err
+					}
+					defer exported.Close()
+					filename := exported.Name + ".zip"
+					if exported.Label != "" {
+						filename = exported.Name + "-" + exported.Label + ".zip"
+					}
+					w.Header().Set("Content-Type", "application/zip")
+					w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
+					w.Header().Set("Content-Length", strconv.FormatInt(exported.Size, 10))
+					w.Header().Set("X-Mass-Skill-Id", exported.SkillID)
+					w.Header().Set("X-Mass-Skill-Name", exported.Name)
+					w.Header().Set("X-Mass-Skill-Version-Id", exported.VersionID)
+					if exported.Label != "" {
+						w.Header().Set("X-Mass-Skill-Version", exported.Label)
+					}
+					w.WriteHeader(200)
+					_ = copyAuthorized(r.Context(), w, exported.File, func(ctx context.Context) error {
+						return options.Service.CheckAccess(ctx, u.ID, space)
+					})
+					return nil
+				})
+			}
 		}
 		register("GET "+base+"/{id}/versions/{version_id}/references", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 			q, n, scope, e := query(r, u)

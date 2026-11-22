@@ -215,7 +215,21 @@ func (s *Service) localAgentVersion(ctx context.Context, actor, space string, in
 	}
 	versionID := in.VersionID
 	if versionID == "" {
-		versionID = draft.DefaultVersionID
+		if in.Creativity != nil {
+			if finder, ok := s.Catalog.Repo.(interface {
+				LatestFormalVersion(context.Context, string, string, string, string) (catalog.Version, bool, error)
+			}); ok {
+				latest, _, err := finder.LatestFormalVersion(ctx, actor, space, "agent", in.AgentID)
+				if err != nil {
+					return catalog.Version{}, err
+				}
+				versionID = latest.ID
+			} else {
+				versionID = draft.DefaultVersionID
+			}
+		} else {
+			versionID = draft.DefaultVersionID
+		}
 	}
 	if versionID == "" {
 		return catalog.Version{}, catalog.ErrConfig

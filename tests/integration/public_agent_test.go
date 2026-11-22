@@ -147,7 +147,7 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	must(err)
 	agent, err := catalogue.Create(ctx, owner.ID, source.ID, "agent", "shared-agent")
 	must(err)
-	conf := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Tools: []string{"read_skill_resource", "write_file", "update_plan"}, Skills: []catalog.SkillRef{{ID: skill.ID, Version: "v1"}}}
+	conf := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Tools: []string{"read_skill_resource", "write_file", "update_plan"}, Skills: []catalog.SkillRef{}}
 	conf.Context = catalog.ContextConfig{MaxInputTokens: 20000, MaxTokens: 1024, Compression: "summary"}
 	conf.Limits.MaxSteps, conf.Limits.TimeoutSeconds = 6, 30
 	publish := func(label string) catalog.Version {
@@ -160,7 +160,7 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 		return version
 	}
 	firstVersion := publish("v1")
-	conf.Skills = []catalog.SkillRef{}
+	conf.Skills = []catalog.SkillRef{{ID: skill.ID, Version: "v1"}}
 	secondVersion := publish("v2")
 	manager, err := workspace.New(t.TempDir(), storage.Limits{MaxArchiveFileBytes: 1 << 20, MaxTotalBytes: 4 << 20})
 	must(err)
@@ -297,13 +297,13 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	request("GET", source.ID+"/skills/"+skill.ID+"/versions/"+skillVersion.ID, visitorCookie, nil, 403)
 	var session run.Session
 	must(json.Unmarshal(request("POST", launch, visitorCookie, inputs(), 201).Body.Bytes(), &session))
-	if session.SpaceID != target.ID || session.AgentSourceSpaceID != source.ID || session.VersionID != firstVersion.ID || session.Creativity == nil || session.AgentName != agent.Name {
+	if session.SpaceID != target.ID || session.AgentSourceSpaceID != source.ID || session.VersionID != secondVersion.ID || session.Creativity == nil || session.AgentName != agent.Name {
 		t.Fatalf("incorrect shared session: %+v", session)
 	}
 	cold := &archiveadapter.Runtime{DB: db.Store, Log: &sessionlog.Store{Root: t.TempDir(), Prefix: "shared", Blobs: blobs}}
 	reloaded, err := cold.RuntimeSession(ctx, visitor.ID, target.ID, session.ID)
 	must(err)
-	if reloaded.AgentSourceSpaceID != source.ID || reloaded.VersionID != firstVersion.ID {
+	if reloaded.AgentSourceSpaceID != source.ID || reloaded.VersionID != secondVersion.ID {
 		t.Fatalf("incorrect restored shared session: %+v", reloaded)
 	}
 	request("PUT", source.ID+"/agents/"+agent.ID+"/default-version", ownerCookie, map[string]string{"version_id": secondVersion.ID}, 204)
@@ -313,7 +313,7 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	var ordinary run.Session
 	must(json.Unmarshal(request("POST", target.ID+"/sessions", visitorCookie, ordinaryInput, 201).Body.Bytes(), &ordinary))
 	if ordinary.VersionID != secondVersion.ID || ordinary.Creativity != nil {
-		t.Fatalf("new ordinary shared session did not use the new default: %+v", ordinary)
+		t.Fatalf("new ordinary shared session did not use the latest version: %+v", ordinary)
 	}
 	path := target.ID + "/sessions/" + session.ID
 	var accepted run.View
@@ -324,7 +324,7 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 		accepted, err = sessions.RuntimeRun(ctx, visitor.ID, target.ID, accepted.ID)
 		must(err)
 	}
-	if accepted.Status != "succeeded" || accepted.Definition.VersionID != firstVersion.ID || accepted.Definition.Model.Endpoint != "" {
+	if accepted.Status != "succeeded" || accepted.Definition.VersionID != secondVersion.ID || accepted.Definition.Model.Endpoint != "" {
 		t.Fatalf("unexpected shared Run: status=%s error=%s", accepted.Status, accepted.Error)
 	}
 	workspace := request("GET", path+"/workspace/files?path=result.txt", visitorCookie, nil, 200)
@@ -350,7 +350,7 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	iterationInput["target_agent_id"] = agent.ID
 	localLaunch := source.ID + "/creativity/sessions"
 	must(json.Unmarshal(request("POST", localLaunch, ownerCookie, iterationInput, 201).Body.Bytes(), &iteration))
-	if iteration.VersionID != secondVersion.ID || iteration.Creativity == nil || iteration.Creativity.TargetVersionID != latestAgent.ID ||
+	if iteration.VersionID != latestAgent.ID || iteration.Creativity == nil || iteration.Creativity.TargetVersionID != latestAgent.ID ||
 		len(iteration.Creativity.SkillBases) != 1 || iteration.Creativity.SkillBases[0].VersionID != latestSkill.ID {
 		t.Fatalf("unexpected iteration base: %+v", iteration.Creativity)
 	}

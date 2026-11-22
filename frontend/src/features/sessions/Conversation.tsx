@@ -533,14 +533,57 @@ function ToolActivity({ tools }: { tools: Tool[] }) {
   </details>
 }
 
+const planStatuses: Record<Schema['RuntimePlan']['steps'][number]['status'], string> = {
+  pending: '待处理',
+  in_progress: '进行中',
+  completed: '已完成',
+  skipped: '已跳过',
+}
+
+function RunPlan({ plan }: { plan: Schema['RuntimePlan'] }) {
+  const [open, setOpen] = useState(true)
+  const total = plan.steps.length
+  const resolved = plan.steps.filter(step => step.status === 'completed' || step.status === 'skipped').length
+  const active = plan.steps.find(step => step.status === 'in_progress')
+  const allDone = total > 0 && resolved === total
+  const percent = total > 0 ? Math.round((resolved / total) * 100) : 0
+
+  return <aside aria-label="当前运行计划" className="run-plan" data-complete={allDone ? 'true' : undefined}>
+    <div className="run-plan-progress" aria-hidden="true">
+      <div className="run-plan-progress-fill" style={{ width: `${percent}%` }} />
+    </div>
+    <button type="button" className="run-plan-head" aria-expanded={open} onClick={() => setOpen(v => !v)}>
+      <span className="run-plan-lead-icon"><Icon name="list" size={16} /></span>
+      <strong className="run-plan-title">任务计划</strong>
+      <span className={`run-plan-count${allDone ? ' is-done' : active ? ' is-running' : ''}`}>{resolved}/{total}</span>
+      {!open && active && <span className="run-plan-summary">· {active.title}</span>}
+      {!open && !active && allDone && <span className="run-plan-summary is-done">· 全部完成</span>}
+      <span className="run-plan-meta">
+        <span className="run-plan-revision">修订 {plan.revision}</span>
+        <Icon name="chevron" size={15} className="run-plan-chevron" />
+      </span>
+    </button>
+    {open && <ol className="run-plan-list">{plan.steps.map(step => <li key={step.id} className={`run-plan-step is-${step.status}`}>
+      <span className="run-plan-step-icon" aria-hidden="true">
+        {step.status === 'completed' && <span className="run-plan-badge is-completed"><Icon name="check" size={11} /></span>}
+        {step.status === 'in_progress' && <span className="run-plan-dot-active" />}
+        {step.status === 'skipped' && <span className="run-plan-badge is-skipped"><Icon name="minus" size={10} /></span>}
+        {step.status === 'pending' && <span className="run-plan-ring" />}
+      </span>
+      <span className="run-plan-step-text">
+        <span className="sr-only">{planStatuses[step.status]} · </span>
+        <span className="run-plan-step-title">{step.title}</span>
+      </span>
+      {step.status === 'in_progress' && <span className="run-plan-tag is-running" aria-hidden="true">进行中</span>}
+      {step.status === 'skipped' && <span className="run-plan-tag is-skipped" aria-hidden="true">已跳过</span>}
+    </li>)}</ol>}
+  </aside>
+}
+
 function RunActivity({ state, showTools }: { state: Schema['UIState'] | null; showTools?: boolean }) {
   if (!state || !state.plan && !state.artifacts.length && !(showTools && state.tools.length)) return null
   return <div className="run-output">
-    {state.plan && <aside aria-label="当前运行计划" className="run-plan"><strong>任务计划 · 修订 {state.plan.revision}</strong>
-      <ol>{state.plan.steps.map(step => <li key={step.id}>
-        <span>{({ pending: '待处理', in_progress: '进行中', completed: '已完成', skipped: '已跳过' })[step.status]}</span> · {step.title}
-      </li>)}</ol>
-    </aside>}
+    {state.plan && <RunPlan plan={state.plan} />}
     {showTools && <ToolActivity tools={state.tools} />}
     {state.artifacts.length > 0 && <div className="run-artifacts">{state.artifacts.map(a => <a key={a.id} href={a.download_url} download
       aria-label={`下载 ${a.name}`} title={`下载 ${a.name}`}>
