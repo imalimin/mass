@@ -71,7 +71,21 @@ export function App() {
       : space ? creativitySessionPage ? <CreativityConversation key={space.id} space={space.id} />
         : <SessionWorkspace key={space.id} space={space.id} /> : <SpaceUnavailable />} /></Routes>
   </main>
-  return <div className="layout"><aside className="app-sidebar"><Link className="brand" to={workspaceHomePath}>MASS</Link>
+  return <div className="layout"><aside className="app-sidebar"><Link className="brand" to={workspaceHomePath}>
+    <svg className="brand-mark" width="34" height="32" viewBox="0 0 60 36" aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id="mass-brand-ribbon" x2="0" y2="1">
+          <stop stopColor="#c9a6f4" />
+          <stop offset="1" stopColor="#a578e3" />
+        </linearGradient>
+      </defs>
+      <path fill="#d9b6f1" d="M0 25 12 0h13L11 36H0Z" />
+      <path fill="#faf6ff" d="M12 0h13l14 36H26Z" />
+      <path fill="#9063c8" d="M42 0h13l5 25v11H48Z" />
+      <path fill="url(#mass-brand-ribbon)" d="M42 0h13L39 36H26Z" />
+    </svg>
+    <span>MASS</span>
+  </Link>
     <WorkspacePicker spaces={spaces.data} current={space} pending={spaces.isPending} />
     {space && <nav aria-label="空间导航">{['工作空间', '定义与资源', '评测', '空间管理'].map(group => <div key={group}><div className="nav-caption">{group}</div>{workspaceSections.filter(s => s.group === group).map(s => <NavLink key={s.path} to={spacePath(space.id, s.path)} end={!s.path}><Icon name={s.icon} />{s.label}</NavLink>)}</div>)}</nav>}
     <AccountSettings username={me.data.username} pending={logout.isPending} onLogout={() => logout.mutate()} /></aside>
