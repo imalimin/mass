@@ -18,6 +18,11 @@ const newTurn = () => ({ content: [{ type: 'text' as const, text: '' }] })
 const newCase = (): Case => ({ turns: [newTurn()] })
 const newRequestKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
 const maxPersistedConcurrency = 65_535
+const evaluationDateTime = new Intl.DateTimeFormat('sv-SE', {
+  year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+})
+const successRate = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 1 })
 const countTurns = (cases?: Case[]) => (cases ?? []).reduce((n, c) => n + c.turns.length, 0)
 const errorText = (error: unknown) => error instanceof Error ? error.message : ''
 const caseText = (c: Case, turn: number) => c.turns[turn].content.map(part => part.type === 'text' ? part.text : '').join('')
@@ -48,7 +53,9 @@ function Datasets({ workspace, creating }: { workspace: Schema['Space']; creatin
       columns={['名称', '当前版本', '用例数', '保存时间']}>
       {datasets.data.map(d => <tr key={d.id}>
         <td><Link className="workspace-list-name" to={`${path}/${d.id}`}>{d.name}</Link></td>
-        <td>v{d.version}</td><td>{d.case_count}</td><td><time dateTime={d.saved_at}>{new Date(d.saved_at).toLocaleString()}</time></td>
+        <td>v{d.version}</td>
+        <td>{d.case_count}</td>
+        <td><time dateTime={d.saved_at}>{evaluationDateTime.format(new Date(d.saved_at))}</time></td>
       </tr>)}
     </WorkspaceListTable>}
     {creating && <DatasetEditor space={space} />}
@@ -140,11 +147,17 @@ function Experiments({ workspace }: { workspace: Schema['Space'] }) {
     {experiments.error && <p role="alert">{experiments.error.message}</p>}{experiments.isPending && <p role="status">正在读取实验…</p>}
     {experiments.data?.length === 0 && <p className="muted">还没有实验。</p>}
     {!!experiments.data?.length && <WorkspaceListTable label="实验列表" className="experiment-list-table"
-      columns={['实验', '评测集版本', '状态', '已结束 / 总用例', '成功 / 失败']}>
-      {[...experiments.data].sort((a, b) => b.created_at.localeCompare(a.created_at)).map(v => <tr key={v.id}>
-        <td><Link className="workspace-list-name" to={`${path}/${v.id}`}>{new Date(v.created_at).toLocaleString()}</Link><small>{v.id}</small></td>
-        <td>v{v.dataset_version}</td><td>{labels[v.status]}</td><td>{v.succeeded + v.failed} / {v.case_count}</td><td>{v.succeeded} / {v.failed}</td>
-      </tr>)}
+      columns={['实验', '创建时间', '状态', '进度', '成功率']}>
+      {[...experiments.data].sort((a, b) => b.created_at.localeCompare(a.created_at)).map(v => {
+        const finished = v.succeeded + v.failed
+        return <tr key={v.id}>
+          <td><Link className="workspace-list-name" to={`${path}/${v.id}`}>{v.id}</Link></td>
+          <td><time dateTime={v.created_at}>{evaluationDateTime.format(new Date(v.created_at))}</time></td>
+          <td>{labels[v.status]}</td>
+          <td>{finished} / {v.case_count}</td>
+          <td>{finished ? successRate.format(v.succeeded / finished) : '—'}</td>
+        </tr>
+      })}
     </WorkspaceListTable>}
     {creating && <FormDialog title="发起实验" pending={launch.isPending} close={() => setCreating(false)}>{dismiss =>
       <form onSubmit={e => { e.preventDefault(); if (!launch.isPending) launch.mutate() }}>

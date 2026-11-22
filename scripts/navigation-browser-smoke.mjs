@@ -25,10 +25,12 @@ const messages = Array.from({ length: 32 }, (_, index) => {
   return { id: `message-${sequence}`, run_id: '', source_event_id: `event-${sequence}`, sequence, role: index % 2 ? 'assistant' : 'user', content: `会话消息 ${sequence}`, truncated: false }
 })
 const pageOf = items => ({ items, next_cursor: null, has_more: false, next_after: '0' })
-const dataset = { id: 'dataset-fixture', name: '回归评测集', version: 2, case_count: 1, saved_at: '2026-10-28T09:00:00Z',
+const dataset = { id: 'dataset-fixture', name: '回归评测集', version: 2, case_count: 1, saved_at: '2026-10-28T09:08:07Z',
   cases: [{ turns: [{ content: [{ type: 'text', text: '测试输入' }] }] }] }
 const experiment = { id: 'experiment-fixture', dataset_id: dataset.id, dataset_version: dataset.version, agent_id: 'definition-one',
-  agent_version_id: 'version-two', status: 'completed', succeeded: 1, failed: 0, case_count: 1, concurrency: 1, created_at: dataset.saved_at }
+  agent_version_id: 'version-two', status: 'completed', succeeded: 1, failed: 0, case_count: 1, concurrency: 1, created_at: '2026-11-18T16:00:01Z' }
+const runningExperiment = { ...experiment, id: 'experiment-running', status: 'running', succeeded: 2, failed: 1, case_count: 4 }
+const queuedExperiment = { ...experiment, id: 'experiment-queued', status: 'queued', succeeded: 0 }
 let createdDataset
 let signedIn = true, createdSpaces = 0, firstRunRejected = false, agentVisibility = 'space'
 let publishCalls = 0, pendingModelSelection = false, debugKey, debugSubmittedRun = false, debugSaved = false, debugFailed = false
@@ -68,7 +70,7 @@ const server = createServer(async (req, res) => {
       assert.deepEqual(input, { dataset_id: dataset.id, agent_id: experiment.agent_id, agent_version_id: experiment.agent_version_id, concurrency: 1 })
       return json(experiment, 201)
     }
-    if (path.endsWith('/evaluation/experiments')) return json(pageOf([experiment]))
+    if (path.endsWith('/evaluation/experiments')) return json(pageOf([experiment, runningExperiment, queuedExperiment]))
     if (path.endsWith('/evaluation/experiments/experiment-fixture')) return json(experiment)
     if (path.endsWith('/members') && req.method === 'POST') return json({ code: 'forbidden' }, 403)
     if (path.endsWith('/members')) return json(pageOf([{ id: 'alice', username: 'alice', is_owner: true }]))
@@ -267,6 +269,13 @@ try {
   const experimentList = page.getByRole('table', { name: '实验列表' })
   const skillList = page.getByRole('table', { name: 'Skill 列表' })
   const listToolbar = page.locator('.workspace-list-toolbar')
+  const expectTimestampToFit = async table => {
+    await expect.poll(() => table.locator('time').first().evaluate(time => {
+      const cell = time.closest('td')
+      const contentRight = cell.getBoundingClientRect().right - parseFloat(getComputedStyle(cell).paddingRight)
+      return time.getClientRects().length === 1 && time.getBoundingClientRect().right <= contentRight
+    })).toBe(true)
+  }
   const expectListToolbar = async (label, action) => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveCount(0)
     const breadcrumb = listToolbar.getByRole('navigation', { name: '面包屑' })
@@ -443,9 +452,11 @@ try {
   assert.equal(creativePrompts[0].text, '做一个报告 Agent')
   assert.ok(creativePrompts[0].idempotency_key)
   await page.getByRole('link', { name: '← 创意' }).click(); await heading('创意')
-  await nav('空间概览').click(); await heading('空间概览')
-  await expect(page).toHaveURL(url + '/spaces/space-one/overview')
-  await nav('创意').click(); await heading('创意')
+  await expect(nav('空间概览')).toHaveCount(0)
+  await page.goto(url + '/spaces/space-one/overview')
+  await expect(page).toHaveURL(url + '/spaces/space-one')
+  await heading('创意')
+  await expect(nav('创意')).toHaveAttribute('aria-current', 'page')
   await expect(page.getByLabel('新空间名称')).toHaveCount(0)
   await expect(page.getByLabel('已有账号用户名')).toHaveCount(0)
   const settings = page.getByRole('button', { name: '账号设置', exact: true })
@@ -461,6 +472,7 @@ try {
   await expectListToolbar('评测集', openDataset)
   await expect(datasetList.getByRole('columnheader')).toHaveText(['名称', '当前版本', '用例数', '保存时间'])
   await expect(datasetList.getByRole('link', { name: dataset.name })).toBeVisible()
+  await expect(datasetList.getByRole('cell', { name: '2026-10-28 17:08:07', exact: true })).toBeVisible()
   await openDataset.click()
   await expect(page).toHaveURL(url + '/spaces/space-one/evaluation/datasets/new')
   await expect(nav('评测集')).toHaveAttribute('aria-current', 'page')
@@ -482,8 +494,19 @@ try {
   await expect(nav('实验')).toHaveAttribute('aria-current', 'page'); await expect(nav('评测集')).not.toHaveAttribute('aria-current', 'page')
   const openExperiment = listToolbar.getByRole('button', { name: '发起实验', exact: true })
   await expectListToolbar('实验', openExperiment)
-  await expect(experimentList.getByRole('columnheader')).toHaveText(['实验', '评测集版本', '状态', '已结束 / 总用例', '成功 / 失败'])
-  await expect(experimentList.getByRole('row').filter({ hasText: experiment.id })).toContainText('已结束')
+  await expect(experimentList.getByRole('columnheader')).toHaveText(['实验', '创建时间', '状态', '进度', '成功率'])
+  const experimentLink = experimentList.getByRole('link', { name: experiment.id, exact: true })
+  await expect(experimentLink).toHaveAttribute('href', '/spaces/space-one/evaluation/experiments/experiment-fixture')
+  await expect(experimentList.getByRole('row').filter({ hasText: experiment.id }).getByRole('cell'))
+    .toHaveText([experiment.id, '2026-11-19 00:00:01', '已结束', '1 / 1', '100%'])
+  await expect(experimentList.getByRole('row').filter({ hasText: runningExperiment.id }).getByRole('cell'))
+    .toHaveText([runningExperiment.id, '2026-11-19 00:00:01', '执行中', '3 / 4', '66.7%'])
+  await expect(experimentList.getByRole('row').filter({ hasText: queuedExperiment.id }).getByRole('cell'))
+    .toHaveText([queuedExperiment.id, '2026-11-19 00:00:01', '排队中', '0 / 1', '—'])
+  const desktopViewport = page.viewportSize()
+  await page.setViewportSize({ width: 1024, height: desktopViewport.height })
+  await expectTimestampToFit(experimentList)
+  await page.setViewportSize(desktopViewport)
   const experimentDialog = page.getByRole('dialog', { name: '发起实验' })
   await openExperiment.click()
   await experimentDialog.getByRole('button', { name: '取消', exact: true }).click()
@@ -693,7 +716,7 @@ try {
   await switchSpace('研究空间'); await heading('创意')
   await mkdir('.cache', { recursive: true }); await page.screenshot({ path: '.cache/navigation-desktop.png', fullPage: true })
   await page.setViewportSize({ width: 390, height: 844 }); await page.reload(); await heading('创意')
-  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile overview overflow')
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile Creativity home overflow')
   await spacePicker.click()
   await expect(spaceLink('研究空间')).toBeInViewport()
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile workspace menu overflow')
@@ -702,6 +725,7 @@ try {
     await nav(label).click()
     await expect(table).toBeVisible()
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `mobile ${label} list overflow`)
+    if (table !== skillList) await expectTimestampToFit(table)
   }
   await nav('模型配置').click(); await expect(page.getByLabel('模型名称', { exact: true })).toBeVisible()
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile models overflow')

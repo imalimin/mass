@@ -173,7 +173,7 @@ function SpaceWorkspace({ space, user, pending, error }: { space?: Schema['Space
   if (error) return <p role="alert">{error.message}</p>
   if (!space) return <SpaceUnavailable />
   return <Routes><Route index element={<CreativityHome key={space.id} space={space.id} />} />
-    <Route path="overview" element={<SpaceOverview space={space} />} />
+    <Route path="overview" element={<Navigate to={spacePath(space.id)} replace />} />
     <Route path="members" element={<Members key={space.id} space={space} user={user} onLeave={() => navigate(workspaceHomePath)} />} />
     <Route path="models" element={<Models key={space.id} space={space} />} />
     <Route path="credentials" element={<Navigate to={spacePath(space.id, 'models')} replace />} />
@@ -187,8 +187,4 @@ function SpaceWorkspace({ space, user, pending, error }: { space?: Schema['Space
     <Route path="*" element={<NotFound />} /></Routes>
 }
 function SpaceUnavailable() { return <section className="panel"><h2>空间不存在或无权访问</h2><Link className="text-link" to={workspaceHomePath}>返回工作台</Link></section> }
-function SpaceOverview({ space }: { space: Schema['Space'] }) {
-  return <><section className="panel overview-welcome"><div className="eyebrow">{space.is_owner ? '管理员' : '空间成员'}</div><h2>{space.name}</h2><p className="muted">在 Agents 中选择助手开始对话，在空间管理中配置协作环境。</p><Link className="primary-link" to={spacePath(space.id, 'agents')}>查看 Agents →</Link></section>
-    {['定义与资源', '评测', '空间管理'].map(group => <section className="overview-group" key={group}><h2>{group}</h2><div className="overview-grid">{workspaceSections.filter(s => s.group === group).map(s => <Link className="overview-card" key={s.path} to={spacePath(space.id, s.path)}><h3>{s.label}</h3><p>{s.description}</p><span className="card-link">进入 →</span></Link>)}</div></section>)}</>
-}
-function NotFound() { return <section className="panel"><h2>页面未找到</h2><p className="muted">请从导航选择功能，或返回空间概览。</p><Link className="text-link" to={workspaceHomePath}>返回工作台</Link></section> }
+function NotFound() { return <section className="panel"><h2>页面未找到</h2><p className="muted">请从导航选择功能，或返回工作台。</p><Link className="text-link" to={workspaceHomePath}>返回工作台</Link></section> }

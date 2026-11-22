@@ -2,7 +2,6 @@ export const workspaceHomePath = '/spaces'
 
 export const workspaceSections = [
   { path: '', label: '创意', icon: 'sparkle', description: '通过对话把想法变成 Agent。', group: '工作空间' },
-  { path: 'overview', label: '空间概览', icon: 'grid', description: '查看空间入口，开始任务或管理协作资源。', group: '工作空间' },
   { path: 'agents', label: 'Agents', icon: 'bot', description: '配置助手的模型、指令与工具，发布可复用的版本。', group: '定义与资源' },
   { path: 'skills', label: 'Skills', icon: 'layers', description: '编写方法与资源，供 Agent 绑定和复用。', group: '定义与资源' },
   { path: 'evaluation/datasets', label: '评测集', icon: 'list', description: '管理版本化评测集，编排每条用例的单轮和多轮输入。', group: '评测' },
