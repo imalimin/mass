@@ -1,10 +1,6 @@
 .evaluation-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; min-width: 0; }
 .evaluation-workspace > .panel { min-width: 0; }
-.evaluation-heading, .evaluation-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
-.evaluation-heading h2 { margin: 0; }
-.evaluation-heading nav { display: flex; gap: 6px; }
-.evaluation-heading nav a { padding: 9px 16px; border-radius: 8px; color: inherit; text-decoration: none; }
-.evaluation-heading nav a.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.evaluation-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 .evaluation-workspace fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .evaluation-workspace label { display: grid; gap: 6px; }
 .evaluation-workspace textarea { width: 100%; resize: vertical; }
@@ -14,6 +10,13 @@
 .evaluation-turn + .evaluation-turn { border-top: 1px solid var(--border); }
 .evaluation-turn pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .evaluation-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
+.dataset-list-table { min-width: 420px; }
+.experiment-list-table { min-width: 560px; }
+:is(.dataset-list-table, .experiment-list-table) :is(th, td):first-child { width: 32%; }
+.experiment-list-table td:first-child { padding-block: 8px; }
+.dataset-form-dialog { width: min(760px, calc(100vw - 36px)); }
+.evaluation-create-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.evaluation-create-actions > :first-child { margin-inline-end: auto; }
 .evaluation-table { width: 100%; overflow-x: auto; }
 .evaluation-table table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }
 .evaluation-table th, .evaluation-table td { padding: 12px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }

@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/imalimin/mass/internal/app/catalog"
@@ -85,6 +87,40 @@ func (s *Store) CatalogList(ctx context.Context, actor, space, kind string, q id
 	})
 	return
 }
+
+func (s *Store) DefinitionUpdateTimes(ctx context.Context, actor, space string, ids []string) (map[string]time.Time, error) {
+	updates := make(map[string]time.Time, len(ids))
+	if len(ids) == 0 {
+		return updates, nil
+	}
+	args := make([]any, 1, len(ids)+1)
+	args[0] = space
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	placeholders := strings.Repeat("?,", len(ids)-1) + "?"
+	err := s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT target_id, MAX(created_at) FROM audit_logs
+			WHERE space_id=? AND target_id IN (`+placeholders+`)
+			AND action IN ('definition.created','draft.saved','definition.published','definition.default',
+				'definition.visibility','definition.archive','definition.version.archive') GROUP BY target_id`, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			var updatedAt time.Time
+			if err := rows.Scan(&id, &updatedAt); err != nil {
+				return err
+			}
+			updates[id] = updatedAt
+		}
+		return rows.Err()
+	})
+	return updates, err
+}
+
 func (s *Store) CatalogDraft(ctx context.Context, actor, space, kind, id string) (d catalog.Draft, err error) {
 	err = s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error { var e error; d, e = catalogDraft(ctx, tx, space, kind, id); return e })
 	return

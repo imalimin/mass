@@ -62,7 +62,8 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 		Root: filepath.Join(workspaces.LocalPath(), ".sessions"), Prefix: c.TOS.Prefix, Blobs: blobs}}
 	sessions.DiagnosticLog = diagnostic.NewStore(sessions.Log.Root, sessions.Log.Prefix, blobs, logger)
 	content := &resource.ContentStore{Repo: objects, Blobs: blobs, Prefix: c.TOS.Prefix, MaxBytes: storage.MaxContentObjectBytes, Inline: sessions}
-	catalogStore := &archive.Catalog{Blobs: blobs, Prefix: c.TOS.Prefix, Objects: objects, Content: content, Model: store.Model, Audit: store.Audit}
+	catalogStore := &archive.Catalog{Blobs: blobs, Prefix: c.TOS.Prefix, Objects: objects, Content: content,
+		Model: store.Model, Audit: store.Audit, UpdateTimes: store.DefinitionUpdateTimes}
 	sessions.CatalogObject = catalogStore.Lookup
 	objects.Lookups = []archive.ObjectLookup{catalogStore.Lookup, sessions.Lookup}
 	journalService := &journal.Journal{Repo: sessions}

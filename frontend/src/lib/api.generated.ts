@@ -1196,6 +1196,13 @@ export interface components {
             archived: boolean;
             default_version_id: string;
             visibility?: components["schemas"]["AgentVisibility"];
+            /** @description Label of the latest non-archived formal version, when available in the definition list. */
+            latest_version?: string;
+            /**
+             * Format: date-time
+             * @description Most recent recorded definition change, when available in the definition list.
+             */
+            updated_at?: string;
         };
         DefinitionAsset: {
             path: string;

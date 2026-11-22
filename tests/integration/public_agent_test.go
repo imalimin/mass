@@ -127,7 +127,8 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	objects := &archiveadapter.Objects{Authorize: db.Store.CheckAccess}
 	sessions := &archiveadapter.Runtime{DB: db.Store, Objects: objects, Log: &sessionlog.Store{Root: t.TempDir(), Prefix: "shared", Blobs: blobs}}
 	content := &resource.ContentStore{Repo: objects, Blobs: blobs, Prefix: "shared", MaxBytes: storage.MaxContentObjectBytes, Inline: sessions}
-	catalogStore := &archiveadapter.Catalog{Blobs: blobs, Prefix: "shared", Objects: objects, Content: content, Model: db.Store.Model, Audit: db.Store.Audit}
+	catalogStore := &archiveadapter.Catalog{Blobs: blobs, Prefix: "shared", Objects: objects, Content: content,
+		Model: db.Store.Model, Audit: db.Store.Audit, UpdateTimes: db.Store.DefinitionUpdateTimes}
 	objects.Lookups = []archiveadapter.ObjectLookup{catalogStore.Lookup, sessions.Lookup}
 	sessions.CatalogObject = catalogStore.Lookup
 	catalogue := &catalog.Service{Repo: catalogStore, Content: content}
@@ -283,6 +284,11 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	request("POST", launch, visitorCookie, inputs(), 403)
 	request("PUT", visibility, visitorCookie, map[string]string{"visibility": "public"}, 403)
 	request("PUT", visibility, ownerCookie, map[string]string{"visibility": "public"}, 200)
+	request("GET", source.ID+"/agents", visitorCookie, nil, 403)
+	agents := jsonValue[identity.Page[catalog.Definition]](t, request("GET", source.ID+"/agents", ownerCookie, nil, 200)).Items
+	if len(agents) != 1 || agents[0].DefaultVersionID != firstVersion.ID || agents[0].LatestVersion != secondVersion.Label || agents[0].UpdatedAt.Before(secondVersion.CreatedAt) {
+		t.Fatalf("unexpected published Agent list metadata: %+v", agents)
+	}
 	available = request("GET", target.ID+"/creativity", visitorCookie, nil, 200)
 	if !strings.Contains(available.Body.String(), `"available":true`) {
 		t.Fatal(available.Body.String())
@@ -797,6 +803,17 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	request("GET", newProjectPath+"agent.yaml", ownerCookie, nil, 404)
 	unpublished, err := catalogue.Create(ctx, owner.ID, source.ID, "agent", "first-release")
 	must(err)
+	agents = jsonValue[identity.Page[catalog.Definition]](t, request("GET", source.ID+"/agents", ownerCookie, nil, 200)).Items
+	var unpublishedSummary catalog.Definition
+	for _, item := range agents {
+		if item.ID == unpublished.ID {
+			unpublishedSummary = item
+			break
+		}
+	}
+	if unpublishedSummary.LatestVersion != "" || unpublishedSummary.UpdatedAt.IsZero() {
+		t.Fatalf("unexpected unpublished Agent list metadata: %+v", unpublishedSummary)
+	}
 	draftInput := inputs()
 	draftInput["target_agent_id"] = unpublished.ID
 	var draftSession run.Session

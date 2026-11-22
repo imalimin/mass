@@ -4094,6 +4094,13 @@ components:
           type: string
         visibility:
           $ref: '#/components/schemas/AgentVisibility'
+        latest_version:
+          type: string
+          description: Label of the latest non-archived formal version, when available in the definition list.
+        updated_at:
+          type: string
+          format: date-time
+          description: Most recent recorded definition change, when available in the definition list.
     DefinitionAsset:
       type: object
       additionalProperties: false

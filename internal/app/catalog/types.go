@@ -36,6 +36,8 @@ type Definition struct {
 	Archived         bool       `json:"archived"`
 	DefaultVersionID string     `json:"default_version_id"`
 	Visibility       Visibility `json:"visibility,omitempty"`
+	LatestVersion    string     `json:"latest_version,omitempty"`
+	UpdatedAt        time.Time  `json:"updated_at,omitzero"`
 }
 
 type Visibility string

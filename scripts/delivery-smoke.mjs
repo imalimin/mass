@@ -42,11 +42,17 @@ try {
   const edit = async (label, value) => { await page.locator(`[data-editor="${label}"] .view-lines`).click(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A'); await page.keyboard.insertText(value) }
   const save = async () => { const response = page.waitForResponse(r => r.url().endsWith('/draft') && r.request().method() === 'PUT'); await page.getByRole('button', { name: '保存草稿', exact: true }).click(); assert.equal((await response).status(), 200) }
   const publish = async () => { const response = page.waitForResponse(r => r.url().endsWith('/versions') && r.request().method() === 'POST'); await page.getByRole('button', { name: '发布版本', exact: true }).click(); const r = await response; assert.equal(r.status(), 201); return r.json() }
-  await page.getByLabel('定义名称').fill('retained-skill'); await page.getByRole('button', { name: '创建 Skill', exact: true }).click(); await edit('SKILL.md', '# Retained skill\nPreserve notes across runs.'); await save()
+  await page.getByRole('button', { name: '创建 Skill', exact: true }).click()
+  const createSkill = page.getByRole('dialog', { name: '创建 Skill' })
+  await createSkill.getByLabel('名称', { exact: true }).fill('retained-skill')
+  await createSkill.getByRole('button', { name: '创建', exact: true }).click(); await edit('SKILL.md', '# Retained skill\nPreserve notes across runs.'); await save()
   await page.getByText('添加资源', { exact: true }).click()
   await page.getByLabel('资源文件（最多 8 MiB）').setInputFiles({ name: 'rules.txt', mimeType: 'text/plain', buffer: Buffer.from('retained rule bytes') }); const upload = page.waitForResponse(r => r.url().endsWith('/resources')); await page.getByRole('button', { name: '上传资源', exact: true }).click(); assert.equal((await upload).status(), 200)
   const skill = await publish()
-  await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByLabel('定义名称').fill('delivery-agent'); await page.getByRole('button', { name: '创建 Agent', exact: true }).click(); await edit('AGENTS.md', '# Delivery agent\nRead and write session files.')
+  await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByRole('button', { name: '创建 Agent', exact: true }).click()
+  const createAgent = page.getByRole('dialog', { name: '创建 Agent' })
+  await createAgent.getByLabel('名称', { exact: true }).fill('delivery-agent')
+  await createAgent.getByRole('button', { name: '创建', exact: true }).click(); await edit('AGENTS.md', '# Delivery agent\nRead and write session files.')
   await page.getByLabel('绑定模型').selectOption({ label: '恢复模型' }); await page.getByLabel('Skill 版本：retained-skill', { exact: true }).selectOption('v1'); const agent = await publish(); assert.equal(agent.bundle.bindings[0].version_id, skill.id)
   await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByRole('link', { name: '打开 delivery-agent 的会话', exact: true }).click()
   const firstAccepted = page.waitForResponse(r => /\/sessions\/[^/]+\/runs$/.test(r.url()) && r.request().method() === 'POST')

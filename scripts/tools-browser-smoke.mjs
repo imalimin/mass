@@ -19,12 +19,18 @@ try {
   const edit = async (label, value) => { const root = page.locator(`[data-editor="${label}"]`); await root.locator('.monaco-editor').waitFor(); await root.locator('.view-lines').click(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A'); await page.keyboard.insertText(value) }
   const save = async () => { const response = page.waitForResponse(r => r.url().endsWith('/draft') && r.request().method() === 'PUT'); await page.getByRole('button', { name: '保存草稿', exact: true }).click(); const r = await response; assert.equal(r.status(), 200, `${await r.text()} ${r.request().postDataJSON().document.config_yaml}`) }
   const publish = async () => { const response = page.waitForResponse(r => r.url().endsWith('/versions') && r.request().method() === 'POST'); await page.getByRole('button', { name: '发布版本', exact: true }).click(); const r = await response; assert.equal(r.status(), 201, await r.text()); return r.json() }
-  await page.getByLabel('定义名称').fill('rules'); await page.getByRole('button', { name: '创建 Skill', exact: true }).click(); await edit('SKILL.md', '# Rules\nRead the multiplier from rules.txt.'); await save()
+  await page.getByRole('button', { name: '创建 Skill', exact: true }).click()
+  const createSkill = page.getByRole('dialog', { name: '创建 Skill' })
+  await createSkill.getByLabel('名称', { exact: true }).fill('rules')
+  await createSkill.getByRole('button', { name: '创建', exact: true }).click(); await edit('SKILL.md', '# Rules\nRead the multiplier from rules.txt.'); await save()
   await page.getByText('添加资源', { exact: true }).click()
   await page.getByLabel('资源文件（最多 8 MiB）').setInputFiles({ name: 'rules.txt', mimeType: 'text/plain', buffer: Buffer.from('2') })
   await expect(page.getByLabel('资源路径')).toHaveValue('rules.txt')
   const uploaded = page.waitForResponse(r => r.url().endsWith('/resources')); await page.getByRole('button', { name: '上传资源', exact: true }).click(); assert.equal((await uploaded).status(), 200); await publish()
-  await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByLabel('定义名称').fill('tools-assistant'); await page.getByRole('button', { name: '创建 Agent', exact: true }).click(); await edit('AGENTS.md', '# Tools assistant\nProcess the accepted attachment with the selected tools.')
+  await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByRole('button', { name: '创建 Agent', exact: true }).click()
+  const createAgent = page.getByRole('dialog', { name: '创建 Agent' })
+  await createAgent.getByLabel('名称', { exact: true }).fill('tools-assistant')
+  await createAgent.getByRole('button', { name: '创建', exact: true }).click(); await edit('AGENTS.md', '# Tools assistant\nProcess the accepted attachment with the selected tools.')
   await page.getByLabel('绑定模型').selectOption({ label: '工具模型' }); await page.getByLabel('Skill 版本：rules', { exact: true }).selectOption('v1')
   const checks = page.locator('.tool-options input'); assert.equal(await checks.count(), 17); for (const check of await checks.all()) await check.check()
   await page.getByLabel('输入 Token 上限').fill('100000'); const agentVersion = await publish()

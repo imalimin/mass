@@ -19,13 +19,14 @@ import (
 )
 
 type Catalog struct {
-	Blobs   storage.BlobStore
-	Prefix  string
-	Objects *Objects
-	Content *resource.ContentStore
-	Model   func(context.Context, string, string, string) (identity.Model, error)
-	Audit   func(context.Context, string, string, string, string) error
-	locks   sync.Map
+	Blobs       storage.BlobStore
+	Prefix      string
+	Objects     *Objects
+	Content     *resource.ContentStore
+	Model       func(context.Context, string, string, string) (identity.Model, error)
+	Audit       func(context.Context, string, string, string, string) error
+	UpdateTimes func(context.Context, string, string, []string) (map[string]time.Time, error)
+	locks       sync.Map
 }
 
 type catalogIndex map[string]*definition
@@ -169,7 +170,30 @@ func (c *Catalog) CatalogList(ctx context.Context, actor, space, kind string, q 
 			items = append(items, d.Definition)
 		}
 	}
-	return catalogPage(items, q.Limit, func(d catalog.Definition) string { return d.ID }), nil
+	items = catalogPage(items, q.Limit, func(d catalog.Definition) string { return d.ID })
+	if len(items) == 0 {
+		return items, nil
+	}
+	var updates map[string]time.Time
+	if c.UpdateTimes != nil {
+		ids := make([]string, len(items))
+		for i, item := range items {
+			ids[i] = item.ID
+		}
+		updates, err = c.UpdateTimes(ctx, actor, space, ids)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for i := range items {
+		latest, _ := latestFormal(index[items[i].ID])
+		items[i].LatestVersion = latest.Label
+		items[i].UpdatedAt = updates[items[i].ID]
+		if latest.CreatedAt.After(items[i].UpdatedAt) {
+			items[i].UpdatedAt = latest.CreatedAt
+		}
+	}
+	return items, nil
 }
 
 func catalogPage[T any](items []T, limit int, id func(T) string) []T {

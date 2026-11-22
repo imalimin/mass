@@ -6,6 +6,8 @@ import 'monaco-editor/languages/definitions/javascript/register'
 import 'monaco-editor/languages/definitions/typescript/register'
 import 'monaco-editor/languages/definitions/python/register'
 import 'monaco-editor/languages/features/json/register'
+// Keep shared Monaco services in the editor's lazy load, before the first editor initializes them.
+import 'monaco-editor/languages/features/json/jsonMode'
 import 'monaco-editor/languages/definitions/shell/register'
 import 'monaco-editor/languages/definitions/html/register'
 import 'monaco-editor/languages/definitions/css/register'

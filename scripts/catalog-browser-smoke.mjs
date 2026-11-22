@@ -32,7 +32,14 @@ try {
     await page.getByRole('heading', { name: `不可变版本：${label}`, exact: true }).waitFor()
     return version
   }
-  const create = async (kind, name) => { await page.locator('.app-sidebar').getByRole('link', { name: kind === 'Skill' ? 'Skills' : 'Agents', exact: true }).click(); await page.getByLabel('定义名称').fill(name); await page.getByRole('button', { name: `创建 ${kind}`, exact: true }).click(); await page.getByRole('heading', { name: `${name} · ${kind}`, exact: true }).waitFor() }
+  const create = async (kind, name) => {
+    await page.locator('.app-sidebar').getByRole('link', { name: kind === 'Skill' ? 'Skills' : 'Agents', exact: true }).click()
+    await page.getByRole('button', { name: `创建 ${kind}`, exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: `创建 ${kind}` })
+    await dialog.getByLabel('名称', { exact: true }).fill(name)
+    await dialog.getByRole('button', { name: '创建', exact: true }).click()
+    await page.getByRole('heading', { name: `${name} · ${kind}`, exact: true }).waitFor()
+  }
   await create('Skill', 'extract')
   await edit('SKILL.md', '# Extract v1\nUse the original method.')
   const files = page.getByRole('navigation', { name: 'Skill 文件目录' })
@@ -100,12 +107,15 @@ try {
   assert.ok(skill1.bundle.document.assets.some(asset => asset.path === codePath))
   await create('Skill', 'report_template'); await edit('SKILL.md', '# Report v1'); await save(); const skill2 = await publish('v1')
   await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click()
-  const agentName = page.getByLabel('定义名称')
-  await agentName.fill('测试 Agent')
   await page.getByRole('button', { name: '创建 Agent', exact: true }).click()
+  const agentDialog = page.getByRole('dialog', { name: '创建 Agent' })
+  const agentName = agentDialog.getByLabel('名称', { exact: true })
+  await agentName.fill('测试 Agent')
+  await agentDialog.getByRole('button', { name: '创建', exact: true }).click()
   assert.equal(await agentName.evaluate(input => input.validity.patternMismatch), true)
   await agentName.fill('report-writer')
   assert.equal(await agentName.evaluate(input => input.validity.valid), true)
+  await agentDialog.getByRole('button', { name: '取消', exact: true }).click()
   const assistantName = 'report_writer'
   await create('Agent', assistantName); await edit('AGENTS.md', '# Assistant v1')
   await expect(page.locator('[data-editor="agent.json"]')).toBeHidden()

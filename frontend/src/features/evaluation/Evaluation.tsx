@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { agentSessionsPath, spacePath } from '../../app/routes'
+import { FormDialog } from '../../components/FormDialog'
+import { Icon } from '../../components/Icon'
+import { WorkspaceListTable, WorkspaceListToolbar } from '../../components/WorkspaceList'
 import { list, request, type Schema } from '../../lib/api'
 import './evaluation.css'
 
@@ -21,28 +24,38 @@ const caseText = (c: Case, turn: number) => c.turns[turn].content.map(part => pa
 function move<T>(items: T[], index: number, delta: number): T[] {
   const next = [...items]; [next[index], next[index + delta]] = [next[index + delta], next[index]]; return next
 }
-export function Evaluation({ space }: { space: string }) {
-  const location = useLocation(), base = spacePath(space, 'evaluation')
-  return <div className="evaluation-workspace"><div className="evaluation-heading"><div><h2>评测与实验</h2><p className="muted">用固定的输入和 Agent 版本，重复验证单轮与多轮对话。</p></div>
-    <nav aria-label="测评导航"><NavLink to={`${base}/datasets`}>评测集</NavLink><NavLink to={`${base}/experiments`}>实验</NavLink></nav></div>
-    <Routes><Route index element={<Navigate to="datasets" replace />} /><Route path="datasets" element={<Datasets space={space} />} />
+export function Evaluation({ workspace }: { workspace: Schema['Space'] }) {
+  const location = useLocation(), space = workspace.id
+  return <div className="evaluation-workspace">
+    <Routes><Route index element={<Navigate to="datasets" replace />} /><Route path="datasets" element={<Datasets workspace={workspace} />} />
+      <Route path="datasets/new" element={<Datasets workspace={workspace} creating />} />
       <Route path="datasets/:datasetId" element={<DatasetEditor key={space + location.pathname} space={space} />} />
-      <Route path="experiments" element={<Experiments space={space} />} />
+      <Route path="experiments" element={<Experiments workspace={workspace} />} />
       <Route path="experiments/:experimentId" element={<ExperimentDetail space={space} />} />
       <Route path="*" element={<p>测评页面不存在。</p>} /></Routes>
   </div>
 }
-function Datasets({ space }: { space: string }) {
-  const base = `/spaces/${space}/evaluation`, path = spacePath(space, 'evaluation/datasets')
+function Datasets({ workspace, creating }: { workspace: Schema['Space']; creating?: boolean }) {
+  const space = workspace.id, base = `/spaces/${space}/evaluation`, path = spacePath(space, 'evaluation/datasets')
   const datasets = useQuery({ queryKey: ['private', space, 'evaluation', 'datasets'], queryFn: ({ signal }) => list<Dataset>(`${base}/datasets`, signal) })
-  return <section className="panel"><div className="evaluation-toolbar"><h2>评测集</h2><Link className="primary-link" to={`${path}/new`}>新建评测集</Link></div>
+  return <section aria-label="评测集">
+    <WorkspaceListToolbar space={workspace} name="评测集">
+      <Link className="primary-link" to={`${path}/new`}><Icon name="plus" />新建评测集</Link>
+    </WorkspaceListToolbar>
     {datasets.isPending && <p role="status">正在读取评测集…</p>}{datasets.error && <p role="alert">{datasets.error.message}</p>}
     {datasets.data?.length === 0 && <p className="muted">创建第一份评测集，添加用例及每轮用户输入。</p>}
-    <div className="evaluation-table"><table><thead><tr><th>名称</th><th>当前版本</th><th>用例数</th><th>保存时间</th></tr></thead><tbody>{datasets.data?.map(d => <tr key={d.id}><td><Link to={`${path}/${d.id}`}>{d.name}</Link></td><td>v{d.version}</td><td>{d.case_count}</td><td>{new Date(d.saved_at).toLocaleString()}</td></tr>)}</tbody></table></div>
+    {!!datasets.data?.length && <WorkspaceListTable label="评测集列表" className="dataset-list-table"
+      columns={['名称', '当前版本', '用例数', '保存时间']}>
+      {datasets.data.map(d => <tr key={d.id}>
+        <td><Link className="workspace-list-name" to={`${path}/${d.id}`}>{d.name}</Link></td>
+        <td>v{d.version}</td><td>{d.case_count}</td><td><time dateTime={d.saved_at}>{new Date(d.saved_at).toLocaleString()}</time></td>
+      </tr>)}
+    </WorkspaceListTable>}
+    {creating && <DatasetEditor space={space} />}
   </section>
 }
 function DatasetEditor({ space }: { space: string }) {
-  const { datasetId = '' } = useParams(), [params, setParams] = useSearchParams(), navigate = useNavigate(), client = useQueryClient()
+  const { datasetId = 'new' } = useParams(), [params, setParams] = useSearchParams(), navigate = useNavigate(), client = useQueryClient()
   const fresh = datasetId === 'new', version = params.get('version'), base = `/spaces/${space}/evaluation/datasets`
   const [draft, setDraft] = useState<DatasetInput>({ name: '', cases: [newCase()] }), [history, setHistory] = useState('')
   const dataset = useQuery({ queryKey: ['private', space, 'evaluation', 'dataset', datasetId, version], enabled: !fresh,
@@ -52,16 +65,14 @@ function DatasetEditor({ space }: { space: string }) {
     if (new TextEncoder().encode(JSON.stringify(draft)).length > 1024 * 1024) throw new Error('整份评测集不能超过 1 MiB，请减少输入内容。')
     return request<Dataset>(fresh ? base : `${base}/${datasetId}/versions`, 'POST', draft)
   }, onSuccess: d => { client.setQueryData(['private', space, 'evaluation', 'dataset', d.id, null], d); void client.invalidateQueries({ queryKey: ['private', space, 'evaluation', 'datasets'] }); navigate(spacePath(space, `evaluation/datasets/${d.id}`)); } })
-  const readOnly = !!version, disabled = readOnly || save.isPending
+  const readOnly = !fresh && !!version, disabled = readOnly || save.isPending
   const editCase = (index: number, c: Case) => setDraft(previous => ({ ...previous, cases: previous.cases.map((v, i) => i === index ? c : v) }))
   if (!fresh && dataset.isPending) return <p role="status">正在读取评测集…</p>
   if (dataset.error) return <p role="alert">{dataset.error.message}</p>
-  return <section className="panel"><div className="evaluation-toolbar"><h2>{fresh ? '新建评测集' : `${readOnly ? '查看' : '编辑'}评测集 · v${dataset.data?.version}`}</h2><Link to={spacePath(space, 'evaluation/datasets')}>返回列表</Link></div>
-    <p className="muted">每条用例单独开始会话，同一用例的多轮输入依次发送。保存会生成新版本，已有版本保持不变。</p>
-    {!fresh && <div className="evaluation-toolbar"><label>历史版本<input aria-label="历史版本号" type="number" min="1" value={history} onChange={e => setHistory(e.target.value)} /></label>
-      <button className="secondary" disabled={!/^[1-9][0-9]*$/.test(history)} onClick={() => setParams({ version: history })}>查看版本</button>{readOnly && <button className="secondary" onClick={() => setParams({})}>编辑当前版本</button>}</div>}
-    <form onSubmit={e => { e.preventDefault(); if (!disabled) save.mutate() }}><fieldset disabled={disabled}>
-      <label>评测集名称<input required maxLength={100} value={draft.name} onChange={e => setDraft(previous => ({ ...previous, name: e.target.value }))} /></label>
+  const listPath = spacePath(space, 'evaluation/datasets')
+  const form = (dismiss?: () => void) => <form onSubmit={e => { e.preventDefault(); if (!disabled) save.mutate() }}>
+    <fieldset disabled={disabled}>
+      <label>评测集名称<input required autoFocus={fresh} maxLength={100} value={draft.name} onChange={e => setDraft(previous => ({ ...previous, name: e.target.value }))} /></label>
       <p>{draft.cases.length} 条用例 · {countTurns(draft.cases)} 轮输入</p>
       {draft.cases.map((c, index) => <section className="evaluation-case" key={index}><div className="evaluation-toolbar"><h3>用例 {index + 1}</h3><div className="actions">
         <button type="button" className="secondary" aria-label={`上移用例 ${index + 1}`} disabled={index === 0} onClick={() => setDraft(p => ({ ...p, cases: move(p.cases, index, -1) }))}>↑</button>
@@ -75,19 +86,32 @@ function DatasetEditor({ space }: { space: string }) {
         </div>)}
         <button type="button" className="secondary" disabled={c.turns.length >= 10} onClick={() => editCase(index, { turns: [...c.turns, newTurn()] })}>添加一轮</button>
       </section>)}
-      <div className="actions"><button type="button" className="secondary" disabled={draft.cases.length >= 100} onClick={() => setDraft(p => ({ ...p, cases: [...p.cases, newCase()] }))}>添加用例</button><button disabled={!draft.name.trim()}>{save.isPending ? '正在保存…' : fresh ? '创建 v1' : '保存新版本'}</button></div>
-    </fieldset></form>{save.error && <p role="alert">{save.error.message}</p>}
+      <div className={fresh ? 'evaluation-create-actions' : 'actions'}>
+        <button type="button" className="secondary" disabled={draft.cases.length >= 100} onClick={() => setDraft(p => ({ ...p, cases: [...p.cases, newCase()] }))}><Icon name="plus" />添加用例</button>
+        {dismiss && <button type="button" className="secondary" onClick={dismiss}><Icon name="close" />取消</button>}
+        <button disabled={!draft.name.trim()}><Icon name={fresh ? 'plus' : 'check'} />{save.isPending ? '正在保存…' : fresh ? '创建 v1' : '保存新版本'}</button>
+      </div>
+    </fieldset>{save.error && <p role="alert">{save.error.message}</p>}
+  </form>
+  if (fresh) return <FormDialog title="新建评测集" pending={save.isPending} className="dataset-form-dialog"
+    close={() => navigate(listPath, { replace: true })}>{form}</FormDialog>
+  return <section className="panel"><div className="evaluation-toolbar"><h2>{`${readOnly ? '查看' : '编辑'}评测集 · v${dataset.data?.version}`}</h2><Link to={listPath}>返回列表</Link></div>
+    <p className="muted">每条用例单独开始会话，同一用例的多轮输入依次发送。保存会生成新版本，已有版本保持不变。</p>
+    <div className="evaluation-toolbar"><label>历史版本<input aria-label="历史版本号" type="number" min="1" value={history} onChange={e => setHistory(e.target.value)} /></label>
+      <button className="secondary" disabled={!/^[1-9][0-9]*$/.test(history)} onClick={() => setParams({ version: history })}>查看版本</button>{readOnly && <button className="secondary" onClick={() => setParams({})}>编辑当前版本</button>}</div>
+    {form()}
   </section>
 }
-function Experiments({ space }: { space: string }) {
-  const base = `/spaces/${space}/evaluation`, path = spacePath(space, 'evaluation/experiments'), client = useQueryClient(), navigate = useNavigate()
-  const datasets = useQuery({ queryKey: ['private', space, 'evaluation', 'datasets'], queryFn: ({ signal }) => list<Dataset>(`${base}/datasets`, signal) })
-  const agents = useQuery({ queryKey: ['private', space, 'evaluation', 'agents'], queryFn: ({ signal }) => list<Schema['Definition']>(`/spaces/${space}/agents`, signal) })
+function Experiments({ workspace }: { workspace: Schema['Space'] }) {
+  const space = workspace.id, base = `/spaces/${space}/evaluation`, path = spacePath(space, 'evaluation/experiments')
+  const client = useQueryClient(), navigate = useNavigate(), [creating, setCreating] = useState(false)
+  const datasets = useQuery({ queryKey: ['private', space, 'evaluation', 'datasets'], queryFn: ({ signal }) => list<Dataset>(`${base}/datasets`, signal), enabled: creating })
+  const agents = useQuery({ queryKey: ['private', space, 'evaluation', 'agents'], queryFn: ({ signal }) => list<Schema['Definition']>(`/spaces/${space}/agents`, signal), enabled: creating })
   const experiments = useQuery({ queryKey: ['private', space, 'evaluation', 'experiments'], queryFn: ({ signal }) => list<Experiment>(`${base}/experiments`, signal), refetchInterval: q => q.state.error ? false : 3000 })
   const [datasetID, setDatasetID] = useState(''), [agentID, setAgentID] = useState(''), [versionID, setVersionID] = useState(''), [concurrency, setConcurrency] = useState('1')
-  const versions = useQuery({ queryKey: ['private', space, 'evaluation', 'versions', agentID], queryFn: ({ signal }) => list<Schema['DefinitionVersion']>(`/spaces/${space}/agents/${agentID}/versions`, signal), enabled: !!agentID })
+  const versions = useQuery({ queryKey: ['private', space, 'evaluation', 'versions', agentID], queryFn: ({ signal }) => list<Schema['DefinitionVersion']>(`/spaces/${space}/agents/${agentID}/versions`, signal), enabled: creating && !!agentID })
   const selected = datasets.data?.find(d => d.id === datasetID)
-  const preview = useQuery({ queryKey: ['private', space, 'evaluation', 'dataset', datasetID, null], queryFn: ({ signal }) => request<Dataset>(`${base}/datasets/${datasetID}`, 'GET', undefined, signal), enabled: !!datasetID })
+  const preview = useQuery({ queryKey: ['private', space, 'evaluation', 'dataset', datasetID, null], queryFn: ({ signal }) => request<Dataset>(`${base}/datasets/${datasetID}`, 'GET', undefined, signal), enabled: creating && !!datasetID })
   const requestKey = useRef<string | null>(null)
   const launch = useMutation({
     mutationFn: () => {
@@ -109,17 +133,55 @@ function Experiments({ space }: { space: string }) {
     },
   })
   const change = () => { requestKey.current = null; launch.reset() }
-  return <><section className="panel"><h2>发起实验</h2><form onSubmit={e => { e.preventDefault(); launch.mutate() }}><fieldset disabled={launch.isPending}><div className="evaluation-form-grid">
-    <label>评测集<select aria-label="评测集" required value={datasetID} onChange={e => { change(); setDatasetID(e.target.value) }}><option value="">选择评测集</option>{datasets.data?.map(d => <option key={d.id} value={d.id} disabled={d.case_count === 0}>{d.name} · v{d.version} · {d.case_count} 条用例</option>)}</select></label>
-    <label>Agent<select aria-label="Agent" required value={agentID} onChange={e => { change(); setAgentID(e.target.value); setVersionID('') }}><option value="">选择 Agent</option>{agents.data?.filter(a => !a.archived).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
-    <label>发布版本<select aria-label="发布版本" required value={versionID} onChange={e => { change(); setVersionID(e.target.value) }} disabled={!agentID || versions.isPending}><option value="">选择发布版本</option>{versions.data?.filter(v => !v.archived && !v.debug).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}</select></label>
-    <label>并发用例数<input inputMode="numeric" pattern="0*[1-9][0-9]*" title="请输入大于 0 的整数" required value={concurrency} onChange={e => { change(); setConcurrency(e.target.value) }} /></label></div>
-    {selected && <p className="muted">使用发起时的最新保存版本 · {selected.case_count} 条用例 · {countTurns(preview.data?.cases)} 轮输入。</p>}
-    <button disabled={!datasetID || !agentID || !versionID || launch.isPending}>{launch.isPending ? '正在发起…' : '发起实验'}</button>
-  </fieldset></form>{[datasets.error, agents.error, versions.error, preview.error, launch.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}</section>
-    <section className="panel"><h2>实验记录</h2>{experiments.error && <p role="alert">{experiments.error.message}</p>}{experiments.isPending && <p role="status">正在读取实验…</p>}
-      {experiments.data?.length === 0 && <p className="muted">还没有实验。</p>}<div className="evaluation-table"><table><thead><tr><th>实验</th><th>评测集版本</th><th>状态</th><th>已结束 / 总用例</th><th>成功 / 失败</th></tr></thead><tbody>{[...(experiments.data ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at)).map(v => <tr key={v.id}><td><Link to={`${path}/${v.id}`}>{new Date(v.created_at).toLocaleString()}</Link><small>{v.id}</small></td><td>v{v.dataset_version}</td><td>{labels[v.status]}</td><td>{v.succeeded + v.failed} / {v.case_count}</td><td>{v.succeeded} / {v.failed}</td></tr>)}</tbody></table></div>
-    </section></>
+  return <section aria-label="实验">
+    <WorkspaceListToolbar space={workspace} name="实验">
+      <button type="button" onClick={() => setCreating(true)}><Icon name="plus" />发起实验</button>
+    </WorkspaceListToolbar>
+    {experiments.error && <p role="alert">{experiments.error.message}</p>}{experiments.isPending && <p role="status">正在读取实验…</p>}
+    {experiments.data?.length === 0 && <p className="muted">还没有实验。</p>}
+    {!!experiments.data?.length && <WorkspaceListTable label="实验列表" className="experiment-list-table"
+      columns={['实验', '评测集版本', '状态', '已结束 / 总用例', '成功 / 失败']}>
+      {[...experiments.data].sort((a, b) => b.created_at.localeCompare(a.created_at)).map(v => <tr key={v.id}>
+        <td><Link className="workspace-list-name" to={`${path}/${v.id}`}>{new Date(v.created_at).toLocaleString()}</Link><small>{v.id}</small></td>
+        <td>v{v.dataset_version}</td><td>{labels[v.status]}</td><td>{v.succeeded + v.failed} / {v.case_count}</td><td>{v.succeeded} / {v.failed}</td>
+      </tr>)}
+    </WorkspaceListTable>}
+    {creating && <FormDialog title="发起实验" pending={launch.isPending} close={() => setCreating(false)}>{dismiss =>
+      <form onSubmit={e => { e.preventDefault(); if (!launch.isPending) launch.mutate() }}>
+        <fieldset disabled={launch.isPending}>
+          <div className="evaluation-form-grid">
+            <label>评测集
+              <select aria-label="评测集" required autoFocus value={datasetID} onChange={e => { change(); setDatasetID(e.target.value) }}>
+                <option value="">选择评测集</option>
+                {datasets.data?.map(d => <option key={d.id} value={d.id} disabled={d.case_count === 0}>{d.name} · v{d.version} · {d.case_count} 条用例</option>)}
+              </select>
+            </label>
+            <label>Agent
+              <select aria-label="Agent" required value={agentID} onChange={e => { change(); setAgentID(e.target.value); setVersionID('') }}>
+                <option value="">选择 Agent</option>
+                {agents.data?.filter(a => !a.archived).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </label>
+            <label>发布版本
+              <select aria-label="发布版本" required value={versionID} disabled={!agentID || versions.isPending} onChange={e => { change(); setVersionID(e.target.value) }}>
+                <option value="">选择发布版本</option>
+                {versions.data?.filter(v => !v.archived && !v.debug).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+              </select>
+            </label>
+            <label>并发用例数
+              <input inputMode="numeric" pattern="0*[1-9][0-9]*" title="请输入大于 0 的整数" required value={concurrency} onChange={e => { change(); setConcurrency(e.target.value) }} />
+            </label>
+          </div>
+          {selected && <p className="muted">使用发起时的最新保存版本 · {selected.case_count} 条用例 · {countTurns(preview.data?.cases)} 轮输入。</p>}
+          <div className="dialog-actions">
+            <button type="button" className="secondary" onClick={dismiss}><Icon name="close" />取消</button>
+            <button disabled={!datasetID || !agentID || !versionID || launch.isPending}><Icon name="play" />{launch.isPending ? '正在发起…' : '发起实验'}</button>
+          </div>
+        </fieldset>
+        {[datasets.error, agents.error, versions.error, preview.error, launch.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}
+      </form>
+    }</FormDialog>}
+  </section>
 }
 const metricNames = ['input_tokens', 'input_cached_tokens', 'output_tokens', 'reasoning_tokens', 'duration_ms', 'step_count'] as const
 const metricLabels = ['输入 Token', '缓存输入 Token', '输出 Token', '推理 Token', '耗时 ms', '模型步骤']

@@ -25,6 +25,11 @@ const messages = Array.from({ length: 32 }, (_, index) => {
   return { id: `message-${sequence}`, run_id: '', source_event_id: `event-${sequence}`, sequence, role: index % 2 ? 'assistant' : 'user', content: `会话消息 ${sequence}`, truncated: false }
 })
 const pageOf = items => ({ items, next_cursor: null, has_more: false, next_after: '0' })
+const dataset = { id: 'dataset-fixture', name: '回归评测集', version: 2, case_count: 1, saved_at: '2026-10-28T09:00:00Z',
+  cases: [{ turns: [{ content: [{ type: 'text', text: '测试输入' }] }] }] }
+const experiment = { id: 'experiment-fixture', dataset_id: dataset.id, dataset_version: dataset.version, agent_id: 'definition-one',
+  agent_version_id: 'version-two', status: 'completed', succeeded: 1, failed: 0, case_count: 1, concurrency: 1, created_at: dataset.saved_at }
+let createdDataset
 let signedIn = true, createdSpaces = 0, firstRunRejected = false, agentVisibility = 'space'
 let publishCalls = 0, pendingModelSelection = false, debugKey, debugSubmittedRun = false, debugSaved = false, debugFailed = false
 const directDebug = Promise.withResolvers()
@@ -46,7 +51,25 @@ const server = createServer(async (req, res) => {
       spaces.push(space); return json(space, 201)
     }
     if (path === '/api/v1/spaces') return json({ ...pageOf(url.searchParams.has('cursor') ? spaces.slice(1) : spaces.slice(0, 1)), next_cursor: !url.searchParams.has('cursor') && spaces.length > 1 ? 'older-page' : null })
-    if (/\/evaluation\/(datasets|experiments)$/.test(path)) return json(pageOf([]))
+    if (path.endsWith('/evaluation/datasets') && req.method === 'POST') {
+      let body = ''; for await (const chunk of req) body += chunk
+      const input = JSON.parse(body)
+      assert.deepEqual(input, { name: '新评测集', cases: dataset.cases })
+      createdDataset = { ...dataset, ...input, id: 'dataset-created', version: 1 }
+      return json(createdDataset, 201)
+    }
+    if (path.endsWith('/evaluation/datasets')) return json(pageOf([dataset]))
+    if (/\/evaluation\/datasets\/dataset-fixture(?:\/versions\/2)?$/.test(path)) return json(dataset)
+    if (path.endsWith('/evaluation/datasets/dataset-created')) return json(createdDataset)
+    if (path.endsWith('/evaluation/experiments') && req.method === 'POST') {
+      let body = ''; for await (const chunk of req) body += chunk
+      const { idempotency_key, ...input } = JSON.parse(body)
+      assert.match(idempotency_key, /^[0-9a-f]{32}$/)
+      assert.deepEqual(input, { dataset_id: dataset.id, agent_id: experiment.agent_id, agent_version_id: experiment.agent_version_id, concurrency: 1 })
+      return json(experiment, 201)
+    }
+    if (path.endsWith('/evaluation/experiments')) return json(pageOf([experiment]))
+    if (path.endsWith('/evaluation/experiments/experiment-fixture')) return json(experiment)
     if (path.endsWith('/members') && req.method === 'POST') return json({ code: 'forbidden' }, 403)
     if (path.endsWith('/members')) return json(pageOf([{ id: 'alice', username: 'alice', is_owner: true }]))
     if (/\/models(?:\/[^/]+)?$/.test(path)) {
@@ -64,8 +87,24 @@ const server = createServer(async (req, res) => {
       return json(value, previous ? 200 : 201)
     }
     if (path.endsWith('/model-capabilities')) return json({ provider: 'ark', input_types: ['text'], streaming: true, tool_calling: true })
-    if (path.endsWith('/agents')) return json(pageOf([{ id: 'definition-one', name: 'report-agent' }, { id: 'definition-two', name: 'other-agent' }]))
-    if (path.endsWith('/skills')) return json(pageOf([{ id: 'definition-one', name: 'extract-skill', archived: false }]))
+    if (path.endsWith('/agents') && req.method === 'POST') {
+      let body = ''; for await (const chunk of req) body += chunk
+      const { name } = JSON.parse(body)
+      if (name === 'report-agent') return json({ code: 'definition_name_conflict' }, 409)
+      assert.equal(name, 'notes-agent')
+      return json({ id: 'definition-notes', name }, 201)
+    }
+    if (path.endsWith('/agents')) return json(pageOf([
+      { id: 'definition-one', name: 'report-agent', default_version_id: 'version-one', latest_version: 'v2', updated_at: '2026-10-28T09:00:00Z' },
+      { id: 'definition-two', name: 'other-agent' },
+    ]))
+    if (path.endsWith('/skills') && req.method === 'POST') {
+      let body = ''; for await (const chunk of req) body += chunk
+      const { name } = JSON.parse(body)
+      assert.equal(name, 'notes-skill')
+      return json({ id: 'definition-notes', name }, 201)
+    }
+    if (path.endsWith('/skills')) return json(pageOf([{ id: 'definition-one', name: 'extract-skill', archived: false, latest_version: 'v1', updated_at: dataset.saved_at }]))
     if (path.endsWith('/definition-one/versions')) return json(pageOf([
       { id: 'version-one', label: 'v1', created_at: '2026-10-25T00:00:00Z' },
       { id: 'version-two', label: 'v2', created_at: '2026-10-25T00:00:00.000001Z' },
@@ -78,7 +117,12 @@ const server = createServer(async (req, res) => {
       agentVisibility = JSON.parse(body).visibility
       return json({ visibility: agentVisibility })
     }
-    if (path.endsWith('/draft')) return json({ id: path.split('/').at(-2), kind: path.includes('/agents/') ? 'agent' : 'skill', name: path.includes('definition-two') ? 'other-agent' : path.includes('/agents/') ? 'report-agent' : 'extract-skill', revision: 1, default_version_id: 'version-one', archived: false, visibility: agentVisibility, document: { markdown: '# Navigation fixture', config_yaml: '{}', assets: [] } })
+    if (path.endsWith('/draft')) {
+      const id = path.split('/').at(-2), kind = path.includes('/agents/') ? 'agent' : 'skill'
+      const names = { 'definition-one': 'report-agent', 'definition-two': 'other-agent', 'definition-notes': 'notes-agent' }
+      const name = kind === 'agent' ? names[id] : id === 'definition-notes' ? 'notes-skill' : 'extract-skill'
+      return json({ id, kind, name, revision: 1, default_version_id: 'version-one', archived: false, visibility: agentVisibility, document: { markdown: '# Navigation fixture', config_yaml: '{}', assets: [] } })
+    }
     if (path.endsWith('/creativity')) return json({ available: path.includes('/space-one/') })
     if (path.endsWith('/creativity/sessions') && req.method === 'POST') {
       let body = ''; for await (const chunk of req) body += chunk
@@ -214,10 +258,24 @@ const url = `http://127.0.0.1:${server.address().port}`
 let browser, page
 try {
   browser = await chromium.launch({ headless: true, channel: 'chromium' })
-  page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+  page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'Asia/Shanghai' })
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url })
   const errors = []; page.on('pageerror', e => errors.push(e.message))
   const nav = label => page.locator('.app-sidebar').getByRole('link', { name: label, exact: true })
+  const agentList = page.getByRole('table', { name: 'Agent 列表' })
+  const datasetList = page.getByRole('table', { name: '评测集列表' })
+  const experimentList = page.getByRole('table', { name: '实验列表' })
+  const skillList = page.getByRole('table', { name: 'Skill 列表' })
+  const listToolbar = page.locator('.workspace-list-toolbar')
+  const expectListToolbar = async (label, action) => {
+    await expect(page.getByRole('heading', { level: 1 })).toHaveCount(0)
+    const breadcrumb = listToolbar.getByRole('navigation', { name: '面包屑' })
+    await expect(breadcrumb.locator('[aria-current="page"]')).toHaveText(label)
+    await expect(action).toBeVisible()
+    const boxes = await Promise.all([breadcrumb, action, page.getByRole('link', { name: 'MASS', exact: true })].map(locator => locator.boundingBox()))
+    const centers = boxes.map(box => box && box.y + box.height / 2)
+    assert.ok(centers.every(y => y !== null && Math.abs(y - centers[2]) <= 1), `${label} toolbar is not aligned with the logo`)
+  }
   const spacePicker = page.getByRole('button', { name: /^切换空间/ })
   const spaceMenu = page.getByRole('list', { name: '可用空间' })
   const spaceLink = name => spaceMenu.getByRole('link', { name, exact: true })
@@ -397,13 +455,47 @@ try {
   await page.keyboard.press('Escape'); await expect(settings).toBeFocused(); await expect(settings).toHaveAttribute('aria-expanded', 'false')
   await settings.click(); await page.getByRole('heading', { level: 1 }).click(); await expect(page.getByRole('dialog', { name: '账号设置' })).toHaveCount(0)
   await expect(page.locator('.app-sidebar .nav-caption').getByText('评测', { exact: true })).toBeVisible()
-  await nav('评测集').click(); await heading('评测集'); await expect(page).toHaveURL(url + '/spaces/space-one/evaluation/datasets')
+  await nav('评测集').click(); await expect(page).toHaveURL(url + '/spaces/space-one/evaluation/datasets')
   await expect(nav('评测集')).toHaveAttribute('aria-current', 'page'); await expect(nav('实验')).not.toHaveAttribute('aria-current', 'page')
-  await page.getByRole('link', { name: '新建评测集', exact: true }).click(); await heading('评测集'); await expect(nav('评测集')).toHaveAttribute('aria-current', 'page')
-  await page.reload(); await heading('评测集'); await expect(page.getByLabel('评测集名称', { exact: true })).toBeVisible()
-  await nav('实验').click(); await heading('实验'); await expect(page).toHaveURL(url + '/spaces/space-one/evaluation/experiments')
+  const openDataset = listToolbar.getByRole('link', { name: '新建评测集' })
+  await expectListToolbar('评测集', openDataset)
+  await expect(datasetList.getByRole('columnheader')).toHaveText(['名称', '当前版本', '用例数', '保存时间'])
+  await expect(datasetList.getByRole('link', { name: dataset.name })).toBeVisible()
+  await openDataset.click()
+  await expect(page).toHaveURL(url + '/spaces/space-one/evaluation/datasets/new')
+  await expect(nav('评测集')).toHaveAttribute('aria-current', 'page')
+  const datasetDialog = page.getByRole('dialog', { name: '新建评测集' })
+  const datasetName = datasetDialog.getByLabel('评测集名称', { exact: true })
+  await expect(datasetName).toBeFocused()
+  await page.reload()
+  await expect(datasetName).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(datasetDialog).toBeHidden()
+  await expect(page).toHaveURL(url + '/spaces/space-one/evaluation/datasets')
+  await openDataset.click()
+  await datasetName.fill('新评测集')
+  await datasetDialog.getByLabel('第 1 轮用户输入').fill('测试输入')
+  await datasetDialog.getByRole('button', { name: '创建 v1', exact: true }).click()
+  await expect(page).toHaveURL(url + '/spaces/space-one/evaluation/datasets/dataset-created')
+  await expect(page.getByRole('heading', { name: '编辑评测集 · v1' })).toBeVisible()
+  await nav('实验').click(); await expect(page).toHaveURL(url + '/spaces/space-one/evaluation/experiments')
   await expect(nav('实验')).toHaveAttribute('aria-current', 'page'); await expect(nav('评测集')).not.toHaveAttribute('aria-current', 'page')
-  await expect(page.getByRole('heading', { name: '发起实验', exact: true })).toBeVisible()
+  const openExperiment = listToolbar.getByRole('button', { name: '发起实验', exact: true })
+  await expectListToolbar('实验', openExperiment)
+  await expect(experimentList.getByRole('columnheader')).toHaveText(['实验', '评测集版本', '状态', '已结束 / 总用例', '成功 / 失败'])
+  await expect(experimentList.getByRole('row').filter({ hasText: experiment.id })).toContainText('已结束')
+  const experimentDialog = page.getByRole('dialog', { name: '发起实验' })
+  await openExperiment.click()
+  await experimentDialog.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(openExperiment).toBeFocused()
+  await openExperiment.click()
+  await experimentDialog.getByLabel('评测集', { exact: true }).selectOption(dataset.id)
+  await experimentDialog.getByLabel('Agent', { exact: true }).selectOption(experiment.agent_id)
+  await experimentDialog.getByLabel('发布版本', { exact: true }).selectOption(experiment.agent_version_id)
+  await expect(experimentDialog).toContainText('1 条用例 · 1 轮输入')
+  await experimentDialog.getByRole('button', { name: '发起实验', exact: true }).click()
+  await expect(page).toHaveURL(url + '/spaces/space-one/evaluation/experiments/experiment-fixture')
+  await expect(page.getByRole('heading', { name: '实验 · 已结束' })).toBeVisible()
   await nav('空间成员').click(); await heading('空间成员')
   await expect(page).toHaveURL(url + '/spaces/space-one/members'); await expect(page.getByLabel('已有账号用户名')).toBeVisible()
   await page.getByLabel('已有账号用户名').fill('bob')
@@ -428,17 +520,63 @@ try {
   await page.reload(); await heading('模型配置'); await expect(nav('模型配置')).toHaveAttribute('aria-current', 'page')
   await page.goBack(); await heading('空间成员'); await page.goForward(); await heading('模型配置')
   await page.goto(url + '/spaces/space-one/credentials'); await expect(page).toHaveURL(url + '/spaces/space-one/models'); await heading('模型配置')
-  await nav('Skills').click(); await heading('Skills'); await page.getByRole('link', { name: 'extract-skill', exact: true }).click()
+  await nav('Skills').click()
+  const openSkill = listToolbar.getByRole('button', { name: '创建 Skill', exact: true })
+  await expectListToolbar('Skills', openSkill)
+  const fileChooser = page.waitForEvent('filechooser')
+  await listToolbar.getByRole('button', { name: '导入 Skill ZIP' }).click()
+  assert.equal(await (await fileChooser).element().getAttribute('accept'), '.zip')
+  await expect(skillList.getByRole('columnheader')).toHaveText(['名称', '最新版本', '更新日期'])
+  await expect(skillList.getByRole('row').filter({ hasText: 'extract-skill' }).getByRole('cell')).toHaveText(['extract-skill', 'v1', '2026-10-28'])
+  await openSkill.click()
+  const skillDialog = page.getByRole('dialog', { name: '创建 Skill' })
+  const skillName = skillDialog.getByRole('textbox', { name: '名称', exact: true })
+  await expect(skillName).toBeFocused()
+  await skillName.fill('notes-skill')
+  await skillDialog.getByRole('button', { name: '创建', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'notes-skill · Skill' })).toBeVisible()
+  await nav('Skills').click(); await skillList.getByRole('link', { name: 'extract-skill', exact: true }).click()
   await expect(page).toHaveURL(url + '/spaces/space-one/skills/definition-one'); await page.getByRole('heading', { name: 'extract-skill · Skill' }).waitFor()
   await expect(page.getByLabel('定义名称')).toHaveCount(0)
   await page.reload(); await page.getByRole('heading', { name: 'extract-skill · Skill' }).waitFor()
-  await nav('Agents').click(); await page.getByRole('link', { name: 'report-agent', exact: true }).click(); await page.getByRole('heading', { name: 'report-agent · Agent' }).waitFor()
+  await nav('Agents').click()
+  const openAgentCreate = listToolbar.getByRole('button', { name: '创建 Agent', exact: true })
+  await expectListToolbar('Agents', openAgentCreate)
+  await expect(agentList.getByRole('columnheader')).toHaveText(['名称', '最新版本', '更新日期', '迭代', '对话'])
+  const reportRow = agentList.getByRole('row').filter({ hasText: 'report-agent' })
+  await expect(reportRow.getByRole('cell').nth(1)).toHaveText('v2')
+  await expect(reportRow.getByRole('cell').nth(2)).toHaveText('2026-10-28')
+  await expect(agentList.getByRole('row').filter({ hasText: 'other-agent' }).getByRole('cell').nth(1)).toHaveText('未发布')
+  await page.screenshot({ path: '.cache/agents-list.png' })
+  const agentDialog = page.getByRole('dialog', { name: '创建 Agent' })
+  const agentName = agentDialog.getByRole('textbox', { name: '名称', exact: true })
+  const confirmAgent = agentDialog.getByRole('button', { name: '创建', exact: true })
+  await openAgentCreate.click()
+  await expect(agentName).toBeFocused()
+  await expect(confirmAgent).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await expect(agentDialog).toBeHidden()
+  await expect(openAgentCreate).toBeFocused()
+  await openAgentCreate.click()
+  await agentName.fill('report-agent')
+  await confirmAgent.click()
+  await expect(agentDialog.getByRole('alert')).toHaveText('当前空间已存在同名 Agent，请更换名称。')
+  await expect(agentName).toHaveValue('report-agent')
+  await agentName.fill('notes-agent')
+  await page.screenshot({ path: '.cache/create-agent.png' })
+  await confirmAgent.click()
+  await expect(page).toHaveURL(url + '/spaces/space-one/agents/definition-notes')
+  await expect(page.getByRole('heading', { name: 'notes-agent · Agent', exact: true })).toBeVisible()
+  await nav('Agents').click()
+  await page.getByRole('link', { name: 'report-agent', exact: true }).click(); await page.getByRole('heading', { name: 'report-agent · Agent' }).waitFor()
   await expect(page.getByLabel('权限范围')).toHaveValue('space')
   await page.getByLabel('权限范围').selectOption('public')
   await expect(page.getByText('权限范围已更新')).toBeVisible()
   await expect(page.getByLabel('权限范围')).toHaveValue('public')
   await expect(nav('会话与运行')).toHaveCount(0)
-  await page.getByRole('button', { name: '在创意中迭代', exact: true }).click()
+  await expect(page.getByRole('button', { name: '在创意中迭代', exact: true })).toBeEnabled()
+  await nav('Agents').click()
+  await reportRow.getByRole('button', { name: '在创意中迭代 report-agent', exact: true }).click()
   await expect(page).toHaveURL(url + '/spaces/space-one/creativity/sessions/session-iterate')
   await expect(page.getByText('正在迭代：report-agent')).toBeVisible()
   await expect(page.getByRole('navigation', { name: '会话列表' })).toHaveCount(0)
@@ -459,7 +597,7 @@ try {
   await page.goto(url + '/spaces/space-one/agents/definition-two/sessions/session-one')
   await expect(page.getByText('此会话不属于当前 Agent。')).toBeVisible()
   await page.getByRole('link', { name: '← Agents', exact: true }).click()
-  await heading('Agents')
+  await expect(agentList).toBeVisible()
   await page.getByRole('link', { name: '打开 report-agent 的会话', exact: true }).click()
   await expect(page.getByLabel('Agent 版本')).toBeVisible()
   await expect(page.getByRole('button', { name: '复制会话 ID' })).toHaveCount(0)
@@ -531,7 +669,9 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile conversation overflow')
   await expect(page.locator('.app-sidebar')).toHaveCount(0)
   await page.getByRole('link', { name: '← Agents', exact: true }).click()
-  await heading('Agents')
+  await expect(agentList).toBeVisible()
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile Agent list overflow')
+  await openAgentCreate.click(); await expect(agentDialog).toBeInViewport(); await page.keyboard.press('Escape')
   await page.setViewportSize({ width: 1440, height: 1000 })
   await switchSpace('协作空间'); await heading('创意'); await expect(page.getByRole('heading', { name: 'session-two', exact: true })).toHaveCount(0)
   await expect(nav('供应商凭证')).toHaveCount(0)
@@ -558,9 +698,11 @@ try {
   await expect(spaceLink('研究空间')).toBeInViewport()
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile workspace menu overflow')
   await page.keyboard.press('Escape')
-  await nav('评测集').click(); await heading('评测集')
-  await nav('实验').click(); await heading('实验')
-  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile evaluation navigation overflow')
+  for (const [label, table] of [['Skills', skillList], ['评测集', datasetList], ['实验', experimentList]]) {
+    await nav(label).click()
+    await expect(table).toBeVisible()
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `mobile ${label} list overflow`)
+  }
   await nav('模型配置').click(); await expect(page.getByLabel('模型名称', { exact: true })).toBeVisible()
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile models overflow')
   await page.screenshot({ path: '.cache/navigation-mobile.png', fullPage: true })
@@ -599,6 +741,6 @@ try {
   await spacePicker.click()
   await expect(spaceMenu.getByRole('link')).toHaveText(['第一个空间', '第二个空间'])
   assert.deepEqual(errors, []); assert.deepEqual(unexpected, []); assert.ok(!requests.some(path => path.includes('/credentials')), 'UI called removed credential API')
-  console.log('Navigation browser flow passed: Creativity entry, first prompt, workspace preview, deep links, reload, legacy links, session/run scoping, role-aware navigation, membership revocation, space creation, model settings, login return and mobile layout. In-memory API only.')
+console.log('Navigation browser flow passed: Creativity, deep links, sessions, role-aware navigation, space creation, model settings, workspace lists and creation dialogs, login return and mobile layout. In-memory API only.')
 } catch (e) { await mkdir('.cache', { recursive: true }); await page?.screenshot({ path: '.cache/navigation-failure.png', fullPage: true }); throw e }
 finally { await browser?.close(); server.closeAllConnections(); await new Promise(done => server.close(done)) }

@@ -1,6 +1,8 @@
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { agentSessionsPath, creativitySessionPath } from '../../app/routes'
+import { FormDialog } from '../../components/FormDialog'
 import { Icon } from '../../components/Icon'
+import { WorkspaceListTable, WorkspaceListToolbar } from '../../components/WorkspaceList'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Markdown from 'react-markdown'
@@ -23,6 +25,9 @@ const codeTools = ['run_code', 'run_code_js', 'run_code_go']
 const tools = ['list_files', 'read_file', 'write_file', 'edit_file', 'glob_files', 'search_files', 'move_file', 'delete_file', 'list_skill_resources', 'read_skill_resource', 'read_attachment', ...codeTools, 'run_command', 'update_plan', 'publish_artifact']
 const errorText = (e: unknown) => e instanceof Error ? e.message : '操作未完成'
 const displayVersion = (v: Version) => v.debug ? `调试快照 ${v.id.slice(0, 8)}` : v.label
+const definitionNamePattern = String.raw`[a-z][a-z0-9_\-]{0,63}`
+const definitionNameHint = '以小写英文字母开头，最多 64 个字符，可使用小写英文字母、数字、连字符（-）和下划线（_）。'
+const definitionDate = new Intl.DateTimeFormat('sv-SE')
 const parseConfig = (value: string) => {
   if (!value.trim()) return undefined
   try {
@@ -33,6 +38,7 @@ const parseConfig = (value: string) => {
 export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind }) {
   const { definitionId: selected = '' } = useParams(), navigate = useNavigate()
   const [name, setName] = useState('')
+  const [creating, setCreating] = useState(false)
   const importInput = useRef<HTMLInputElement>(null)
   const client = useQueryClient(), base = `/spaces/${space.id}/${kind}s`
   const creativityBase = `/spaces/${space.id}/creativity`
@@ -57,49 +63,86 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
       if (error instanceof APIError && error.code === 'iteration_draft_changed') iterationKey.current = null
     },
   })
-  const iterationButton = (id: string, name?: string) => <button type="button" className="secondary"
-    disabled={!availability.data?.available || iterate.isPending} aria-label={name ? `在创意中迭代 ${name}` : undefined}
-    onClick={() => iterate.mutate(id)}><Icon name="branch" />{iterate.isPending && iterate.variables === id ? '正在恢复…' : '在创意中迭代'}</button>
-  const query = useQuery({ queryKey: ['private', space.id, kind, 'list'], queryFn: ({ signal }) => list<Schema['Definition']>(base, signal), refetchInterval: q => q.state.error ? false : 5000 })
+  const iterationButton = (id: string, name?: string) => {
+    const pending = iterate.isPending && iterate.variables === id
+    const label = pending ? '正在恢复…' : '在创意中迭代'
+    return <button type="button" className={name ? 'icon-button agent-action' : 'secondary'}
+      disabled={!availability.data?.available || iterate.isPending} aria-label={name ? `在创意中迭代 ${name}` : undefined}
+      title={name ? label : undefined} aria-busy={pending} onClick={() => iterate.mutate(id)}>
+      <Icon name={pending ? 'refresh' : 'branch'} />{!name && label}
+    </button>
+  }
+  const query = useQuery({ queryKey: ['private', space.id, kind, 'list'], queryFn: ({ signal }) => list<Schema['Definition']>(base, signal), enabled: !selected, refetchInterval: q => q.state.error ? false : 5000 })
   const refresh = () => { void client.invalidateQueries({ queryKey: ['private', space.id] }) }
   const select = (id: string) => navigate(`${base}/${id}`)
-  const create = useMutation({ mutationFn: () => request<Draft>(base, 'POST', { name }), onSuccess: d => { select(d.id); setName(''); refresh() } })
+  const create = useMutation({ mutationFn: () => request<Draft>(base, 'POST', { name }), onSuccess: d => { setCreating(false); select(d.id); setName(''); refresh() } })
   const importSkill = useMutation({
     mutationFn: (file: File) => request<Draft>(`${base}/import?${new URLSearchParams({ filename: file.name })}`, 'POST', new Blob([file], { type: 'application/zip' })),
     onSuccess: d => { select(d.id); refresh() },
   })
-  return <section className="panel catalog">
+  const iterationNotice = <>
     {kind === 'agent' && availability.data && !availability.data.available && <p className="muted">创作 Agent 暂不可用，无法开始创意迭代。</p>}
     {(iterate.error || availability.error) && <p role="alert">{(iterate.error || availability.error)?.message}</p>}
-    {selected ? <><Link className="text-link back-link icon-link" to={base}><Icon name="arrowLeft" />返回 {kind === 'skill' ? 'Skills' : 'Agents'} 列表</Link>
-    {kind === 'agent' && iterationButton(selected)}
-    <DefinitionEditor key={`${kind}-${selected}`} space={space.id} kind={kind} id={selected} onCopied={select} refresh={refresh} /></> : <>
-    {kind === 'skill' && <><h2>Skill 方法库</h2><p className="muted">保存草稿后发布独立版本。Agent 始终绑定指定的 Skill 版本。</p></>}
-    <form className="inline-form" onSubmit={e => { e.preventDefault(); create.mutate() }}>
-      <label>定义名称<input value={name} onChange={e => setName(e.target.value)} pattern={String.raw`[a-z][a-z0-9_\-]{0,63}`} aria-describedby="definition-name-hint" placeholder="例如 report_writer" required /></label>
-      <button disabled={create.isPending || importSkill.isPending}><Icon name="plus" />创建 {kind === 'skill' ? 'Skill' : 'Agent'}</button>
-      {kind === 'skill' && <>
-        <input ref={importInput} type="file" accept=".zip" aria-label="Skill ZIP 文件" hidden onChange={e => {
-          const file = e.currentTarget.files?.[0]
-          e.currentTarget.value = ''
-          if (file) importSkill.mutate(file)
-        }} />
-        <button type="button" className="secondary" disabled={create.isPending || importSkill.isPending} onClick={() => importInput.current?.click()}>
-          {importSkill.isPending ? '正在导入…' : '导入 Skill ZIP'}
-        </button>
-      </>}
+  </>
+  const isAgent = kind === 'agent', kindLabel = isAgent ? 'Agent' : 'Skill'
+  const columns = ['名称', '最新版本', '更新日期']
+  if (isAgent) columns.push('迭代', '对话')
+  if (!selected) return <section aria-label={`${kindLabel}s`}>
+    <WorkspaceListToolbar space={space} name={`${kindLabel}s`}>
+      {!isAgent && <button type="button" className="secondary" disabled={importSkill.isPending || create.isPending}
+        onClick={() => importInput.current?.click()}><Icon name="upload" />{importSkill.isPending ? '正在导入…' : '导入 Skill ZIP'}</button>}
+      <button type="button" disabled={importSkill.isPending} onClick={() => setCreating(true)}><Icon name="plus" />创建 {kindLabel}</button>
+    </WorkspaceListToolbar>
+    {!isAgent && <input ref={importInput} type="file" accept=".zip" aria-label="Skill ZIP 文件" hidden onChange={event => {
+      const file = event.currentTarget.files?.[0]
+      event.currentTarget.value = ''
+      if (file) importSkill.mutate(file)
+    }} />}
+    {iterationNotice}
+    {[query.error, importSkill.error].filter(Boolean).map((error, i) => <p role="alert" key={i}>{errorText(error)}</p>)}
+    {query.isPending && <p role="status">正在读取定义…</p>}
+    {query.data?.length === 0 && <p className="muted">还没有 {kindLabel}，创建第一个定义开始使用。</p>}
+    {!!query.data?.length && <WorkspaceListTable label={`${kindLabel} 列表`} columns={columns} className={isAgent ? 'agent-table' : undefined}
+      columnGroup={<colgroup><col /><col className="definition-version-column" /><col className="definition-date-column" />
+        {isAgent && <col className="agent-action-column" span={2} />}</colgroup>}>
+      {query.data.map(d => <tr key={d.id}>
+          <td><Link className="workspace-list-name" to={`${base}/${d.id}`}>{d.name}{d.archived ? '（已归档）' : ''}</Link></td>
+          <td>{d.latest_version || (d.default_version_id ? '—' : '未发布')}</td>
+          <td>{d.updated_at ? <time className="definition-date" dateTime={d.updated_at}>{definitionDate.format(new Date(d.updated_at))}</time> : '—'}</td>
+          {isAgent && <><td>{iterationButton(d.id, d.name)}</td>
+            <td><Link className="agent-action" to={agentSessionsPath(space.id, d.id)} aria-label={`打开 ${d.name} 的会话`} title="打开会话">
+              <Icon name="chat" size={18} />
+            </Link></td></>}
+        </tr>)}
+    </WorkspaceListTable>}
+    {creating && <CreateDefinitionDialog kind={kindLabel} name={name} setName={value => { setName(value); if (create.isError) create.reset() }}
+      pending={create.isPending} error={create.error}
+      submit={() => create.mutate()} close={() => { setCreating(false); setName(''); create.reset() }} />}
+  </section>
+  return <section className="panel catalog">
+    {iterationNotice}
+    <Link className="text-link back-link icon-link" to={base}><Icon name="arrowLeft" />返回 {kindLabel}s 列表</Link>
+    {isAgent && iterationButton(selected)}
+    <DefinitionEditor key={`${kind}-${selected}`} space={space.id} kind={kind} id={selected} onCopied={select} refresh={refresh} />
+  </section>
+}
+function CreateDefinitionDialog({ kind, name, setName, pending, error, submit, close }: {
+  kind: string; name: string; setName: (name: string) => void; pending: boolean; error: Error | null; submit: () => void; close: () => void
+}) {
+  const errorMessage = error instanceof APIError && error.code === 'definition_name_conflict'
+    ? `当前空间已存在同名 ${kind}，请更换名称。` : error?.message
+  return <FormDialog title={`创建 ${kind}`} pending={pending} close={close}>{dismiss =>
+    <form onSubmit={event => { event.preventDefault(); if (!pending) submit() }}>
+      <label>名称<input value={name} onChange={event => setName(event.target.value)} pattern={definitionNamePattern}
+        aria-describedby="create-definition-name-hint" placeholder="例如 report_writer" maxLength={64} required autoFocus readOnly={pending} /></label>
+      <small id="create-definition-name-hint">{definitionNameHint}</small>
+      {errorMessage && <p role="alert">{errorMessage}</p>}
+      <div className="dialog-actions">
+        <button type="button" className="secondary" disabled={pending} onClick={dismiss}><Icon name="close" />取消</button>
+        <button type="submit" disabled={pending || !name}><Icon name="plus" />{pending ? '正在创建…' : '创建'}</button>
+      </div>
     </form>
-    <small id="definition-name-hint">以小写英文字母开头，最多 64 个字符，可使用小写英文字母、数字、连字符（-）和下划线（_）。</small>
-    {[query.error, create.error, importSkill.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}
-    <div className={kind === 'agent' ? 'definition-list agent-list' : 'definition-list'}>{query.data?.map(d => kind === 'agent' ? <div className="agent-entry" key={d.id}>
-      <Link className="resource-link" to={`${base}/${d.id}`}><Icon name="bot" size={22} /><span>{d.name}{d.archived ? '（已归档）' : ''}</span></Link>
-      {iterationButton(d.id, d.name)}
-      <Link className="agent-chat-link" to={agentSessionsPath(space.id, d.id)} aria-label={`打开 ${d.name} 的会话`} title="会话与运行">
-        <Icon name="chat" size={19} />
-      </Link>
-    </div> : <Link className="resource-link" key={d.id} to={`${base}/${d.id}`}>{d.name}{d.archived ? '（已归档）' : ''}<span aria-hidden="true"> →</span></Link>)}</div>
-    {query.isPending && <p role="status">正在读取定义…</p>}{query.data?.length === 0 && <p className="muted">还没有 {kind === 'skill' ? 'Skill' : 'Agent'}，创建第一个定义开始使用。</p>}
-  </>}</section>
+  }</FormDialog>
 }
 function DefinitionEditor(props: { space: string; kind: Kind; id: string; onCopied: (id: string) => void; refresh: () => void }) {
   const { space, kind, id } = props

@@ -25,7 +25,7 @@ export function App() {
   const section = match?.params['*'] ?? ''
   const page = workspaceSections.find(s => s.path === section || s.path !== '' && section.startsWith(s.path + '/'))
   const creativityHome = !!space && !section
-  const agentsList = !!space && section === 'agents'
+  const workspaceList = !!space && ['agents', 'skills', 'evaluation/datasets', 'evaluation/datasets/new', 'evaluation/experiments'].includes(section)
   const agentSessionPage = !!useMatch(agentConversationRoute)
   const creativitySessionPage = !!useMatch(creativityConversationRoute)
   const sessionPage = agentSessionPage || creativitySessionPage
@@ -89,20 +89,20 @@ export function App() {
     <WorkspacePicker spaces={spaces.data} current={space} pending={spaces.isPending} />
     {space && <nav aria-label="空间导航">{['工作空间', '定义与资源', '评测', '空间管理'].map(group => <div key={group}><div className="nav-caption">{group}</div>{workspaceSections.filter(s => s.group === group).map(s => <NavLink key={s.path} to={spacePath(space.id, s.path)} end={!s.path}><Icon name={s.icon} />{s.label}</NavLink>)}</div>)}</nav>}
     <AccountSettings username={me.data.username} pending={logout.isPending} onLogout={() => logout.mutate()} /></aside>
-    <main id="main-content" className={creativityHome ? 'creativity-main' : agentsList ? 'agents-main' : undefined}>
-      {!creativityHome && <>
+    <main id="main-content" className={creativityHome ? 'creativity-main' : workspaceList ? 'workspace-list-main' : undefined}>
+      {!creativityHome && !workspaceList && <>
         <nav className="breadcrumbs" aria-label="面包屑"><Link to={space ? spacePath(space.id) : workspaceHomePath}>{space?.name ?? '工作台'}</Link>{space && section && <><span aria-hidden="true">/</span><span aria-current="page">{page?.label ?? '页面未找到'}</span></>}</nav>
-        <header><div>{!agentsList && <div className="eyebrow">{space ? space.name : 'WORKSPACE'}</div>}<h1>{space ? page?.label ?? '页面未找到' : '工作台'}</h1></div>
-          {!agentsList && <span className="service-status">已连接 MASS 服务</span>}
+        <header><div><div className="eyebrow">{space ? space.name : 'WORKSPACE'}</div><h1>{space ? page?.label ?? '页面未找到' : '工作台'}</h1></div>
+          <span className="service-status">已连接 MASS 服务</span>
         </header>
-        {!agentsList && <p className="intro">{space ? page?.description : '在空间中协作，使用 Agent 开始任务。'}</p>}
+        <p className="intro">{space ? page?.description : '在空间中协作，使用 Agent 开始任务。'}</p>
       </>}
       {notice && <div role="alert" className="error">{notice}<button onClick={() => setNotice('')}>关闭</button></div>}{logout.error && <p role="alert">{logout.error.message}</p>}
       <Routes><Route path="/" element={<Navigate to="/spaces" replace />} /><Route path="/login" element={<Navigate to="/spaces" replace />} />
         <Route path="/spaces" element={<SpacesLanding spaces={spaces.data} pending={spaces.isPending} error={spaces.error} />} />
         <Route path="/spaces/:spaceId/*" element={<SpaceWorkspace user={me.data} space={space} pending={spaces.isPending} error={spaces.error} />} />
         <Route path="*" element={<NotFound />} /></Routes>
-      {!creativityHome && !agentsList && <footer>会话固定定义版本，运行记录与文件快照持续保存。</footer>}
+      {!creativityHome && !workspaceList && <footer>会话固定定义版本，运行记录与文件快照持续保存。</footer>}
     </main></div>
 }
 function AccountSettings({ username, pending, onLogout }: { username: string; pending: boolean; onLogout: () => void }) {
@@ -181,7 +181,7 @@ function SpaceWorkspace({ space, user, pending, error }: { space?: Schema['Space
     <Route path="agents/:definitionId" element={<Catalog key={`${space.id}-agents`} space={space} kind="agent" />} />
     <Route path="skills" element={<Catalog key={`${space.id}-skills`} space={space} kind="skill" />} />
     <Route path="skills/:definitionId" element={<Catalog key={`${space.id}-skills`} space={space} kind="skill" />} />
-    <Route path="evaluation/*" element={<Evaluation key={space.id} space={space.id} />} />
+    <Route path="evaluation/*" element={<Evaluation key={space.id} workspace={space} />} />
     <Route path="sessions" element={<Navigate to={spacePath(space.id, 'agents')} replace />} />
     <Route path="sessions/:sessionId" element={<LegacySession space={space.id} />} />
     <Route path="*" element={<NotFound />} /></Routes>
