@@ -96,7 +96,6 @@ function OwnerOpenAPI({ space }: { space: Space }) {
     onSuccess: result => {
       if (result.copied) {
         markCopied(result.id)
-        setNotice(`已复制「${result.name}」的 Token。`)
       } else {
         setRevealed({ id: result.id, name: result.name, token: result.token, copied: false })
         setNotice(`浏览器未授权自动写入剪贴板，请手动复制「${result.name}」的 Token。`)
@@ -112,8 +111,12 @@ function OwnerOpenAPI({ space }: { space: Space }) {
     if (!revealed) return
     const copied = await writeClipboard(revealed.token)
     setRevealed({ ...revealed, copied })
-    if (copied) markCopied(revealed.id)
-    setNotice(copied ? `已复制「${revealed.name}」的 Token。` : '自动复制失败，请手动选中 Token 复制。')
+    if (copied) {
+      markCopied(revealed.id)
+      setNotice('')
+    } else {
+      setNotice('自动复制失败，请手动选中 Token 复制。')
+    }
   }
 
   return (
@@ -187,7 +190,7 @@ function OwnerOpenAPI({ space }: { space: Space }) {
                         aria-busy={copying}
                         onClick={() => copyToken.mutate(token)}
                       >
-                        <Icon name={copying ? 'refresh' : copied ? 'check' : 'copy'} size={15} />
+                        <Icon name={copied ? 'check' : 'copy'} size={15} />
                       </button>
                     )}
                   </div>

@@ -39,7 +39,43 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
   const { definitionId: selected = '' } = useParams(), navigate = useNavigate()
   const [name, setName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const copyTimer = useRef<number | null>(null)
   const importInput = useRef<HTMLInputElement>(null)
+  useEffect(() => () => {
+    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
+  }, [])
+  const copyAgentId = async (id: string) => {
+    let copied = false
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(id)
+        copied = true
+      } catch {
+        copied = false
+      }
+    }
+    if (!copied) {
+      const textarea = document.createElement('textarea')
+      textarea.value = id
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      try {
+        copied = document.execCommand('copy')
+      } finally {
+        document.body.removeChild(textarea)
+      }
+    }
+    if (copied) {
+      setCopiedId(id)
+      if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
+      copyTimer.current = window.setTimeout(() => {
+        setCopiedId(current => current === id ? null : current)
+      }, 2000)
+    }
+  }
   const client = useQueryClient(), base = `/spaces/${space.id}/${kind}s`
   const creativityBase = `/spaces/${space.id}/creativity`
   const availability = useQuery({
@@ -85,8 +121,7 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
     {(iterate.error || availability.error) && <p role="alert">{(iterate.error || availability.error)?.message}</p>}
   </>
   const isAgent = kind === 'agent', kindLabel = isAgent ? 'Agent' : 'Skill'
-  const columns = ['名称', '最新版本', '更新日期']
-  if (isAgent) columns.push('迭代', '对话')
+  const columns = isAgent ? ['名称', 'ID', '最新版本', '更新日期', '迭代', '对话'] : ['名称', '最新版本', '更新日期']
   if (!selected) return <section aria-label={`${kindLabel}s`}>
     <WorkspaceListToolbar space={space} name={`${kindLabel}s`}>
       {!isAgent && <button type="button" className="secondary" disabled={importSkill.isPending || create.isPending}
@@ -103,10 +138,20 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
     {query.isPending && <p role="status">正在读取定义…</p>}
     {query.data?.length === 0 && <p className="muted">还没有 {kindLabel}，创建第一个定义开始使用。</p>}
     {!!query.data?.length && <WorkspaceListTable label={`${kindLabel} 列表`} columns={columns} className={isAgent ? 'agent-table' : undefined}
-      columnGroup={<colgroup><col /><col className="definition-version-column" /><col className="definition-date-column" />
+      columnGroup={<colgroup><col />{isAgent && <col className="agent-id-column" />}<col className="definition-version-column" /><col className="definition-date-column" />
         {isAgent && <col className="agent-action-column" span={2} />}</colgroup>}>
       {query.data.map(d => <tr key={d.id}>
           <td><Link className="workspace-list-name" to={`${base}/${d.id}`}>{d.name}{d.archived ? '（已归档）' : ''}</Link></td>
+          {isAgent && <td>
+            <div className="agent-id-cell">
+              <code className="agent-id-value">{d.id}</code>
+              <button type="button" className="icon-button openapi-copy-icon"
+                aria-label={`复制 ${d.name} 的 ID`} title={copiedId === d.id ? '已复制' : '复制 ID'}
+                onClick={() => { void copyAgentId(d.id) }}>
+                <Icon name={copiedId === d.id ? 'check' : 'copy'} size={15} />
+              </button>
+            </div>
+          </td>}
           <td>{d.latest_version || (d.default_version_id ? '—' : '未发布')}</td>
           <td>{d.updated_at ? <time className="definition-date" dateTime={d.updated_at}>{definitionDate.format(new Date(d.updated_at))}</time> : '—'}</td>
           {isAgent && <><td>{iterationButton(d.id, d.name)}</td>

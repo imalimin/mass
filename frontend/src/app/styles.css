@@ -139,12 +139,15 @@ button.send-button:disabled { background: var(--hover); }
 .workspace-list-table td:last-child { border-radius: 0 9px 9px 0; }
 .workspace-list-name { font-weight: 600; }
 .workspace-list-name:hover { color: var(--accent-text); text-decoration: underline; }
-.agent-table { min-width: 450px; }
-.definition-version-column { width: 18%; }
-.definition-date-column { width: max(108px, 23%); }
+.agent-table { min-width: 640px; }
+.agent-id-column { width: max(196px, 23%); }
+.agent-id-cell { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.agent-id-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; color: var(--muted); }
+.definition-version-column { width: 15%; }
+.definition-date-column { width: max(108px, 18%); }
 .workspace-list-table .definition-date { white-space: nowrap; }
 .agent-action-column { width: clamp(46px, 8vw, 112px); }
-.agent-table :is(th, td):nth-child(n+4) { padding-inline: 2px; text-align: center; }
+.agent-table :is(th, td):nth-child(n+5) { padding-inline: 2px; text-align: center; }
 .agent-action { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 9px; vertical-align: middle; }
 .agent-table :is(a.agent-action, button.agent-action:enabled):is(:hover, :focus-visible) { background: var(--accent-soft); color: var(--accent-text); }
 .workspace-form-dialog { width: min(520px, calc(100vw - 36px)); }
