@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60">
+  <defs>
+    <linearGradient id="mass-brand-ribbon" x2="0" y2="1">
+      <stop stop-color="#c9a6f4" />
+      <stop offset="1" stop-color="#a578e3" />
+    </linearGradient>
+  </defs>
+  <g transform="translate(0 12)">
+    <path fill="#d9b6f1" d="M0 25 12 0h13L11 36H0Z" />
+    <path fill="#faf6ff" d="M12 0h13l14 36H26Z" />
+    <path fill="#9063c8" d="M42 0h13l5 25v11H48Z" />
+    <path fill="url(#mass-brand-ribbon)" d="M42 0h13L39 36H26Z" />
+  </g>
+</svg>

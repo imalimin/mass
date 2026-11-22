@@ -70,14 +70,14 @@ func TestReadinessTracksRuntimeFaultWithoutStorageCache(t *testing.T) {
 }
 
 func TestRoutingBoundaries(t *testing.T) {
-	assets := fstest.MapFS{"index.html": {Data: []byte("<html>MASS</html>")}, "assets/app.js": {Data: []byte("export {}")}}
+	assets := fstest.MapFS{"index.html": {Data: []byte("<html>MASS</html>")}, "favicon.svg": {Data: []byte("<svg></svg>")}, "assets/app.js": {Data: []byte("export {}")}}
 	handler := NewHandler(assets, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	for _, tc := range []struct {
 		method, path string
 		status       int
 		contentType  string
 	}{
-		{"GET", "/", 200, "text/html"}, {"GET", "/spaces", 200, "text/html"}, {"GET", "/assets/app.js", 200, "javascript"},
+		{"GET", "/", 200, "text/html"}, {"GET", "/spaces", 200, "text/html"}, {"GET", "/favicon.svg", 200, "image/svg+xml"}, {"GET", "/assets/app.js", 200, "javascript"},
 		{"GET", "/spaces/example", 200, "text/html"},
 		{"GET", "/spaces/example/overview", 200, "text/html"}, {"GET", "/spaces/example/creativity/sessions/session", 200, "text/html"},
 		{"GET", "/spaces/example/creativity/sessions", 404, "application/json"}, {"GET", "/spaces/example/creativity/sessions/session/extra", 404, "application/json"},
