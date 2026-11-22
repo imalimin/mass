@@ -195,6 +195,9 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		if err != nil {
 			return err
 		}
+		if v.VersionLabel == "" && !v.VersionDebug && v.DraftRevision == 0 && v.VersionID != "" && svc.Catalog != nil {
+			v.VersionLabel, v.VersionDebug = svc.Catalog.AgentVersionLabel(r.Context(), u.ID, v.SpaceID, v.AgentSourceSpaceID, v.DefinitionID, v.VersionID)
+		}
 		writeJSON(w, 200, runtime.sessionResponse(v))
 		return nil
 	})

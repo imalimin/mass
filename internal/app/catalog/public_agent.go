@@ -48,6 +48,31 @@ func (s *Service) PublicAgentAvailable(ctx context.Context, space, agent string)
 	return err == nil, err
 }
 
+// AgentVersionLabel resolves the display label and debug flag for a fixed Agent
+// version on a local or cross-space session. Missing or inaccessible versions
+// return empty metadata so session reads stay resilient.
+func (s *Service) AgentVersionLabel(ctx context.Context, actor, space, sourceSpace, agentID, versionID string) (string, bool) {
+	if s == nil || s.Repo == nil || agentID == "" || versionID == "" {
+		return "", false
+	}
+	if sourceSpace != "" && sourceSpace != space {
+		repo, ok := s.Repo.(publicAgentRepository)
+		if !ok {
+			return "", false
+		}
+		_, ver, _, err := repo.PublicAgentVersion(ctx, sourceSpace, agentID, versionID)
+		if err != nil {
+			return "", false
+		}
+		return ver.Label, ver.Debug
+	}
+	ver, err := s.Repo.CatalogVersion(ctx, actor, space, "agent", agentID, versionID)
+	if err != nil {
+		return "", false
+	}
+	return ver.Label, ver.Debug
+}
+
 func (s *Service) LoadPublicAgent(ctx context.Context, space, agent string) (PublicAgent, error) {
 	repo, ok := s.Repo.(publicAgentRepository)
 	if !ok {

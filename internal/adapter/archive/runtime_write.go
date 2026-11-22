@@ -91,7 +91,7 @@ func (r *Runtime) AcceptRuntimeRequest(ctx context.Context, actor, space, operat
 			DraftRevision: d.DraftRevision, DraftSkillPackages: d.DraftSkillPackages,
 			AgentSourceSpaceID: d.AgentSourceSpaceID, AgentName: d.AgentName,
 			Creativity:    d.Creativity,
-			SchemaVersion: 1, SessionID: batch.SessionID, SpaceID: space, AgentID: d.DefinitionID, VersionID: d.VersionID,
+			SchemaVersion: 1, SessionID: batch.SessionID, SpaceID: space, AgentID: d.DefinitionID, VersionID: d.VersionID, VersionLabel: d.VersionLabel,
 			CreatedAt: e.OccurredAt, ActorID: actor, Title: d.Title, EventID: e.EventID, Definition: sessionlog.FixedDefinition(fromJSON[run.Definition](raw))}
 		s := newConversation()
 		s.loaded = true
@@ -99,8 +99,8 @@ func (r *Runtime) AcceptRuntimeRequest(ctx context.Context, actor, space, operat
 		if err := r.commit(ctx, s, "", created); err != nil {
 			return "", "", err
 		}
-		_, err = r.DB.DB.ExecContext(ctx, "INSERT INTO sessions(id,space_id,agent_id,actor_id,created_at,request_key,request_digest,hide) VALUES(?,?,?,?,?,?,?,?)",
-			batch.SessionID, space, d.DefinitionID, actor, e.OccurredAt, key, digest, d.Hide)
+		_, err = r.DB.DB.ExecContext(ctx, "INSERT INTO sessions(id,space_id,agent_id,actor_id,created_at,request_key,request_digest,hide,title) VALUES(?,?,?,?,?,?,?,?,?)",
+			batch.SessionID, space, d.DefinitionID, actor, e.OccurredAt, key, digest, d.Hide, nullableTitle(d.Title))
 		if err != nil {
 			return "", "", err
 		}
@@ -265,6 +265,22 @@ func (r *Runtime) appendEvents(ctx context.Context, batch journal.Batch) ([]jour
 			continue
 		}
 		switch p.Type {
+		case "model.response.completed":
+			if p.RunID == s.firstRunID && s.session.Title == "" {
+				resp := fromJSON[journal.ResponseData](p.Data)
+				if len(resp.Calls) == 0 && !isSummaryAttempt(s.events, p.RunID, resp.AttemptID) {
+					if derived := truncateTitle(resp.Preview, 16); derived != "" {
+						if r.DB != nil && r.DB.DB != nil {
+							if _, err := r.DB.DB.ExecContext(ctx, "UPDATE sessions SET title=? WHERE space_id=? AND id=? AND (title IS NULL OR title='')",
+								derived, s.session.SpaceID, s.session.ID); err == nil {
+								s.session.Title = derived
+							}
+						} else {
+							s.session.Title = derived
+						}
+					}
+				}
+			}
 		case "artifact.published":
 			v := fromJSON[run.Artifact](p.Data)
 			o, ok := r.Objects.get(batch.SpaceID, v.ObjectID)
@@ -484,6 +500,19 @@ func (r *Runtime) updateSummary(ctx context.Context, s *conversation, state *run
 			state.summaryFailure = true
 		}
 		return err
+	}
+	if end.RunID == s.firstRunID && s.session.Title == "" {
+		if derived := firstRunTitle(s.records, end.RunID); derived != "" {
+			if _, err := r.DB.DB.ExecContext(ctx, "UPDATE sessions SET title=? WHERE space_id=? AND id=? AND (title IS NULL OR title='')",
+				derived, s.session.SpaceID, s.session.ID); err != nil {
+				if !state.summaryFailure {
+					r.persistFailed(s, end.RunID, "terminal_index", end.Seq, err)
+					state.summaryFailure = true
+				}
+				return err
+			}
+			s.session.Title = derived
+		}
 	}
 	state.summaryFailure = false
 	state.view.Status, state.view.Error, state.view.FinishedAt, state.view.SnapshotError = end.Status, code, ptr(end.FinishedAt), end.SnapshotError

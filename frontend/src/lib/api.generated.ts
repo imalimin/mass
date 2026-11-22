@@ -1807,6 +1807,8 @@ export interface components {
             definition_id: components["schemas"]["ShortResourceID"];
             /** Format: uuid */
             version_id: string;
+            version_label?: string;
+            version_debug?: boolean;
             definition_ref: components["schemas"]["RuntimeRef"];
             workspace_error: string;
             last_sequence: string;

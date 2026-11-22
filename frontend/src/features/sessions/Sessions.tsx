@@ -57,9 +57,9 @@ function AgentConversations({ space, agentID, sessionID }: { space: string; agen
       <div className="session-links">
         <h2>历史会话</h2>
         {recent.map(s => <NavLink key={s.id} to={s.creativity ? creativitySessionPath(space, s.id) : agentSessionsPath(space, agentID, s.id)} end
-          onClick={() => { if (s.id !== sessionID) setStartedSession('') }} title={s.id}>
+          onClick={() => { if (s.id !== sessionID) setStartedSession('') }} title={s.title ? `${s.title} (${s.id})` : s.id}>
           <Icon name="chat" size={16} />
-          <span>{s.id}{s.draft_revision && <small>草稿调试</small>}{s.workspace_error && <small>文件待恢复</small>}</span>
+          <span>{s.title || s.id}{s.draft_revision && <small>草稿调试</small>}{s.workspace_error && <small>文件待恢复</small>}</span>
         </NavLink>)}
         {sessions.isPending && <p role="status">正在读取会话…</p>}
         {sessions.data?.length === 0 && <p>还没有会话</p>}

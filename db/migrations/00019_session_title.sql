@@ -1,0 +1,4 @@
+-- +goose NO TRANSACTION
+-- +goose Up
+ALTER TABLE sessions
+ ADD COLUMN title VARCHAR(200) CHARACTER SET utf8mb4 NULL;

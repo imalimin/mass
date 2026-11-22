@@ -129,6 +129,8 @@ type Session struct {
 	Title              string      `json:"title"`
 	DefinitionID       string      `json:"definition_id"`
 	VersionID          string      `json:"version_id"`
+	VersionLabel       string      `json:"version_label,omitempty"`
+	VersionDebug       bool        `json:"version_debug,omitempty"`
 	DefinitionRef      storage.Ref `json:"definition_ref"`
 	LatestSnapshotID   string      `json:"latest_workspace_snapshot_id"`
 	WorkspaceError     string      `json:"workspace_error"`

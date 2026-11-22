@@ -5791,6 +5791,10 @@ components:
         version_id:
           type: string
           format: uuid
+        version_label:
+          type: string
+        version_debug:
+          type: boolean
         definition_ref:
           $ref: '#/components/schemas/RuntimeRef'
         workspace_error:

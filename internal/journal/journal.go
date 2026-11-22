@@ -109,6 +109,7 @@ type SessionData struct {
 	DefinitionRef      *storage.Ref            `json:"definition_ref,omitempty"`
 	DefinitionID       string                  `json:"definition_id,omitempty"`
 	VersionID          string                  `json:"version_id,omitempty"`
+	VersionLabel       string                  `json:"version_label,omitempty"`
 	Title              string                  `json:"title,omitempty"`
 }
 type FinishData struct {

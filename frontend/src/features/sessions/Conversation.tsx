@@ -23,6 +23,16 @@ const toolStatuses: Record<string, string> = {
 }
 const isActive = (status?: string) => status === 'queued' || status === 'running'
 const atBottom = (viewport: HTMLElement) => viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 56
+const deriveLiveTitle = (state: Schema['UIState'] | null) => {
+  if (!state) return ''
+  const toolParents = new Set(state.tools.map(tool => tool.parent_message_id).filter(Boolean))
+  for (const message of state.messages) {
+    if (!message.closed || message.incomplete || toolParents.has(message.id)) continue
+    const cleaned = message.text.trim().replace(/\s+/g, ' ')
+    if (cleaned) return Array.from(cleaned).slice(0, 16).join('')
+  }
+  return ''
+}
 
 export type ConversationWorkspaceState = { sessionID: string; busy: boolean; committedSnapshotID: string }
 
@@ -60,6 +70,7 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
     queryKey: [...sessionKey, 'session'],
     queryFn: ({ signal }) => request<Schema['RuntimeSession']>(sessionURL, 'GET', undefined, signal),
     enabled: !!sessionID,
+    refetchInterval: q => q.state.error || q.state.data?.title ? false : 3000,
   })
   const readOnly = !!session.data?.hide
   const ownsSession = session.data?.definition_id === agent.id
@@ -112,19 +123,28 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
   const runID = latest?.id
   const ended = !!status && !busy
   const settledRun = current.data && !isActive(current.data.status) ? current.data : undefined
+  const liveTitle = !session.data?.title && !createdSession?.title && sorted.length <= 1 ? deriveLiveTitle(stream.state) : ''
   useEffect(() => {
     if (!settledRun) return
     client.setQueryData<Run[]>(['private', space, sessionID, 'runs'], previous =>
       previous?.map(run => run.id === settledRun.id ? settledRun : run))
-  }, [client, space, sessionID, settledRun])
+    void client.invalidateQueries({ queryKey: ['private', space, sessionID, 'session'] })
+    void client.invalidateQueries({ queryKey: ['private', space, 'sessions', agent.id] })
+  }, [client, space, sessionID, agent.id, settledRun])
+  useEffect(() => {
+    if (!sessionID || !liveTitle) return
+    void client.invalidateQueries({ queryKey: ['private', space, sessionID, 'session'] })
+    void client.invalidateQueries({ queryKey: ['private', space, 'sessions', agent.id] })
+  }, [client, space, sessionID, agent.id, liveTitle])
   useEffect(() => {
     if (!runID) return
     void client.invalidateQueries({ queryKey: ['private', space, sessionID, 'messages'] })
     if (ended) {
       void client.invalidateQueries({ queryKey: ['private', space, sessionID, 'session'] })
+      void client.invalidateQueries({ queryKey: ['private', space, 'sessions', agent.id] })
       void client.invalidateQueries({ queryKey: ['private', space, sessionID, 'workspace-files'] })
     }
-  }, [client, space, sessionID, runID, ended])
+  }, [client, space, sessionID, agent.id, runID, ended])
 
   const [fileError, setFileError] = useState('')
   const submit = useMutation({
@@ -288,12 +308,19 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
     </p>
   </>
   const fixedVersion = session.data?.version_id ?? createdSession?.version_id
+  const fixedVersionDebug = session.data?.version_debug ?? createdSession?.version_debug
+  const fixedVersionLabel = session.data?.version_label || createdSession?.version_label || ''
+  const fixedVersionText = fixedVersion
+    ? (fixedVersionDebug ? `调试快照 ${fixedVersion.slice(0, 8)}` : fixedVersionLabel || fixedVersion.slice(0, 8))
+    : ''
   const draftRevision = session.data?.draft_revision ?? createdSession?.draft_revision
+  const sessionTitle = session.data?.title || createdSession?.title || liveTitle
+  const displayTitle = sessionTitle || sessionID || agent.name
   return <section className="conversation-page">
     <header className="session-toolbar conversation-topbar">
       {back}
       <div className="conversation-title">
-        <h1 title={sessionID || agent.name}>{sessionID || agent.name}</h1>
+        <h1 title={sessionID ? (sessionTitle ? `${sessionTitle} (${sessionID})` : sessionID) : agent.name}>{displayTitle}</h1>
         {sessionID && <CopyIDButton label="会话" value={sessionID} icon />}
       </div>
       {context}
@@ -395,7 +422,9 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
             <button type="button" className="secondary attach-button" disabled={submit.isPending || files.length >= 16}
               onClick={() => fileInput.current?.click()} title="添加附件（每个最多 8 MiB）"><Icon name="attach" />附件</button>
             {draftRevision ? <span className="composer-version">草稿调试 · r{draftRevision}</span>
-              : fixedVersion ? <span className="composer-version" title={fixedVersion}>固定版本 · {fixedVersion.slice(0, 8)}</span>
+              : fixedVersion ? <select className="composer-version" aria-label="当前版本" disabled value={fixedVersion} title={fixedVersion}>
+                <option value={fixedVersion}>{fixedVersionText}</option>
+              </select>
               : <select className="composer-version" aria-label="Agent 版本" disabled={submit.isPending || !versions.data?.length}
                 value={validVersion ? versionID : ''} onChange={event => setSelectedVersion(event.target.value)}>
                 <option value="" disabled>选择 Agent 版本</option>

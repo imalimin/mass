@@ -41,6 +41,7 @@ type Created struct {
 	SpaceID            string                  `json:"space_id"`
 	AgentID            string                  `json:"agent_id"`
 	VersionID          string                  `json:"version_id"`
+	VersionLabel       string                  `json:"version_label,omitempty"`
 	ActorID            string                  `json:"actor_id"`
 	Title              string                  `json:"title"`
 	EventID            string                  `json:"event_id"`

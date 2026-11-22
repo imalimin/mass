@@ -38,7 +38,7 @@ try {
   await expect(page.getByLabel('输入任务', { exact: true })).toHaveValue('write, read and publish')
   await expect(page.getByLabel('Agent 版本')).toHaveCount(0)
   const first = await send('write, read and publish')
-  assert.equal(created.id, first.session_id); assert.equal(created.title, created.id); assert.equal(created.version_id, version.id)
+  assert.equal(created.id, first.session_id); assert.equal(created.title, ''); assert.equal(created.version_id, version.id)
   for (const id of [first.space_id, version.definition_id, first.session_id, first.id]) assert.match(id, /^[a-z2-7]{16}$/)
   await expect(page).toHaveURL(`${sessionRoot}/${created.id}`)
   await expect(page.getByLabel('Agent 版本')).toHaveCount(0)

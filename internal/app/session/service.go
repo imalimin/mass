@@ -191,7 +191,7 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 	}
 	accept := func() error {
 		var acceptErr error
-		id, acceptErr = s.acceptSession(ctx, actor, space, in, d, refs, agentName, digest, draftRevision, draftPackages)
+		id, acceptErr = s.acceptSession(ctx, actor, space, in, d, refs, agentName, version.Label, digest, draftRevision, draftPackages)
 		return acceptErr
 	}
 	if shared {
@@ -237,7 +237,7 @@ func (s *Service) localAgentVersion(ctx context.Context, actor, space string, in
 	return s.Catalog.Version(ctx, actor, space, "agent", in.AgentID, versionID)
 }
 
-func (s *Service) acceptSession(ctx context.Context, actor, space string, in CreateInput, d run.Definition, refs []storage.Ref, agentName, digest string, draftRevision int64, draftPackages []run.DraftSkillPackage) (string, error) {
+func (s *Service) acceptSession(ctx context.Context, actor, space string, in CreateInput, d run.Definition, refs []storage.Ref, agentName, versionLabel, digest string, draftRevision int64, draftPackages []run.DraftSkillPackage) (string, error) {
 	raw, _ := json.Marshal(d)
 	o, err := s.Content.Put(ctx, actor, space, uuid.NewString(), "session.definition", "application/json", bytes.NewReader(raw))
 	if err != nil {
@@ -247,10 +247,7 @@ func (s *Service) acceptSession(ctx context.Context, actor, space string, in Cre
 	refs = append(refs, defRef)
 	id := storage.NewShortID()
 	title := in.Title
-	if title == "" {
-		title = id
-	}
-	event := journal.New(actor, "session.created", "", journal.SessionData{Hide: in.Hide, Creativity: in.Creativity, SourceSnapshotID: in.SourceSnapshotID, DefinitionRef: &defRef, DefinitionID: in.AgentID, VersionID: d.VersionID, Title: title, AgentSourceSpaceID: in.AgentSourceSpaceID, AgentName: agentName, DraftRevision: draftRevision, DraftSkillPackages: draftPackages}, refs...)
+	event := journal.New(actor, "session.created", "", journal.SessionData{Hide: in.Hide, Creativity: in.Creativity, SourceSnapshotID: in.SourceSnapshotID, DefinitionRef: &defRef, DefinitionID: in.AgentID, VersionID: d.VersionID, VersionLabel: versionLabel, Title: title, AgentSourceSpaceID: in.AgentSourceSpaceID, AgentName: agentName, DraftRevision: draftRevision, DraftSkillPackages: draftPackages}, refs...)
 	batch, err := journal.Prepare(actor, journal.Request{SpaceID: space, SessionID: id, AppendKey: uuid.NewString(), Events: []journal.Proposed{event}})
 	if err != nil {
 		return "", err

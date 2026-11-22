@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -29,7 +30,7 @@ func (r *Runtime) RuntimeSessions(ctx context.Context, actor, space, agent strin
 	if err := r.access(ctx, actor, space); err != nil {
 		return nil, err
 	}
-	query := "SELECT id FROM sessions WHERE space_id=? AND hide=FALSE AND id>?"
+	query := "SELECT id,title FROM sessions WHERE space_id=? AND hide=FALSE AND id>?"
 	args := []any{space, q.After}
 	if agent != "" {
 		query += " AND agent_id=?"
@@ -39,26 +40,31 @@ func (r *Runtime) RuntimeSessions(ctx context.Context, actor, space, agent strin
 	if err != nil {
 		return nil, err
 	}
-	ids := []string{}
+	type sessionRow struct {
+		id    string
+		title sql.NullString
+	}
+	listed := []sessionRow{}
 	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
+		var row sessionRow
+		if err = rows.Scan(&row.id, &row.title); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		ids = append(ids, id)
+		listed = append(listed, row)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
 		return nil, err
 	}
-	items := make([]run.Session, 0, len(ids))
-	for _, id := range ids {
-		s, err := r.lock(ctx, space, id)
+	items := make([]run.Session, 0, len(listed))
+	for _, row := range listed {
+		s, err := r.lock(ctx, space, row.id)
 		if err != nil {
 			return nil, err
 		}
+		applyStoredTitle(&s.session, row.title)
 		items = append(items, s.session)
 		s.Unlock()
 	}

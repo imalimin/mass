@@ -59,6 +59,7 @@ type conversation struct {
 	lastDebugPlan run.CreativityPublishPlan
 	maintenance   bool
 	active        string
+	firstRunID    string
 }
 
 type runState struct {
@@ -318,11 +319,11 @@ func (r *Runtime) restoreCreated(s *conversation, d sessionlog.Created) {
 	ref.Role = "definition"
 	s.session = run.Session{ID: d.SessionID, SpaceID: d.SpaceID, ActorID: d.ActorID, Title: d.Title, Creativity: d.Creativity, DraftRevision: d.DraftRevision,
 		AgentSourceSpaceID: d.AgentSourceSpaceID, AgentName: d.AgentName,
-		DefinitionID: d.AgentID, VersionID: d.VersionID, DefinitionRef: ref, CreatedAt: d.CreatedAt}
+		DefinitionID: d.AgentID, VersionID: d.VersionID, VersionLabel: d.VersionLabel, VersionDebug: d.Definition.Debug, DefinitionRef: ref, CreatedAt: d.CreatedAt}
 	e := journal.New(d.ActorID, "session.created", "", journal.SessionData{DefinitionRef: &ref, Creativity: d.Creativity,
 		DraftRevision:      d.DraftRevision,
 		AgentSourceSpaceID: d.AgentSourceSpaceID, AgentName: d.AgentName,
-		DefinitionID: d.AgentID, VersionID: d.VersionID, Title: d.Title}, ref)
+		DefinitionID: d.AgentID, VersionID: d.VersionID, VersionLabel: d.VersionLabel, Title: d.Title}, ref)
 	e.EventID, e.OccurredAt = d.EventID, d.CreatedAt
 	s.append(e)
 }
@@ -357,6 +358,9 @@ func (r *Runtime) restoreAccepted(s *conversation, d sessionlog.Accepted) {
 	created.EventID, created.CausationID, created.OccurredAt = d.EventID, d.UserEventID, d.AcceptedAt
 	s.append(created)
 	s.runs[d.RunID] = &runState{view: run.View{Snapshot: v, Status: "queued"}, key: d.RequestKey, digest: d.RequestDigest}
+	if s.firstRunID == "" {
+		s.firstRunID = d.RunID
+	}
 	s.active = d.RunID
 }
 
@@ -558,15 +562,86 @@ func (r *Runtime) memberSession(ctx context.Context, actor, space, id string) (*
 		return nil, err
 	}
 	var hide bool
-	err := r.DB.DB.QueryRowContext(ctx, "SELECT hide FROM sessions WHERE space_id=? AND id=?", space, id).Scan(&hide)
+	var title sql.NullString
+	err := r.DB.DB.QueryRowContext(ctx, "SELECT hide,title FROM sessions WHERE space_id=? AND id=?", space, id).Scan(&hide, &title)
 	if err != nil {
 		return nil, notFound(err)
 	}
 	s, err := r.lock(ctx, space, id)
 	if err == nil {
 		s.session.Hide = hide
+		applyStoredTitle(&s.session, title)
 	}
 	return s, err
+}
+
+func applyStoredTitle(session *run.Session, stored sql.NullString) {
+	if stored.Valid {
+		session.Title = stored.String
+	} else if session.Title == session.ID {
+		session.Title = ""
+	}
+}
+
+func nullableTitle(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func firstRunTitle(records []json.RawMessage, runID string) string {
+	if runID == "" {
+		return ""
+	}
+	for _, raw := range records {
+		var h sessionlog.Header
+		if json.Unmarshal(raw, &h) != nil || h.Type != sessionlog.ModelStep || h.RunID != runID {
+			continue
+		}
+		var step sessionlog.Step
+		if json.Unmarshal(raw, &step) != nil {
+			continue
+		}
+		if step.Purpose == "summary" || step.Model.Status != "succeeded" {
+			continue
+		}
+		if len(step.Model.ToolCalls) > 0 || len(step.Tools) > 0 {
+			continue
+		}
+		if title := truncateTitle(step.Model.Text, 16); title != "" {
+			return title
+		}
+	}
+	return ""
+}
+
+func isSummaryAttempt(events []journal.Event, runID, attemptID string) bool {
+	if attemptID == "" {
+		return false
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		e := events[i]
+		if e.RunID != runID || e.Type != "model.attempt.started" {
+			continue
+		}
+		if d := fromJSON[journal.AttemptData](e.Data); d.ID == attemptID {
+			return d.Purpose == "summary"
+		}
+	}
+	return false
+}
+
+func truncateTitle(text string, limit int) string {
+	cleaned := strings.Join(strings.Fields(text), " ")
+	if cleaned == "" || limit <= 0 {
+		return ""
+	}
+	runes := []rune(cleaned)
+	if len(runes) > limit {
+		return string(runes[:limit])
+	}
+	return cleaned
 }
 
 func (r *Runtime) locateRun(ctx context.Context, runID string) (space, session string, err error) {
