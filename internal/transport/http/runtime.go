@@ -188,9 +188,9 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		}
 		return nil
 	}
-	register("GET "+base+"/sessions", true, listSessions)
-	register("GET "+base+"/agents/{agent_id}/sessions", true, listSessions)
-	register("GET "+base+"/sessions/{session_id}", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+	registerBearer("GET "+base+"/sessions", listSessions)
+	registerBearer("GET "+base+"/agents/{agent_id}/sessions", listSessions)
+	registerBearer("GET "+base+"/sessions/{session_id}", func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		v, err := svc.Repo.RuntimeSession(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("session_id"))
 		if err != nil {
 			return err
@@ -236,7 +236,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		writeJSON(w, 202, runtime.runResponse(v))
 		return nil
 	})
-	register("GET "+base+"/sessions/{session_id}/runs", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+	registerBearer("GET "+base+"/sessions/{session_id}/runs", func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		q, n, scope, err := query(r, u)
 		if err != nil {
 			return err
@@ -267,7 +267,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 	})
 	register("GET /api/v1/diagnostics", true, runtime.diagnostics)
 	register("GET /api/v1/diagnostic-logs", true, runtime.diagnosticLogs)
-	register("POST "+base+"/runs/{run_id}/cancel", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+	registerBearer("POST "+base+"/runs/{run_id}/cancel", func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		v, err := svc.Repo.CancelRuntimeRun(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("run_id"))
 		if err != nil {
 			return err

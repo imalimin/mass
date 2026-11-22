@@ -28,14 +28,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,12 +42,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -68,6 +65,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.afinn.mass.ui.theme.MassTheme
 
+private data class ActiveSessionNav(
+    val spaceId: String,
+    val session: SessionSummary,
+    val agentName: String
+)
+
 class MainActivity : ComponentActivity() {
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -80,15 +83,17 @@ class MainActivity : ComponentActivity() {
         MassServerService.refreshStatus()
 
         val initialConfig = MassConfigStore.load(this)
-        if (!MassServerService.status.value.isRunning && !MassServerService.status.value.isStarting) {
-            if (initialConfig.mode == MassStatus.MODE_UI_ONLY || initialConfig.hasFullBackendCredentials()) {
-                MassServerService.start(this, initialConfig)
-            }
+        if (!initialConfig.useRemoteServer &&
+            !MassServerService.status.value.isRunning &&
+            !MassServerService.status.value.isStarting &&
+            initialConfig.hasFullBackendCredentials()
+        ) {
+            MassServerService.start(this, initialConfig.copy(mode = MassStatus.MODE_FULL))
         }
 
         setContent {
             MassTheme {
-                MassDemoApp(initialConfig = initialConfig)
+                MassApp(initialConfig = initialConfig)
             }
         }
     }
@@ -108,59 +113,101 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MassDemoApp(initialConfig: MassConfig) {
+private fun MassApp(initialConfig: MassConfig) {
     val context = LocalContext.current
     val status by MassServerService.status.collectAsState()
     var config by remember { mutableStateOf(initialConfig) }
-    var showSettings by remember {
-        mutableStateOf(
-            !status.isRunning &&
-                !status.isStarting &&
-                initialConfig.mode == MassStatus.MODE_FULL &&
-                !initialConfig.hasFullBackendCredentials()
-        )
-    }
+    var activeSession by remember { mutableStateOf<ActiveSessionNav?>(null) }
+    var activeTitle by remember { mutableStateOf("") }
+    var resolvedSpaceId by remember { mutableStateOf(initialConfig.spaceId) }
+    var showSettings by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
-    var reloadToken by remember { mutableIntStateOf(0) }
-    var webError by remember { mutableStateOf("") }
-
-    LaunchedEffect(status.state, status.url) {
-        if (status.isRunning) {
-            webError = ""
-        }
-    }
+    var listRefreshTrigger by remember { mutableIntStateOf(0) }
+    var chatRefreshTrigger by remember { mutableIntStateOf(0) }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    when {
+                        showSettings -> {
+                            IconButton(onClick = { showSettings = false }) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                            }
+                        }
+                        activeSession != null -> {
+                            IconButton(onClick = {
+                                activeSession = null
+                                listRefreshTrigger++
+                            }) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "Back to sessions")
+                            }
+                        }
+                    }
+                },
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        StatusDot(status.state)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                text = "MASS Local",
-                                style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            val modeTag = if (status.mode == MassStatus.MODE_UI_ONLY) "UI Preview" else "Form A"
-                            val subtitle = if (status.url.isNotBlank()) "$modeTag · ${status.url}" else "$modeTag · ${status.state}"
-                            Text(
-                                text = subtitle,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                    when {
+                        showSettings -> {
+                            Text("设置", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+
+                        activeSession != null -> {
+                            val nav = activeSession!!
+                            Column {
+                                Text(
+                                    text = activeTitle.ifBlank { nav.session.displayTitle },
+                                    style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = nav.agentName.ifBlank { nav.session.definitionId },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        else -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                StatusDot(
+                                    state = if (config.useRemoteServer) MassStatus.STATE_RUNNING else status.state
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "会话列表",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    val endpointLabel = config.effectiveApiBaseUrl(status)
+                                    val spaceLabel = resolvedSpaceId.ifBlank { "OpenAPI" }
+                                    Text(
+                                        text = "$spaceLabel · $endpointLabel",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
                         }
                     }
                 },
                 actions = {
-                    if (status.isRunning && !showSettings) {
-                        IconButton(onClick = { reloadToken++ }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Reload")
+                    if (!showSettings) {
+                        IconButton(onClick = {
+                            if (activeSession != null) {
+                                chatRefreshTrigger++
+                            } else {
+                                listRefreshTrigger++
+                            }
+                        }) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                         }
                     }
                     IconButton(onClick = { showLogs = true }) {
@@ -178,81 +225,62 @@ private fun MassDemoApp(initialConfig: MassConfig) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            if (showSettings) {
-                ConfigScreen(
-                    config = config,
-                    status = status,
-                    onConfigChange = { config = it },
-                    onStart = { updated ->
-                        config = updated
-                        webError = ""
-                        showSettings = false
-                        MassServerService.start(context, updated)
-                    },
-                    onStop = {
-                        MassServerService.stop(context)
-                    },
-                    onQuickPreview = {
-                        val preview = config.copy(mode = MassStatus.MODE_UI_ONLY)
-                        config = preview
-                        webError = ""
-                        showSettings = false
-                        MassServerService.start(context, preview)
-                    }
-                )
-            } else {
-                when {
-                    status.isRunning && status.url.isNotBlank() -> {
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            if (webError.isNotBlank()) {
-                                Surface(color = MaterialTheme.colorScheme.errorContainer) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text(
-                                            text = "WebView: $webError",
-                                            color = MaterialTheme.colorScheme.onErrorContainer,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        TextButton(onClick = {
-                                            webError = ""
-                                            reloadToken++
-                                        }) {
-                                            Text("Retry")
-                                        }
-                                    }
+            when {
+                showSettings -> {
+                    ConfigScreen(
+                        config = config,
+                        status = status,
+                        onConfigChange = { config = it },
+                        onSaveAndApply = { updated ->
+                            val normalized = updated.copy(mode = MassStatus.MODE_FULL)
+                            config = normalized
+                            MassConfigStore.save(context, normalized)
+                            if (normalized.useRemoteServer) {
+                                if (status.isRunning || status.isStarting) {
+                                    MassServerService.stop(context)
                                 }
+                            } else if (normalized.hasFullBackendCredentials()) {
+                                MassServerService.start(context, normalized)
                             }
-                            MassWebView(
-                                url = status.url,
-                                reloadToken = reloadToken,
-                                modifier = Modifier.weight(1f),
-                                onPageError = { webError = it }
-                            )
+                            showSettings = false
+                            activeSession = null
+                            listRefreshTrigger++
+                        },
+                        onStopLocalServer = {
+                            MassServerService.stop(context)
                         }
-                    }
+                    )
+                }
 
-                    status.isStarting -> {
-                        StartingView(status = status, onOpenSettings = { showSettings = true })
-                    }
+                activeSession != null -> {
+                    val nav = activeSession!!
+                    SessionChatScreen(
+                        baseUrl = config.effectiveApiBaseUrl(status),
+                        token = config.openapiToken,
+                        spaceId = nav.spaceId,
+                        initialSession = nav.session,
+                        agentDisplayName = nav.agentName,
+                        refreshTrigger = chatRefreshTrigger,
+                        onTitleUpdated = { activeTitle = it },
+                        onBack = {
+                            activeSession = null
+                            listRefreshTrigger++
+                        }
+                    )
+                }
 
-                    else -> {
-                        StoppedOrErrorView(
-                            status = status,
-                            onStart = { MassServerService.start(context, config) },
-                            onOpenSettings = { showSettings = true },
-                            onQuickPreview = {
-                                val preview = config.copy(mode = MassStatus.MODE_UI_ONLY)
-                                config = preview
-                                MassServerService.start(context, preview)
-                            }
-                        )
-                    }
+                else -> {
+                    SessionListScreen(
+                        config = config,
+                        serverStatus = status,
+                        refreshTrigger = listRefreshTrigger,
+                        onResolvedSpace = { resolvedSpaceId = it },
+                        onSelectSession = { spaceId, session, agentName ->
+                            activeTitle = session.displayTitle
+                            activeSession = ActiveSessionNav(spaceId, session, agentName)
+                        },
+                        onOpenSettings = { showSettings = true }
+                    )
                 }
             }
         }
@@ -260,11 +288,13 @@ private fun MassDemoApp(initialConfig: MassConfig) {
 
     if (showLogs) {
         LogDialog(
+            config = config,
             status = status,
             onDismiss = { showLogs = false },
             onCopy = {
                 val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 val text = buildString {
+                    appendLine("api_base=${config.effectiveApiBaseUrl(status)}")
                     appendLine("state=${status.state} mode=${status.mode} url=${status.url}")
                     if (status.error.isNotBlank()) appendLine("error=${status.error}")
                     status.logs.forEach { appendLine(it) }
@@ -292,89 +322,12 @@ private fun StatusDot(state: String) {
 }
 
 @Composable
-private fun StartingView(status: MassStatus, onOpenSettings: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        CircularProgressIndicator()
-        Spacer(modifier = Modifier.height(16.dp))
-        Text("Starting embedded MASS Go server…", style = MaterialTheme.typography.titleMedium)
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = status.logs.lastOrNull() ?: "Connecting to dependencies and binding loopback port",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.height(20.dp))
-        OutlinedButton(onClick = onOpenSettings) {
-            Text("Edit Configuration")
-        }
-    }
-}
-
-@Composable
-private fun StoppedOrErrorView(
-    status: MassStatus,
-    onStart: () -> Unit,
-    onOpenSettings: () -> Unit,
-    onQuickPreview: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = if (status.isError) "MASS Server Failed to Start" else "MASS Local Server Stopped",
-            style = MaterialTheme.typography.titleLarge
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        if (status.error.isNotBlank()) {
-            Surface(
-                color = MaterialTheme.colorScheme.errorContainer,
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    text = status.error,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.padding(12.dp)
-                )
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onStart) {
-                Text("Start Server")
-            }
-            OutlinedButton(onClick = onOpenSettings) {
-                Text("Configure")
-            }
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-        TextButton(onClick = onQuickPreview) {
-            Text("Launch Embedded UI Preview (No MariaDB/TOS)")
-        }
-    }
-}
-
-@Composable
 private fun ConfigScreen(
     config: MassConfig,
     status: MassStatus,
     onConfigChange: (MassConfig) -> Unit,
-    onStart: (MassConfig) -> Unit,
-    onStop: () -> Unit,
-    onQuickPreview: () -> Unit
+    onSaveAndApply: (MassConfig) -> Unit,
+    onStopLocalServer: () -> Unit
 ) {
     var showImportDialog by remember { mutableStateOf(false) }
     var envInput by remember { mutableStateOf("") }
@@ -387,25 +340,51 @@ private fun ConfigScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Run Mode", style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = config.mode == MassStatus.MODE_FULL,
-                onClick = { onConfigChange(config.copy(mode = MassStatus.MODE_FULL)) },
-                label = { Text("Form A: Full Server") }
-            )
-            FilterChip(
-                selected = config.mode == MassStatus.MODE_UI_ONLY,
-                onClick = { onConfigChange(config.copy(mode = MassStatus.MODE_UI_ONLY)) },
-                label = { Text("UI Preview Only") }
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("OpenAPI 访问配置", style = MaterialTheme.typography.titleMedium)
+            TextButton(onClick = { showImportDialog = true }) {
+                Text("粘贴 .env")
+            }
         }
+
+        OutlinedTextField(
+            value = config.openapiToken,
+            onValueChange = { onConfigChange(config.copy(openapiToken = it)) },
+            label = { Text("OpenAPI Bearer Token") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = config.spaceId,
+            onValueChange = { onConfigChange(config.copy(spaceId = it)) },
+            label = { Text("Space ID（默认 ${MassConfig.DEFAULT_SPACE_ID}）") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = config.agentId,
+            onValueChange = { onConfigChange(config.copy(agentId = it)) },
+            label = { Text("Agent ID（默认 ${MassConfig.DEFAULT_AGENT_ID}）") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = config.remoteBaseUrl,
+            onValueChange = { onConfigChange(config.copy(remoteBaseUrl = it)) },
+            label = { Text("远端后端 URL（留空则使用本地内置 Go 服务端）") },
+            placeholder = { Text("例如 http://192.168.1.10:8080") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        HorizontalDivider()
+        Text("本地内置 Go 服务端（形态 A）", style = MaterialTheme.typography.titleMedium)
         Text(
-            text = if (config.mode == MassStatus.MODE_FULL) {
-                "Runs full bootstrap.Serve in-process on 127.0.0.1, connecting to your remote MariaDB and TOS."
-            } else {
-                "Runs embedded Go HTTP server + MASS frontend assets on 127.0.0.1 without MariaDB/TOS."
-            },
+            text = "当上方远端 URL 留空时，应用在本地 127.0.0.1 启动 MASS Go 服务端连接以下 MariaDB 与 TOS。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -423,91 +402,75 @@ private fun ConfigScreen(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
-
-        if (config.mode == MassStatus.MODE_FULL) {
-            HorizontalDivider()
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Remote Backend (Form A)", style = MaterialTheme.typography.titleMedium)
-                TextButton(onClick = { showImportDialog = true }) {
-                    Text("Paste .env")
-                }
-            }
-
+        OutlinedTextField(
+            value = config.mariadbDsn,
+            onValueChange = { onConfigChange(config.copy(mariadbDsn = it)) },
+            label = { Text("MASS_MARIADB_DSN") },
+            placeholder = { Text("user:pass@tcp(192.168.1.10:3306)/mass") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = config.tosEndpoint,
+            onValueChange = { onConfigChange(config.copy(tosEndpoint = it)) },
+            label = { Text("MASS_TOS_ENDPOINT") },
+            placeholder = { Text("https://tos-cn-guangzhou.volces.com") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
-                value = config.mariadbDsn,
-                onValueChange = { onConfigChange(config.copy(mariadbDsn = it)) },
-                label = { Text("MASS_MARIADB_DSN") },
-                placeholder = { Text("user:pass@tcp(192.168.1.10:3306)/mass") },
+                value = config.tosRegion,
+                onValueChange = { onConfigChange(config.copy(tosRegion = it)) },
+                label = { Text("MASS_TOS_REGION") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.weight(1f)
             )
             OutlinedTextField(
-                value = config.tosEndpoint,
-                onValueChange = { onConfigChange(config.copy(tosEndpoint = it)) },
-                label = { Text("MASS_TOS_ENDPOINT") },
-                placeholder = { Text("https://tos-cn-beijing.volces.com") },
+                value = config.tosPrefix,
+                onValueChange = { onConfigChange(config.copy(tosPrefix = it)) },
+                label = { Text("TOS Prefix") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.weight(1f)
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = config.tosRegion,
-                    onValueChange = { onConfigChange(config.copy(tosRegion = it)) },
-                    label = { Text("MASS_TOS_REGION") },
-                    placeholder = { Text("cn-beijing") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-                OutlinedTextField(
-                    value = config.tosPrefix,
-                    onValueChange = { onConfigChange(config.copy(tosPrefix = it)) },
-                    label = { Text("TOS Prefix") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-            }
+        }
+        OutlinedTextField(
+            value = config.tosBucket,
+            onValueChange = { onConfigChange(config.copy(tosBucket = it)) },
+            label = { Text("MASS_TOS_BUCKET") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = config.tosAccessKey,
+            onValueChange = { onConfigChange(config.copy(tosAccessKey = it)) },
+            label = { Text("MASS_TOS_ACCESS_KEY") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = config.tosSecretKey,
+            onValueChange = { onConfigChange(config.copy(tosSecretKey = it)) },
+            label = { Text("MASS_TOS_SECRET_KEY") },
+            visualTransformation = PasswordVisualTransformation(),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             OutlinedTextField(
-                value = config.tosBucket,
-                onValueChange = { onConfigChange(config.copy(tosBucket = it)) },
-                label = { Text("MASS_TOS_BUCKET") },
+                value = config.masterKey,
+                onValueChange = { onConfigChange(config.copy(masterKey = it)) },
+                label = { Text("MASS_MASTER_KEY (32B Base64)") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.weight(1f)
             )
-            OutlinedTextField(
-                value = config.tosAccessKey,
-                onValueChange = { onConfigChange(config.copy(tosAccessKey = it)) },
-                label = { Text("MASS_TOS_ACCESS_KEY") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedTextField(
-                value = config.tosSecretKey,
-                onValueChange = { onConfigChange(config.copy(tosSecretKey = it)) },
-                label = { Text("MASS_TOS_SECRET_KEY") },
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(
-                    value = config.masterKey,
-                    onValueChange = { onConfigChange(config.copy(masterKey = it)) },
-                    label = { Text("MASS_MASTER_KEY (32B Base64)") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-                OutlinedButton(onClick = {
-                    onConfigChange(config.copy(masterKey = MassConfig.generateMasterKey()))
-                }) {
-                    Text("Gen")
-                }
+            OutlinedButton(onClick = {
+                onConfigChange(config.copy(masterKey = MassConfig.generateMasterKey()))
+            }) {
+                Text("生成")
             }
         }
 
@@ -517,24 +480,23 @@ private fun ConfigScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Button(
-                onClick = { onStart(config) },
+                onClick = { onSaveAndApply(config) },
                 modifier = Modifier.weight(1f)
             ) {
-                Text(if (status.isRunning) "Save & Restart" else "Save & Start")
+                Text(
+                    if (config.useRemoteServer) {
+                        "保存并连接远端"
+                    } else if (status.isRunning) {
+                        "保存并重启本地服务"
+                    } else {
+                        "保存并启动"
+                    }
+                )
             }
             if (status.isRunning || status.isStarting) {
-                OutlinedButton(onClick = onStop) {
-                    Text("Stop")
+                OutlinedButton(onClick = onStopLocalServer) {
+                    Text("停止")
                 }
-            }
-        }
-
-        if (config.mode == MassStatus.MODE_FULL && !config.hasFullBackendCredentials()) {
-            TextButton(
-                onClick = onQuickPreview,
-                modifier = Modifier.align(Alignment.CenterHorizontally)
-            ) {
-                Text("Skip backend setup & preview embedded UI now")
             }
         }
     }
@@ -542,14 +504,14 @@ private fun ConfigScreen(
     if (showImportDialog) {
         AlertDialog(
             onDismissRequest = { showImportDialog = false },
-            title = { Text("Import from .env") },
+            title = { Text("粘贴 .env 导入") },
             text = {
                 OutlinedTextField(
                     value = envInput,
                     onValueChange = { envInput = it },
                     placeholder = {
                         Text(
-                            "MASS_MARIADB_DSN=...\nMASS_TOS_ENDPOINT=...\nMASS_TOS_REGION=...\nMASS_TOS_BUCKET=...\nMASS_TOS_ACCESS_KEY=...\nMASS_TOS_SECRET_KEY=...\nMASS_MASTER_KEY=..."
+                            "MASS_OPENAPI_TOKEN=...\nMASS_SPACE_ID=...\nMASS_AGENT_ID=...\nMASS_API_URL=...\nMASS_MARIADB_DSN=...\nMASS_TOS_ENDPOINT=...\nMASS_TOS_REGION=...\nMASS_TOS_BUCKET=...\nMASS_TOS_ACCESS_KEY=...\nMASS_TOS_SECRET_KEY=...\nMASS_MASTER_KEY=..."
                         )
                     },
                     minLines = 6,
@@ -562,12 +524,12 @@ private fun ConfigScreen(
                     onConfigChange(MassConfig.applyEnvText(config, envInput))
                     showImportDialog = false
                 }) {
-                    Text("Apply")
+                    Text("应用")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showImportDialog = false }) {
-                    Text("Cancel")
+                    Text("取消")
                 }
             }
         )
@@ -576,13 +538,14 @@ private fun ConfigScreen(
 
 @Composable
 private fun LogDialog(
+    config: MassConfig,
     status: MassStatus,
     onDismiss: () -> Unit,
     onCopy: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Server Diagnostics (${status.state})") },
+        title = { Text("运行诊断 (${status.state})") },
         text = {
             Column(
                 modifier = Modifier
@@ -592,7 +555,9 @@ private fun LogDialog(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    text = "Version: ${status.version.ifBlank { "unknown" }}\nMode: ${status.mode}\nURL: ${status.url.ifBlank { "-" }}\nHTTP Live: ${status.httpLive}",
+                    text = "OpenAPI Base: ${config.effectiveApiBaseUrl(status)}\n" +
+                        "Local Server: ${status.state} (${status.version.ifBlank { "unknown" }})\n" +
+                        "HTTP Live: ${status.httpLive}",
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace
                 )
@@ -606,7 +571,7 @@ private fun LogDialog(
                 }
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                 if (status.logs.isEmpty()) {
-                    Text("No logs yet.", style = MaterialTheme.typography.bodySmall)
+                    Text("暂无本地服务端日志。", style = MaterialTheme.typography.bodySmall)
                 } else {
                     status.logs.forEach { line ->
                         Text(
@@ -619,10 +584,10 @@ private fun LogDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
+            TextButton(onClick = onDismiss) { Text("关闭") }
         },
         dismissButton = {
-            TextButton(onClick = onCopy) { Text("Copy") }
+            TextButton(onClick = onCopy) { Text("复制") }
         }
     )
 }

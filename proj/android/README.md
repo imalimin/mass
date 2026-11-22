@@ -1,16 +1,9 @@
-# MASS Android Demo (Form A)
+# MASS Android App (Form A + OpenAPI)
 
-Runs the MASS Go server in-process inside the Android APK via JNI (`libmassbridge.so`, built with `go build -buildmode=c-shared` + Android NDK) and renders the embedded MASS frontend in an Android `WebView` at `http://127.0.0.1:<port>`.
+Runs the MASS Go server in-process inside the Android APK via JNI (`libmassbridge.so`, built with `go build -buildmode=c-shared` + Android NDK) on `http://127.0.0.1:15336`, with native Jetpack Compose screens backed by MASS OpenAPI Bearer endpoints:
 
-## Architecture
-
-- **Go JNI Bridge** (`../../cmd/mass-android`):
-  - `bridge.go`: manages the in-process server lifecycle (`Start` / `Stop` / `Status`), sets `TMPDIR` and `MASS_*` env vars, configures `runtime.workspace_temp_root` under Android app private storage, and captures `slog` logs.
-  - `jni_android.go` & `jni_android.c`: exports `MassBridge.nativeStart`, `nativeStop`, `nativeStatus` and forwards logs to `logcat` (`MassGo`).
-- **Android App** (`com.afinn.mass`):
-  - `MassServerService`: `ForegroundService` (`dataSync`) keeping the Go server alive and probing `GET /health/live`.
-  - `MassWebView`: WebView with JS, DOM Storage, Cookie persistence (`mass_session`), file chooser support, and SPA back navigation.
-  - `MassConfigStore`: persists Form A credentials (`MASS_MARIADB_DSN`, `MASS_TOS_*`, `MASS_MASTER_KEY`), supports pasting `.env` snippets, and optionally reads bundled defaults from `app/src/main/assets/mass_defaults.env`.
+- **Home — Session List** (`SessionListScreen.kt`): resolves the token's space via `GET /api/v1/openapi/context`, lists sessions via `GET /api/v1/spaces/{space_id}/sessions`, supports pagination, creating new sessions (`GET /agents` + `POST /sessions`), and opening a session on tap.
+- **Session Chat** (`SessionChatScreen.kt`): loads session details (`GET /sessions/{id}`), paginated history (`GET /sessions/{id}/messages`), uploads attachments (`POST /sessions/{id}/attachments`), submits runs (`POST /sessions/{id}/runs`), cancels runs (`POST /runs/{run_id}/cancel`), and streams replies + tool calls via AG-UI SSE (`GET /runs/{run_id}/events`).
 
 ## Build
 
@@ -19,8 +12,7 @@ Runs the MASS Go server in-process inside the Android APK via JNI (`libmassbridg
    sh scripts/build-android.sh
    ```
    Optional flags:
-   - `--with-frontend`: rebuild `frontend` and re-embed into `internal/transport/http/ui/dist` first.
-   - `--all-abis`: build both `arm64-v8a` and `x86_64` (useful for x86_64 emulators).
+   - `--all-abis`: build both `arm64-v8a` and `x86_64`.
    - `--apk`: also run `./gradlew assembleDebug`.
 
 2. Build & install the APK:
@@ -29,10 +21,7 @@ Runs the MASS Go server in-process inside the Android APK via JNI (`libmassbridg
    adb install -r proj/android/app/build/outputs/apk/debug/app-debug.apk
    ```
 
-## Usage
+## Configuration
 
-- **Form A (Full Server)**: Open Settings (gear icon), paste your `.env` containing `MASS_MARIADB_DSN`, `MASS_TOS_ENDPOINT`, `MASS_TOS_REGION`, `MASS_TOS_BUCKET`, `MASS_TOS_ACCESS_KEY`, `MASS_TOS_SECRET_KEY`, and `MASS_MASTER_KEY` (must be reachable from the device/emulator network), then tap **Save & Start**.
-- **UI Preview Only**: Switch to **UI Preview Only** (or tap *Skip backend setup & preview embedded UI now*) to run the embedded Go HTTP server + MASS React UI on `127.0.0.1` without configuring MariaDB/TOS.
-- **Debugging**:
-  - Go server logs: tap the Info icon in the top bar or run `adb logcat -s MassGo`.
-  - WebView DevTools: open `chrome://inspect` on desktop Chrome while the device is connected via ADB.
+- Default OpenAPI Bearer token (`MassConfig.DEFAULT_OPENAPI_TOKEN`), default Space ID (`4lca4gankkuxip2p`), and default Agent ID (`uknyxsz3jqekreys`) are pre-configured and editable in Settings.
+- Leave **Remote Base URL** blank to connect to the embedded local Go server (`http://127.0.0.1:15336`, Form A using remote MariaDB + TOS), or specify a remote MASS server URL directly.

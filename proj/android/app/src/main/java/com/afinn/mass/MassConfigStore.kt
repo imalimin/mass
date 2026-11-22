@@ -8,7 +8,11 @@ import java.security.SecureRandom
 
 data class MassConfig(
     val mode: String = MassStatus.MODE_FULL,
-    val port: Int = 15336,
+    val port: Int = DEFAULT_PORT,
+    val openapiToken: String = DEFAULT_OPENAPI_TOKEN,
+    val spaceId: String = DEFAULT_SPACE_ID,
+    val agentId: String = DEFAULT_AGENT_ID,
+    val remoteBaseUrl: String = "",
     val mariadbDsn: String = "",
     val tosEndpoint: String = "",
     val tosRegion: String = "",
@@ -20,6 +24,17 @@ data class MassConfig(
 ) {
     val listenAddress: String get() = "127.0.0.1:$port"
     val publicUrl: String get() = "http://127.0.0.1:$port"
+    val useRemoteServer: Boolean get() = remoteBaseUrl.isNotBlank()
+
+    fun effectiveApiBaseUrl(status: MassStatus): String {
+        if (remoteBaseUrl.isNotBlank()) {
+            return remoteBaseUrl.trim().trimEnd('/')
+        }
+        if (status.url.isNotBlank()) {
+            return status.url.trim().trimEnd('/')
+        }
+        return publicUrl
+    }
 
     fun hasFullBackendCredentials(): Boolean {
         return mariadbDsn.isNotBlank() &&
@@ -55,6 +70,11 @@ data class MassConfig(
     }
 
     companion object {
+        const val DEFAULT_PORT = 15336
+        const val DEFAULT_OPENAPI_TOKEN = "em20AY9FDKesjPOgWPyLVzWrJah8Hy2cq_wvHdPJFHU"
+        const val DEFAULT_SPACE_ID = "4lca4gankkuxip2p"
+        const val DEFAULT_AGENT_ID = "uknyxsz3jqekreys"
+
         fun generateMasterKey(): String {
             val bytes = ByteArray(32)
             SecureRandom().nextBytes(bytes)
@@ -78,6 +98,10 @@ data class MassConfig(
                 parsed[key] = value
             }
             return base.copy(
+                openapiToken = parsed["MASS_OPENAPI_TOKEN"] ?: parsed["BEARER_TOKEN"] ?: base.openapiToken,
+                spaceId = parsed["MASS_SPACE_ID"] ?: parsed["SPACE_ID"] ?: base.spaceId,
+                agentId = parsed["MASS_AGENT_ID"] ?: parsed["AGENT_ID"] ?: base.agentId,
+                remoteBaseUrl = parsed["MASS_API_URL"] ?: parsed["MASS_URL"] ?: base.remoteBaseUrl,
                 mariadbDsn = parsed["MASS_MARIADB_DSN"] ?: base.mariadbDsn,
                 tosEndpoint = parsed["MASS_TOS_ENDPOINT"] ?: base.tosEndpoint,
                 tosRegion = parsed["MASS_TOS_REGION"] ?: base.tosRegion,
@@ -96,6 +120,10 @@ object MassConfigStore {
     private const val PREF_NAME = "mass_android_config"
     private const val KEY_MODE = "mode"
     private const val KEY_PORT = "port"
+    private const val KEY_OPENAPI_TOKEN = "openapi_token"
+    private const val KEY_SPACE_ID = "space_id"
+    private const val KEY_AGENT_ID = "agent_id"
+    private const val KEY_REMOTE_BASE_URL = "remote_base_url"
     private const val KEY_DSN = "mariadb_dsn"
     private const val KEY_TOS_ENDPOINT = "tos_endpoint"
     private const val KEY_TOS_REGION = "tos_region"
@@ -110,7 +138,17 @@ object MassConfigStore {
         val hasSaved = prefs.contains(KEY_MODE)
         var config = MassConfig(
             mode = prefs.getString(KEY_MODE, MassStatus.MODE_FULL) ?: MassStatus.MODE_FULL,
-            port = prefs.getInt(KEY_PORT, 15336),
+            port = prefs.getInt(KEY_PORT, MassConfig.DEFAULT_PORT),
+            openapiToken = prefs.getString(KEY_OPENAPI_TOKEN, MassConfig.DEFAULT_OPENAPI_TOKEN)
+                ?.takeIf { it.isNotBlank() }
+                ?: MassConfig.DEFAULT_OPENAPI_TOKEN,
+            spaceId = prefs.getString(KEY_SPACE_ID, MassConfig.DEFAULT_SPACE_ID)
+                ?.takeIf { it.isNotBlank() }
+                ?: MassConfig.DEFAULT_SPACE_ID,
+            agentId = prefs.getString(KEY_AGENT_ID, MassConfig.DEFAULT_AGENT_ID)
+                ?.takeIf { it.isNotBlank() }
+                ?: MassConfig.DEFAULT_AGENT_ID,
+            remoteBaseUrl = prefs.getString(KEY_REMOTE_BASE_URL, "") ?: "",
             mariadbDsn = prefs.getString(KEY_DSN, "") ?: "",
             tosEndpoint = prefs.getString(KEY_TOS_ENDPOINT, "") ?: "",
             tosRegion = prefs.getString(KEY_TOS_REGION, "") ?: "",
@@ -135,6 +173,10 @@ object MassConfigStore {
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit()
             .putString(KEY_MODE, config.mode)
             .putInt(KEY_PORT, config.port)
+            .putString(KEY_OPENAPI_TOKEN, config.openapiToken.trim())
+            .putString(KEY_SPACE_ID, config.spaceId.trim().ifEmpty { MassConfig.DEFAULT_SPACE_ID })
+            .putString(KEY_AGENT_ID, config.agentId.trim().ifEmpty { MassConfig.DEFAULT_AGENT_ID })
+            .putString(KEY_REMOTE_BASE_URL, config.remoteBaseUrl.trim())
             .putString(KEY_DSN, config.mariadbDsn.trim())
             .putString(KEY_TOS_ENDPOINT, config.tosEndpoint.trim())
             .putString(KEY_TOS_REGION, config.tosRegion.trim())

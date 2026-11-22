@@ -199,6 +199,22 @@ func (s *Service) lookupEphemeralBearer(hash []byte) (BearerPrincipal, bool) {
 	return p, ok
 }
 
+func (s *Service) AuthenticateOpenAPIToken(ctx context.Context, rawToken string) (BearerPrincipal, error) {
+	hash, err := bearerTokenHash(rawToken)
+	if err != nil {
+		return BearerPrincipal{}, err
+	}
+	principal, err := s.Repo.AuthenticateBearerToken(ctx, hash)
+	if err != nil {
+		return BearerPrincipal{}, err
+	}
+	principal.Scope = BearerScopeOpenAPI
+	if err := s.CheckAccess(ctx, principal.User.ID, principal.SpaceID); err != nil {
+		return BearerPrincipal{}, err
+	}
+	return principal, nil
+}
+
 func (s *Service) AuthenticateBearer(ctx context.Context, rawToken, space string, allowedScopes ...string) (BearerPrincipal, error) {
 	hash, err := bearerTokenHash(rawToken)
 	if err != nil {

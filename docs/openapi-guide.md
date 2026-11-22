@@ -33,15 +33,21 @@
 
 ### 2.2 开放接口清单
 
-以下 **10 个接口**支持 Bearer 鉴权（路径均以 `/api/v1/spaces/{space_id}` 为前缀）：
+以下接口支持 Bearer 鉴权（路径除 `/api/v1/openapi/context` 外均以 `/api/v1/spaces/{space_id}` 为前缀）：
 
-**会话接口（仅空间 OpenAPI Token）：**
+**会话与上下文接口（仅空间 OpenAPI Token）：**
 
 | 方法 | 路径 | 用途 | 成功状态码 |
 | --- | --- | --- | --- |
+| `GET` | `/api/v1/openapi/context` | 查询当前 Token 绑定的空间与签发人信息 | `200` |
+| `GET` | `/sessions` | 分页读取当前空间会话列表 | `200` |
+| `GET` | `/agents/{agent_id}/sessions` | 分页读取指定 Agent 的会话列表 | `200` |
+| `GET` | `/sessions/{session_id}` | 读取指定会话详情 | `200` |
 | `POST` | `/sessions` | 创建会话 | `201` |
 | `POST` | `/sessions/{session_id}/attachments` | 上传会话附件 | `201` |
+| `GET` | `/sessions/{session_id}/runs` | 分页读取会话 Runs 列表 | `200` |
 | `POST` | `/sessions/{session_id}/runs` | 提交消息并启动 Run | `202` |
+| `POST` | `/runs/{run_id}/cancel` | 取消指定 Run | `200` |
 | `GET` | `/runs/{run_id}/events` | 通过 SSE 订阅增量回复与终态事件 | `200` |
 | `GET` | `/sessions/{session_id}/messages` | 分页读取会话历史消息 | `200` |
 

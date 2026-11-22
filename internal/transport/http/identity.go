@@ -359,6 +359,25 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 	registerCatalog(register, registerMedia, registerResourceBearer, options, query)
 	registerEvaluation(register, options, query)
 	registerRuntime(mux, register, registerOpenAPIBearer, options, query, token, logger)
+	mux.HandleFunc("GET /api/v1/openapi/context", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		bearer, hasAuth, authErr := parseBearerHeader(r)
+		if !hasAuth || authErr != nil {
+			apiError(w, identity.ErrUnauthenticated, logger)
+			return
+		}
+		principal, err := svc.AuthenticateOpenAPIToken(ctx, bearer)
+		if err != nil {
+			apiError(w, err, logger)
+			return
+		}
+		writeJSON(w, 200, map[string]any{
+			"space_id": principal.SpaceID,
+			"user":     principal.User,
+		})
+	})
 	register("GET /api/v1/spaces/{space_id}/openapi/tokens", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		q, n, scope, err := query(r, u)
 		if err != nil {

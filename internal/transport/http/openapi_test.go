@@ -211,6 +211,14 @@ func (stubRuntimeRepo) RuntimeSessions(_ context.Context, _, _, _ string, _ iden
 	return []run.Session{}, nil
 }
 
+func (stubRuntimeRepo) RuntimeRuns(_ context.Context, _, _, _ string, _ identity.Query) ([]run.View, error) {
+	return []run.View{}, nil
+}
+
+func (stubRuntimeRepo) CancelRuntimeRun(_ context.Context, _, space, id string) (run.View, error) {
+	return run.View{Snapshot: run.Snapshot{ID: id, SpaceID: space}, CancelRequested: true}, nil
+}
+
 type stubAGUIRepo struct {
 	frames []agui.Frame
 	closed bool
@@ -354,7 +362,6 @@ func TestOpenAPIManagementAndBearerHTTP(t *testing.T) {
 		method, path, body string
 	}{
 		{"GET", "/api/v1/spaces", ""},
-		{"GET", "/api/v1/spaces/" + spaceA + "/sessions", ""},
 		{"GET", "/api/v1/spaces/" + spaceA + "/openapi/tokens", ""},
 		{"POST", "/api/v1/spaces/" + spaceA + "/openapi/tokens", `{"name":"via-bearer"}`},
 	} {
@@ -368,13 +375,37 @@ func TestOpenAPIManagementAndBearerHTTP(t *testing.T) {
 		}
 	}
 
+	// OpenAPI context resolves space_id for Bearer token and rejects Cookie-only requests.
+	w = do("GET", "/api/v1/openapi/context", map[string]string{"Cookie": ownerCookie}, "")
+	if w.Code != 401 {
+		t.Fatalf("openapi context with cookie only: got %d want 401", w.Code)
+	}
+	w = do("GET", "/api/v1/openapi/context", map[string]string{"Authorization": "Bearer " + created.Token}, "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), spaceA) {
+		t.Fatalf("openapi context with bearer: got %d %s", w.Code, w.Body.String())
+	}
+
 	// Whitelisted session endpoints accept Bearer without Origin.
 	sessionID := storage.NewShortID()
-	w = do("GET", "/api/v1/spaces/"+spaceA+"/sessions/"+sessionID+"/messages", map[string]string{
-		"Authorization": "bearer " + created.Token,
-	}, "")
+	for _, p := range []string{
+		"/api/v1/spaces/" + spaceA + "/sessions",
+		"/api/v1/spaces/" + spaceA + "/sessions/" + sessionID,
+		"/api/v1/spaces/" + spaceA + "/sessions/" + sessionID + "/runs",
+		"/api/v1/spaces/" + spaceA + "/sessions/" + sessionID + "/messages",
+	} {
+		w = do("GET", p, map[string]string{
+			"Authorization": "bearer " + created.Token,
+		}, "")
+		if w.Code != 200 {
+			t.Fatalf("bearer GET %s: got %d %s", p, w.Code, w.Body.String())
+		}
+	}
+	w = do("POST", "/api/v1/spaces/"+spaceA+"/runs/"+storage.NewShortID()+"/cancel", map[string]string{
+		"Authorization": "Bearer " + created.Token,
+		"Content-Type":  "application/json",
+	}, `{}`)
 	if w.Code != 200 {
-		t.Fatalf("bearer GET messages: got %d %s", w.Code, w.Body.String())
+		t.Fatalf("bearer POST cancel: got %d %s", w.Code, w.Body.String())
 	}
 
 	// Cross-space Bearer returns 403.
