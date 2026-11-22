@@ -87,6 +87,7 @@ func (s *Service) NewPublishPlan(ctx context.Context, actor, space, snapshot str
 					result.Skills[index].Status = "failed"
 					return plan, &PublishItemError{"Skill", skill.entry.Name, ErrDraft}
 				}
+				target.NextVersionID = latest.ID
 			}
 		}
 		plan.Skills = append(plan.Skills, target)
