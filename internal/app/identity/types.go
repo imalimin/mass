@@ -45,6 +45,32 @@ type Model struct {
 	Enabled         bool    `json:"enabled"`
 	Revision        int64   `json:"revision"`
 }
+type OpenAPIToken struct {
+	ID         string     `json:"id"`
+	SpaceID    string     `json:"-"`
+	IssuerID   string     `json:"-"`
+	Name       string     `json:"name"`
+	Status     string     `json:"status"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	RevokedAt  *time.Time `json:"revoked_at"`
+	TokenHash  []byte     `json:"-"`
+	KeyID      string     `json:"-"`
+	Ciphertext []byte     `json:"-"`
+}
+type CreatedOpenAPIToken struct {
+	OpenAPIToken
+	Token string `json:"token"`
+}
+type OpenAPITokenSecret struct {
+	ID    string `json:"id"`
+	Token string `json:"token"`
+}
+type BearerPrincipal struct {
+	User    User
+	SpaceID string
+	TokenID string
+}
 type Page[T any] struct {
 	Items      []T     `json:"items"`
 	NextCursor *string `json:"next_cursor"`
@@ -72,6 +98,12 @@ type Repository interface {
 	Model(context.Context, string, string, string) (Model, error)
 	SaveModel(context.Context, string, string, Model, bool) error
 	ResolveModelSecret(context.Context, string, string, string) (Model, error)
+	OpenAPITokens(context.Context, string, string, Query) ([]OpenAPIToken, error)
+	CreateOpenAPIToken(context.Context, string, string, OpenAPIToken) error
+	OpenAPITokenSecret(context.Context, string, string, string) (OpenAPIToken, error)
+	RenewOpenAPIToken(context.Context, string, string, string, time.Time) (OpenAPIToken, error)
+	RevokeOpenAPIToken(context.Context, string, string, string, time.Time) error
+	AuthenticateBearerToken(context.Context, []byte) (BearerPrincipal, error)
 }
 
 type Cipher interface {

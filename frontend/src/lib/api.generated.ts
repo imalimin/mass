@@ -180,6 +180,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/spaces/{space_id}/openapi/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listOpenAPITokens"];
+        put?: never;
+        post: operations["createOpenAPIToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/openapi/tokens/{token_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getOpenAPITokenSecret"];
+        put?: never;
+        post?: never;
+        delete: operations["revokeOpenAPIToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/openapi/tokens/{token_id}/renew": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["renewOpenAPIToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/spaces/{space_id}/model-capabilities": {
         parameters: {
             query?: never;
@@ -2015,6 +2063,48 @@ export interface components {
             items: components["schemas"]["EvaluationCaseView"][];
             next_cursor: string | null;
         };
+        OpenAPIToken: {
+            id: components["schemas"]["ResourceID"];
+            name: string;
+            /** @enum {string} */
+            status: "active" | "expired" | "revoked";
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: date-time */
+            revoked_at: string | null;
+        };
+        OpenAPITokenPage: {
+            items: components["schemas"]["OpenAPIToken"][];
+            next_cursor: string | null;
+        };
+        OpenAPITokenCreateInput: {
+            name: string;
+            /** Format: date-time */
+            expires_at?: string;
+        };
+        OpenAPITokenCreated: {
+            id: components["schemas"]["ResourceID"];
+            name: string;
+            /** @enum {string} */
+            status: "active" | "expired" | "revoked";
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: date-time */
+            revoked_at: string | null;
+            token: string;
+        };
+        OpenAPITokenSecret: {
+            id: components["schemas"]["ResourceID"];
+            token: string;
+        };
+        OpenAPITokenRenewInput: {
+            /** Format: date-time */
+            expires_at: string;
+        };
     };
     responses: never;
     parameters: {
@@ -2543,6 +2633,184 @@ export interface operations {
                 content?: never;
             };
             /** @description 400 invalid request/capability, 401 unauthenticated, 403 forbidden, 404 not found, 409 conflict, 415 content type, 429 login throttled or 500 storage failure. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listOpenAPITokens: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Space OpenAPI tokens visible to the space owner. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenAPITokenPage"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createOpenAPIToken: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
+                Origin: string;
+            };
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OpenAPITokenCreateInput"];
+            };
+        };
+        responses: {
+            /** @description Created space OpenAPI token and plaintext secret (Cache-Control no-store). */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenAPITokenCreated"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getOpenAPITokenSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                token_id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Plaintext value of an active space OpenAPI token for owner copy (Cache-Control no-store). */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenAPITokenSecret"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    revokeOpenAPIToken: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
+                Origin: string;
+            };
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                token_id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Token revoked (idempotent for already revoked tokens). */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request rejected or dependency unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    renewOpenAPIToken: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must exactly match configured public origin; JSON Content-Type is required, including logout and delete. */
+                Origin: string;
+            };
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                token_id: components["schemas"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OpenAPITokenRenewInput"];
+            };
+        };
+        responses: {
+            /** @description Updated token metadata after renewal. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenAPIToken"];
+                };
+            };
+            /** @description Request rejected or dependency unavailable. */
             default: {
                 headers: {
                     [name: string]: unknown;

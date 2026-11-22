@@ -250,3 +250,24 @@ button.send-button:disabled { background: var(--hover); }
   .skill-tree { max-height: 160px; }
   .skill-edit-pane .code-editor { height: 350px; }
 }
+
+.openapi-notice { padding: 12px 14px; border-radius: 8px; background: var(--accent-soft); color: var(--accent-text); font-size: 13px; margin: 0 0 16px; }
+.openapi-token-reveal { padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); margin: 0 0 16px; display: grid; gap: 10px; }
+.openapi-token-reveal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.openapi-token-code { display: block; padding: 10px 12px; border-radius: 8px; background: var(--bg); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; word-break: break-all; user-select: all; }
+.openapi-table { min-width: 680px; }
+.openapi-token-column { width: max(148px, 19%); }
+.openapi-date-column { width: max(144px, 18%); }
+.openapi-table :is(th, td):nth-child(n+5) { padding-inline: 2px; text-align: center; }
+.openapi-table button.agent-action:enabled:is(:hover, :focus-visible) { background: var(--accent-soft); color: var(--accent-text); }
+.openapi-table button.openapi-revoke-action:enabled:is(:hover, :focus-visible) { background: var(--error-bg); color: var(--danger); }
+.openapi-name-cell { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.openapi-token-cell { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.openapi-token-mask { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; color: var(--muted); letter-spacing: 0.08em; }
+.openapi-copy-icon { width: 28px; height: 28px; padding: 0; border-radius: 7px; color: var(--muted); }
+.openapi-copy-icon:enabled:is(:hover, :focus-visible) { background: var(--accent-soft); color: var(--accent-text); }
+.openapi-status { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); white-space: nowrap; }
+.openapi-status-active { background: var(--accent-soft); color: var(--accent-text); }
+.openapi-status-expired { color: var(--warning); }
+.openapi-status-revoked { color: var(--danger); }
+.openapi-form { display: grid; gap: 16px; }

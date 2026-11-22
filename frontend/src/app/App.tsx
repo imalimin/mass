@@ -8,6 +8,7 @@ import { CreativityConversation, CreativityHome } from '../features/sessions/Cre
 import { Catalog } from '../features/catalog/Catalog'
 import { Evaluation } from '../features/evaluation/Evaluation'
 import { Members, Models } from '../features/spaces/SpaceDetail'
+import { OpenAPI } from '../features/spaces/OpenAPI'
 import { sortSpacesByCreation } from '../features/spaces/spaces'
 import { WorkspacePicker } from './WorkspacePicker'
 import { workspaceHomePath, legacySpacePath, spacePath, workspaceSections } from './routes'
@@ -25,7 +26,7 @@ export function App() {
   const section = match?.params['*'] ?? ''
   const page = workspaceSections.find(s => s.path === section || s.path !== '' && section.startsWith(s.path + '/'))
   const creativityHome = !!space && !section
-  const workspaceList = !!space && ['agents', 'skills', 'evaluation/datasets', 'evaluation/datasets/new', 'evaluation/experiments'].includes(section)
+  const workspaceList = !!space && ['agents', 'skills', 'evaluation/datasets', 'evaluation/datasets/new', 'evaluation/experiments', 'openapi'].includes(section)
   const agentSessionPage = !!useMatch(agentConversationRoute)
   const creativitySessionPage = !!useMatch(creativityConversationRoute)
   const sessionPage = agentSessionPage || creativitySessionPage
@@ -87,7 +88,7 @@ export function App() {
     <span>MASS</span>
   </Link>
     <WorkspacePicker spaces={spaces.data} current={space} pending={spaces.isPending} />
-    {space && <nav aria-label="空间导航">{['工作空间', '定义与资源', '评测', '空间管理'].map(group => <div key={group}><div className="nav-caption">{group}</div>{workspaceSections.filter(s => s.group === group).map(s => <NavLink key={s.path} to={spacePath(space.id, s.path)} end={!s.path}><Icon name={s.icon} />{s.label}</NavLink>)}</div>)}</nav>}
+    {space && <nav aria-label="空间导航">{['工作空间', '定义与资源', '评测', '空间管理'].map(group => <div key={group}><div className="nav-caption">{group}</div>{workspaceSections.filter(s => s.group === group && (!('ownerOnly' in s) || !s.ownerOnly || space.is_owner)).map(s => <NavLink key={s.path} to={spacePath(space.id, s.path)} end={!s.path}><Icon name={s.icon} />{s.label}</NavLink>)}</div>)}</nav>}
     <AccountSettings username={me.data.username} pending={logout.isPending} onLogout={() => logout.mutate()} /></aside>
     <main id="main-content" className={creativityHome ? 'creativity-main' : workspaceList ? 'workspace-list-main' : undefined}>
       {!creativityHome && !workspaceList && <>
@@ -176,6 +177,7 @@ function SpaceWorkspace({ space, user, pending, error }: { space?: Schema['Space
     <Route path="overview" element={<Navigate to={spacePath(space.id)} replace />} />
     <Route path="members" element={<Members key={space.id} space={space} user={user} onLeave={() => navigate(workspaceHomePath)} />} />
     <Route path="models" element={<Models key={space.id} space={space} />} />
+    <Route path="openapi" element={<OpenAPI key={space.id} space={space} />} />
     <Route path="credentials" element={<Navigate to={spacePath(space.id, 'models')} replace />} />
     <Route path="agents" element={<Catalog key={`${space.id}-agents`} space={space} kind="agent" />} />
     <Route path="agents/:definitionId" element={<Catalog key={`${space.id}-agents`} space={space} kind="agent" />} />

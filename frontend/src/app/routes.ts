@@ -8,6 +8,7 @@ export const workspaceSections = [
   { path: 'evaluation/experiments', label: '实验', icon: 'flask', description: '选择评测集和 Agent 版本发起实验，查看进度、指标及会话回放。', group: '评测' },
   { path: 'models', label: '模型配置', icon: 'chip', description: '管理可用模型、上下文容量与生成参数。', group: '空间管理' },
   { path: 'members', label: '空间成员', icon: 'user', description: '查看协作成员，管理成员资格。', group: '空间管理' },
+  { path: 'openapi', label: 'OpenAPI', icon: 'key', description: '签发和管理空间级 Bearer Token，供外部服务调用会话接口。', group: '空间管理', ownerOnly: true },
 ] as const
 
 export function spacePath(space: string, section = '') {

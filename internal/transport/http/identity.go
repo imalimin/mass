@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -141,6 +142,20 @@ func apiError(w http.ResponseWriter, err error, logger *slog.Logger) {
 	}
 	writeError(w, status, code, message)
 }
+func parseBearerHeader(r *http.Request) (token string, hasAuth bool, err error) {
+	values := r.Header.Values("Authorization")
+	if len(values) == 0 {
+		return "", false, nil
+	}
+	if len(values) != 1 {
+		return "", true, identity.ErrUnauthenticated
+	}
+	scheme, rest, ok := strings.Cut(values[0], " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") || rest == "" || strings.ContainsAny(rest, " \t\r\n") {
+		return "", true, identity.ErrUnauthenticated
+	}
+	return rest, true, nil
+}
 func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.Logger) {
 	svc := options.Service
 	limiter := &loginLimiter{buckets: map[string]loginBucket{}, active: make(chan struct{}, 4)}
@@ -154,30 +169,43 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 	cookie := func(w http.ResponseWriter, value string, expiry time.Time, maxAge int) {
 		http.SetCookie(w, &http.Cookie{Name: "mass_session", Value: value, Path: "/", HttpOnly: true, Secure: options.Secure, SameSite: http.SameSiteLaxMode, Expires: expiry, MaxAge: maxAge})
 	}
+	checkOrigin := func(r *http.Request) bool {
+		origin := options.Origin
+		if options.LoopbackOrigin != "" {
+			if local, ok := r.Context().Value(http.LocalAddrContextKey).(*net.TCPAddr); ok && local.IP.IsLoopback() {
+				origin = options.LoopbackOrigin
+			}
+		}
+		return r.Header.Get("Origin") == origin && r.Header.Get("Sec-Fetch-Site") != "cross-site"
+	}
+	checkContentType := func(w http.ResponseWriter, r *http.Request, contentType string) bool {
+		media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil || media != contentType {
+			message := "Content-Type must be " + contentType
+			if contentType == "application/json" {
+				message = "JSON content type is required"
+			}
+			writeError(w, 415, "unsupported_media_type", message)
+			return false
+		}
+		return true
+	}
 	registerMedia := func(pattern string, auth bool, contentType string, fn endpoint) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
 			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 			defer cancel()
 			r = r.WithContext(ctx)
+			if auth && len(r.Header.Values("Authorization")) > 0 {
+				apiError(w, identity.ErrUnauthenticated, logger)
+				return
+			}
 			if r.Method != "GET" && r.Method != "HEAD" {
-				origin := options.Origin
-				if options.LoopbackOrigin != "" {
-					if local, ok := ctx.Value(http.LocalAddrContextKey).(*net.TCPAddr); ok && local.IP.IsLoopback() {
-						origin = options.LoopbackOrigin
-					}
-				}
-				if r.Header.Get("Origin") != origin || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+				if !checkOrigin(r) {
 					apiError(w, identity.ErrForbidden, logger)
 					return
 				}
-				media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-				if err != nil || media != contentType {
-					message := "Content-Type must be " + contentType
-					if contentType == "application/json" {
-						message = "JSON content type is required"
-					}
-					writeError(w, 415, "unsupported_media_type", message)
+				if !checkContentType(w, r, contentType) {
 					return
 				}
 			}
@@ -197,6 +225,50 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 	}
 	register := func(pattern string, auth bool, fn endpoint) {
 		registerMedia(pattern, auth, "application/json", fn)
+	}
+	registerBearer := func(pattern string, fn endpoint) {
+		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+			defer cancel()
+			r = r.WithContext(ctx)
+			bearer, hasAuth, authErr := parseBearerHeader(r)
+			var u identity.User
+			if hasAuth {
+				if authErr != nil {
+					apiError(w, authErr, logger)
+					return
+				}
+				principal, err := svc.AuthenticateBearer(ctx, bearer, r.PathValue("space_id"))
+				if err != nil {
+					apiError(w, err, logger)
+					return
+				}
+				if r.Method != "GET" && r.Method != "HEAD" && !checkContentType(w, r, "application/json") {
+					return
+				}
+				u = principal.User
+			} else {
+				if r.Method != "GET" && r.Method != "HEAD" {
+					if !checkOrigin(r) {
+						apiError(w, identity.ErrForbidden, logger)
+						return
+					}
+					if !checkContentType(w, r, "application/json") {
+						return
+					}
+				}
+				var err error
+				u, err = svc.Me(ctx, token(r))
+				if err != nil {
+					apiError(w, err, logger)
+					return
+				}
+			}
+			if err := fn(w, r, u); err != nil {
+				apiError(w, err, logger)
+			}
+		})
 	}
 	register("POST /api/v1/auth/login", false, func(w http.ResponseWriter, r *http.Request, _ identity.User) error {
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
@@ -271,7 +343,77 @@ func registerIdentity(mux *http.ServeMux, options IdentityOptions, logger *slog.
 	}
 	registerCatalog(register, registerMedia, options, query)
 	registerEvaluation(register, options, query)
-	registerRuntime(mux, register, options, query, token, logger)
+	registerRuntime(mux, register, registerBearer, options, query, token, logger)
+	register("GET /api/v1/spaces/{space_id}/openapi/tokens", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		q, n, scope, err := query(r, u)
+		if err != nil {
+			return err
+		}
+		items, err := svc.ListOpenAPITokens(r.Context(), u.ID, r.PathValue("space_id"), q)
+		if err != nil {
+			return err
+		}
+		writeJSON(w, 200, identity.Paginate(svc, scope, items, n, func(v identity.OpenAPIToken) string { return v.ID }))
+		return nil
+	})
+	register("POST /api/v1/spaces/{space_id}/openapi/tokens", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		var b struct {
+			Name      string  `json:"name"`
+			ExpiresAt *string `json:"expires_at"`
+		}
+		if err := decodeBody(w, r, &b); err != nil {
+			return err
+		}
+		var expiresAt *time.Time
+		if b.ExpiresAt != nil {
+			parsed, err := time.Parse(time.RFC3339Nano, *b.ExpiresAt)
+			if err != nil {
+				return identity.ErrInvalid
+			}
+			expiresAt = &parsed
+		}
+		created, err := svc.CreateOpenAPIToken(r.Context(), u.ID, r.PathValue("space_id"), b.Name, expiresAt)
+		if err != nil {
+			return err
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 201, created)
+		return nil
+	})
+	register("GET /api/v1/spaces/{space_id}/openapi/tokens/{token_id}", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		secret, err := svc.CopyOpenAPIToken(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("token_id"))
+		if err != nil {
+			return err
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 200, secret)
+		return nil
+	})
+	register("POST /api/v1/spaces/{space_id}/openapi/tokens/{token_id}/renew", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		var b struct {
+			ExpiresAt string `json:"expires_at"`
+		}
+		if err := decodeBody(w, r, &b); err != nil {
+			return err
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, b.ExpiresAt)
+		if err != nil {
+			return identity.ErrInvalid
+		}
+		updated, err := svc.RenewOpenAPIToken(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("token_id"), parsed)
+		if err != nil {
+			return err
+		}
+		writeJSON(w, 200, updated)
+		return nil
+	})
+	register("DELETE /api/v1/spaces/{space_id}/openapi/tokens/{token_id}", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		if err := svc.RevokeOpenAPIToken(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("token_id")); err != nil {
+			return err
+		}
+		w.WriteHeader(204)
+		return nil
+	})
 	register("GET /api/v1/spaces", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		q, n, scope, err := query(r, u)
 		if err != nil {

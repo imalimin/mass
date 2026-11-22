@@ -115,7 +115,7 @@ func publicSessionEvents(items []journal.Event) []journal.Event {
 	return result
 }
 
-func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), options IdentityOptions, query func(*http.Request, identity.User) (identity.Query, int, string, error), token func(*http.Request) string, logger *slog.Logger) {
+func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), registerBearer func(string, endpoint), options IdentityOptions, query func(*http.Request, identity.User) (identity.Query, int, string, error), token func(*http.Request) string, logger *slog.Logger) {
 	runtime := options.Runtime
 	if runtime == nil {
 		return
@@ -123,7 +123,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 	svc := runtime.Service
 	base := "/api/v1/spaces/{space_id}"
 	registerCreativity(register, options, base)
-	register("POST "+base+"/sessions/{session_id}/attachments", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+	registerBearer("POST "+base+"/sessions/{session_id}/attachments", func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		var b struct {
 			Name      string `json:"name"`
 			MediaType string `json:"media_type"`
@@ -151,7 +151,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		writeJSON(w, 200, v)
 		return nil
 	})
-	register("POST "+base+"/sessions", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+	registerBearer("POST "+base+"/sessions", func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		var b sessionapp.CreateInput
 		if err := decodeBody(w, r, &b); err != nil {
 			return err
@@ -221,7 +221,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		writeJSON(w, 200, view)
 		return nil
 	})
-	register("POST "+base+"/sessions/{session_id}/runs", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+	registerBearer("POST "+base+"/sessions/{session_id}/runs", func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		var b sessionapp.SubmitInput
 		if err := decodeCatalog(w, r, &b, 1<<20); err != nil {
 			return err
@@ -275,7 +275,7 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		writeJSON(w, 200, runtime.runResponse(v))
 		return nil
 	})
-	register("GET "+base+"/sessions/{session_id}/messages", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+	registerBearer("GET "+base+"/sessions/{session_id}/messages", func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 		after, _, limit, err := journalQuery(r)
 		if err != nil {
 			return err
@@ -570,16 +570,54 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		return nil
 	})
 	mux.HandleFunc("GET "+base+"/runs/{run_id}/events", func(w http.ResponseWriter, r *http.Request) {
-		user, err := options.Service.Me(r.Context(), token(r))
-		if err != nil {
-			apiError(w, err, logger)
-			return
-		}
+		w.Header().Set("Cache-Control", "no-store")
 		space, id := r.PathValue("space_id"), r.PathValue("run_id")
-		ctx, unwatch, err := options.Service.WatchAccess(r.Context(), user.ID, space)
-		if err != nil {
-			apiError(w, err, logger)
-			return
+		bearer, hasAuth, authErr := parseBearerHeader(r)
+		var (
+			user    identity.User
+			ctx     context.Context
+			unwatch func()
+			check   func() error
+			err     error
+		)
+		if hasAuth {
+			if authErr != nil {
+				apiError(w, authErr, logger)
+				return
+			}
+			var principal identity.BearerPrincipal
+			principal, err = options.Service.AuthenticateBearer(r.Context(), bearer, space)
+			if err != nil {
+				apiError(w, err, logger)
+				return
+			}
+			user = principal.User
+			ctx, unwatch, err = options.Service.WatchBearerAccess(r.Context(), bearer, space, principal)
+			if err != nil {
+				apiError(w, err, logger)
+				return
+			}
+			check = func() error {
+				_, e := options.Service.AuthenticateBearer(ctx, bearer, space)
+				return e
+			}
+		} else {
+			user, err = options.Service.Me(r.Context(), token(r))
+			if err != nil {
+				apiError(w, err, logger)
+				return
+			}
+			ctx, unwatch, err = options.Service.WatchAccess(r.Context(), user.ID, space)
+			if err != nil {
+				apiError(w, err, logger)
+				return
+			}
+			check = func() error {
+				if _, e := options.Service.Me(ctx, token(r)); e != nil {
+					return e
+				}
+				return options.Service.CheckAccess(ctx, user.ID, space)
+			}
 		}
 		defer unwatch()
 		cp, err := runtime.UI.CatchUp(ctx, user.ID, space, id)
@@ -608,12 +646,6 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Accel-Buffering", "no")
 		controller := http.NewResponseController(w)
-		check := func() error {
-			if _, err := options.Service.Me(ctx, token(r)); err != nil {
-				return err
-			}
-			return options.Service.CheckAccess(ctx, user.ID, space)
-		}
 		ticker := time.NewTicker(300 * time.Millisecond)
 		defer ticker.Stop()
 		heartbeat := time.Now()

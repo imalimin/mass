@@ -150,25 +150,7 @@ func (s *Service) WatchAccess(parent context.Context, actor, space string) (cont
 // SubscribeAccess supplies in-process revocation notifications. The caller
 // checks access after subscribing so a concurrent revocation is observed.
 func (s *Service) SubscribeAccess(parent context.Context, actor, space string) (context.Context, func()) {
-	ctx, cancel := context.WithCancelCause(parent)
-	w := &watch{cancel}
-	key := space + ":" + actor
-	s.mu.Lock()
-	if s.watchers[key] == nil {
-		s.watchers[key] = map[*watch]struct{}{}
-	}
-	s.watchers[key][w] = struct{}{}
-	s.mu.Unlock()
-	release := func() {
-		cancel(nil)
-		s.mu.Lock()
-		delete(s.watchers[key], w)
-		if len(s.watchers[key]) == 0 {
-			delete(s.watchers, key)
-		}
-		s.mu.Unlock()
-	}
-	return ctx, release
+	return s.subscribeKey(parent, space+":"+actor)
 }
 func (s *Service) CheckAccess(ctx context.Context, actor, space string) error {
 	return s.Repo.CheckAccess(ctx, actor, space, false)

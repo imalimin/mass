@@ -469,6 +469,178 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/RevisionInput'
+  /api/v1/spaces/{space_id}/openapi/tokens:
+    get:
+      operationId: listOpenAPITokens
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Space OpenAPI tokens visible to the space owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenAPITokenPage'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: createOpenAPIToken
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: Origin
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenAPITokenCreateInput'
+      responses:
+        '201':
+          description: Created space OpenAPI token and plaintext secret (Cache-Control no-store).
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenAPITokenCreated'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/openapi/tokens/{token_id}:
+    get:
+      operationId: getOpenAPITokenSecret
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: token_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+      responses:
+        '200':
+          description: Plaintext value of an active space OpenAPI token for owner copy (Cache-Control no-store).
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenAPITokenSecret'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      operationId: revokeOpenAPIToken
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: token_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: Origin
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
+      responses:
+        '204':
+          description: Token revoked (idempotent for already revoked tokens).
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/openapi/tokens/{token_id}/renew:
+    post:
+      operationId: renewOpenAPIToken
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: token_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ResourceID'
+        - name: Origin
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uri
+          description: Must exactly match configured public origin; JSON Content-Type is required, including logout and delete.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenAPITokenRenewInput'
+      responses:
+        '200':
+          description: Updated token metadata after renewal.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenAPIToken'
+        default:
+          description: Request rejected or dependency unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/model-capabilities:
     get:
       operationId: modelCapabilities
@@ -2891,6 +3063,7 @@ paths:
       operationId: createSession
       security:
         - SessionCookie: []
+        - BearerAuth: []
       parameters:
         - name: space_id
           in: path
@@ -3014,6 +3187,7 @@ paths:
       operationId: submitRun
       security:
         - SessionCookie: []
+        - BearerAuth: []
       parameters:
         - name: space_id
           in: path
@@ -3145,6 +3319,7 @@ paths:
       operationId: getMessages
       security:
         - SessionCookie: []
+        - BearerAuth: []
       parameters:
         - name: space_id
           in: path
@@ -3631,6 +3806,7 @@ paths:
       operationId: streamRunEvents
       security:
         - SessionCookie: []
+        - BearerAuth: []
       parameters:
         - name: space_id
           in: path
@@ -3677,6 +3853,7 @@ paths:
       operationId: uploadAttachment
       security:
         - SessionCookie: []
+        - BearerAuth: []
       parameters:
         - name: space_id
           in: path
@@ -6384,6 +6561,129 @@ components:
           type:
             - string
             - 'null'
+    OpenAPIToken:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - status
+        - created_at
+        - expires_at
+        - revoked_at
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceID'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        status:
+          type: string
+          enum:
+            - active
+            - expired
+            - revoked
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+    OpenAPITokenPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OpenAPIToken'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+    OpenAPITokenCreateInput:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        expires_at:
+          type: string
+          format: date-time
+    OpenAPITokenCreated:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - status
+        - created_at
+        - expires_at
+        - revoked_at
+        - token
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceID'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        status:
+          type: string
+          enum:
+            - active
+            - expired
+            - revoked
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        token:
+          type: string
+          minLength: 43
+          maxLength: 43
+    OpenAPITokenSecret:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - token
+      properties:
+        id:
+          $ref: '#/components/schemas/ResourceID'
+        token:
+          type: string
+          minLength: 43
+          maxLength: 43
+    OpenAPITokenRenewInput:
+      type: object
+      additionalProperties: false
+      required:
+        - expires_at
+      properties:
+        expires_at:
+          type: string
+          format: date-time
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
@@ -6415,3 +6715,6 @@ components:
       type: apiKey
       in: cookie
       name: mass_session
+    BearerAuth:
+      type: http
+      scheme: bearer
