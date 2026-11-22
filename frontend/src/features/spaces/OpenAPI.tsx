@@ -119,6 +119,9 @@ function OwnerOpenAPI({ space }: { space: Space }) {
   return (
     <section aria-label="OpenAPI">
       <WorkspaceListToolbar space={space} name="OpenAPI">
+        <Link className="secondary-link" to={spacePath(space.id, 'openapi/docs')}>
+          <Icon name="file" size={16} />文档
+        </Link>
         <button type="button" onClick={() => { setNotice(''); setCopyError(''); setCreating(true) }}>
           <Icon name="plus" />创建 Token
         </button>

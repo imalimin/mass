@@ -122,8 +122,10 @@ func isUIRoute(urlPath string) bool {
 		return true
 	}
 	switch parts[2] {
-	case "members", "models", "credentials", "overview", "openapi":
+	case "members", "models", "credentials", "overview":
 		return len(parts) == 3
+	case "openapi":
+		return len(parts) == 3 || len(parts) == 4 && parts[3] == "docs"
 	case "creativity":
 		return len(parts) == 5 && parts[3] == "sessions" && parts[4] != ""
 	case "agents":

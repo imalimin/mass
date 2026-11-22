@@ -9,6 +9,7 @@ import { Catalog } from '../features/catalog/Catalog'
 import { Evaluation } from '../features/evaluation/Evaluation'
 import { Members, Models } from '../features/spaces/SpaceDetail'
 import { OpenAPI } from '../features/spaces/OpenAPI'
+import { OpenAPIDocs } from '../features/spaces/OpenAPIDocs'
 import { sortSpacesByCreation } from '../features/spaces/spaces'
 import { WorkspacePicker } from './WorkspacePicker'
 import { workspaceHomePath, legacySpacePath, spacePath, workspaceSections } from './routes'
@@ -26,7 +27,7 @@ export function App() {
   const section = match?.params['*'] ?? ''
   const page = workspaceSections.find(s => s.path === section || s.path !== '' && section.startsWith(s.path + '/'))
   const creativityHome = !!space && !section
-  const workspaceList = !!space && ['agents', 'skills', 'evaluation/datasets', 'evaluation/datasets/new', 'evaluation/experiments', 'openapi'].includes(section)
+  const workspaceList = !!space && ['agents', 'skills', 'evaluation/datasets', 'evaluation/datasets/new', 'evaluation/experiments', 'openapi', 'openapi/docs'].includes(section)
   const agentSessionPage = !!useMatch(agentConversationRoute)
   const creativitySessionPage = !!useMatch(creativityConversationRoute)
   const sessionPage = agentSessionPage || creativitySessionPage
@@ -178,6 +179,7 @@ function SpaceWorkspace({ space, user, pending, error }: { space?: Schema['Space
     <Route path="members" element={<Members key={space.id} space={space} user={user} onLeave={() => navigate(workspaceHomePath)} />} />
     <Route path="models" element={<Models key={space.id} space={space} />} />
     <Route path="openapi" element={<OpenAPI key={space.id} space={space} />} />
+    <Route path="openapi/docs" element={<OpenAPIDocs key={space.id} space={space} />} />
     <Route path="credentials" element={<Navigate to={spacePath(space.id, 'models')} replace />} />
     <Route path="agents" element={<Catalog key={`${space.id}-agents`} space={space} kind="agent" />} />
     <Route path="agents/:definitionId" element={<Catalog key={`${space.id}-agents`} space={space} kind="agent" />} />
