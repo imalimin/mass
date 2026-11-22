@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useMatch, useNavigate } from 'react-router-dom'
 import { APIError, list, request, type Schema } from '../lib/api'
+import { Icon } from '../components/Icon'
 import { SessionWorkspace, LegacySession } from '../features/sessions/Sessions'
 import { CreativityConversation, CreativityHome } from '../features/sessions/Creativity'
 import { Catalog } from '../features/catalog/Catalog'
 import { Evaluation } from '../features/evaluation/Evaluation'
 import { Members, Models } from '../features/spaces/SpaceDetail'
 import { sortSpacesByCreation } from '../features/spaces/spaces'
+import { WorkspacePicker } from './WorkspacePicker'
 import { workspaceHomePath, legacySpacePath, spacePath, workspaceSections } from './routes'
 
 const agentConversationRoute = '/spaces/:spaceId/agents/:agentId/sessions/:sessionId?'
@@ -22,6 +24,8 @@ export function App() {
   const space = spaces.data?.find(s => s.id === spaceID)
   const section = match?.params['*'] ?? ''
   const page = workspaceSections.find(s => s.path === section || s.path !== '' && section.startsWith(s.path + '/'))
+  const creativityHome = !!space && !section
+  const agentsList = !!space && section === 'agents'
   const agentSessionPage = !!useMatch(agentConversationRoute)
   const creativitySessionPage = !!useMatch(creativityConversationRoute)
   const sessionPage = agentSessionPage || creativitySessionPage
@@ -67,19 +71,24 @@ export function App() {
       : space ? creativitySessionPage ? <CreativityConversation key={space.id} space={space.id} />
         : <SessionWorkspace key={space.id} space={space.id} /> : <SpaceUnavailable />} /></Routes>
   </main>
-  return <div className="layout"><aside className="app-sidebar"><Link className="brand" to={workspaceHomePath}>M<span className="brand-dot">A</span>SS<span className="brand-sub">AGENT WORKSPACE</span></Link>
-    <nav aria-label="主导航"><label className="workspace-picker">空间<select aria-label="切换空间" value={space?.id ?? spaces.data?.[0]?.id ?? ''} disabled={!spaces.data?.length} onChange={event => navigate(spacePath(event.target.value))}>{!spaces.data?.length && <option value="" disabled>{spaces.isPending ? '正在读取空间…' : '暂无空间'}</option>}{spaces.data?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label></nav>
-    {space && <nav aria-label="空间导航">{['工作空间', '定义与资源', '评测', '空间管理'].map(group => <div key={group}><div className="nav-caption">{group}</div>{workspaceSections.filter(s => s.group === group).map(s => <NavLink key={s.path} to={spacePath(space.id, s.path)} end={!s.path}>{s.label}</NavLink>)}</div>)}</nav>}
+  return <div className="layout"><aside className="app-sidebar"><Link className="brand" to={workspaceHomePath}>MASS</Link>
+    <WorkspacePicker spaces={spaces.data} current={space} pending={spaces.isPending} />
+    {space && <nav aria-label="空间导航">{['工作空间', '定义与资源', '评测', '空间管理'].map(group => <div key={group}><div className="nav-caption">{group}</div>{workspaceSections.filter(s => s.group === group).map(s => <NavLink key={s.path} to={spacePath(space.id, s.path)} end={!s.path}><Icon name={s.icon} />{s.label}</NavLink>)}</div>)}</nav>}
     <AccountSettings username={me.data.username} pending={logout.isPending} onLogout={() => logout.mutate()} /></aside>
-    <main id="main-content"><nav className="breadcrumbs" aria-label="面包屑"><Link to={space ? spacePath(space.id) : workspaceHomePath}>{space?.name ?? '工作台'}</Link>{space && <>{section && <><span aria-hidden="true">/</span><span aria-current="page">{page?.label ?? '页面未找到'}</span></>}</>}</nav>
-      <header><div><div className="eyebrow">{space ? space.name : 'WORKSPACE'}</div><h1>{space ? page?.label ?? '页面未找到' : '工作台'}</h1></div><span className="service-status">已连接 MASS 服务</span></header>
-      <p className="intro">{space ? page?.description : '在空间中协作，使用 Agent 开始任务。'}</p>
+    <main id="main-content" className={creativityHome ? 'creativity-main' : agentsList ? 'agents-main' : undefined}>
+      {!creativityHome && <>
+        <nav className="breadcrumbs" aria-label="面包屑"><Link to={space ? spacePath(space.id) : workspaceHomePath}>{space?.name ?? '工作台'}</Link>{space && section && <><span aria-hidden="true">/</span><span aria-current="page">{page?.label ?? '页面未找到'}</span></>}</nav>
+        <header><div>{!agentsList && <div className="eyebrow">{space ? space.name : 'WORKSPACE'}</div>}<h1>{space ? page?.label ?? '页面未找到' : '工作台'}</h1></div>
+          {!agentsList && <span className="service-status">已连接 MASS 服务</span>}
+        </header>
+        {!agentsList && <p className="intro">{space ? page?.description : '在空间中协作，使用 Agent 开始任务。'}</p>}
+      </>}
       {notice && <div role="alert" className="error">{notice}<button onClick={() => setNotice('')}>关闭</button></div>}{logout.error && <p role="alert">{logout.error.message}</p>}
       <Routes><Route path="/" element={<Navigate to="/spaces" replace />} /><Route path="/login" element={<Navigate to="/spaces" replace />} />
         <Route path="/spaces" element={<SpacesLanding spaces={spaces.data} pending={spaces.isPending} error={spaces.error} />} />
         <Route path="/spaces/:spaceId/*" element={<SpaceWorkspace user={me.data} space={space} pending={spaces.isPending} error={spaces.error} />} />
         <Route path="*" element={<NotFound />} /></Routes>
-      <footer>会话固定定义版本，运行记录与文件快照持续保存。</footer>
+      {!creativityHome && !agentsList && <footer>会话固定定义版本，运行记录与文件快照持续保存。</footer>}
     </main></div>
 }
 function AccountSettings({ username, pending, onLogout }: { username: string; pending: boolean; onLogout: () => void }) {
@@ -96,15 +105,15 @@ function AccountSettings({ username, pending, onLogout }: { username: string; pe
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape) }
   }, [open])
   return <><div className="sidebar-footer account-settings" ref={root} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false) }}>
-    <span className="account-name" title={username}>{username}</span>
+    <span className="account-name icon-link" title={username}><Icon name="user" /><span>{username}</span></span>
     <button className="settings-toggle" type="button" ref={trigger} aria-label="账号设置" title="账号设置" aria-expanded={open} aria-controls={open ? 'account-settings-panel' : undefined} aria-haspopup="dialog" onClick={() => setOpen(value => !value)}>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9.2 3-.6 2.2-1.4.8L5 5.5 2.3 10l1.6 1.7v1.6L2.3 15 5 19.5l2.2-.5 1.4.8.6 2.2h5.2l.6-2.2 1.4-.8 2.2.5 2.7-4.5-1.6-1.7v-1.6l1.6-1.7-2.7-4.5-2.2.5-1.4-.8-.6-2.2Z" /><circle cx="11.8" cy="12.5" r="3.2" /></svg>
+      <Icon name="settings" />
     </button>
     {open && <div className="account-popover" id="account-settings-panel" role="dialog" aria-label="账号设置" ref={panel} tabIndex={-1}>
       <div className="account-popover-title">账号设置</div>
-      <button className="account-action" type="button" onClick={() => { setOpen(false); setCreating(true) }}>创建空间</button>
+      <button className="account-action" type="button" onClick={() => { setOpen(false); setCreating(true) }}><Icon name="plus" />创建空间</button>
       <div className="account-action-divider" />
-      <button className="logout-action" type="button" disabled={pending} onClick={onLogout}>{pending ? '正在退出…' : '退出登录'}</button>
+      <button className="logout-action" type="button" disabled={pending} onClick={onLogout}><Icon name="logout" />{pending ? '正在退出…' : '退出登录'}</button>
     </div>}
   </div>{creating && <CreateSpaceDialog onClose={() => { setCreating(false); trigger.current?.focus() }} />}</>
 }

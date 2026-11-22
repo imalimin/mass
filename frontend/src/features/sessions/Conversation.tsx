@@ -1,7 +1,8 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { agentSessionsPath } from '../../app/routes'
+import { Icon } from '../../components/Icon'
 import { list, newRequestKey, request, type Schema } from '../../lib/api'
 import { useRunStream } from './useRunStream'
 
@@ -25,8 +26,10 @@ const atBottom = (viewport: HTMLElement) => viewport.scrollHeight - viewport.scr
 
 export type ConversationWorkspaceState = { sessionID: string; busy: boolean; committedSnapshotID: string }
 
-export function Conversation({ space, agent, sessionID, onCreated, initialPrompt, onInitialAccepted, submitBlocked, onWorkspaceStateChange }: {
+export function Conversation({ space, agent, sessionID, onCreated, initialPrompt, onInitialAccepted, submitBlocked, onWorkspaceStateChange,
+  back, context, toolbarActions, workspaceToggle }: {
   space: string; agent: Pick<Schema['DefinitionDraft'], 'id' | 'name' | 'archived'>; sessionID: string
+  back?: ReactNode; context?: ReactNode; toolbarActions?: ReactNode; workspaceToggle: ReactNode
   onCreated?: (sessionID: string) => void
   initialPrompt?: { text: string; key: string }
   onInitialAccepted?: () => void
@@ -278,19 +281,28 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
     setShowDetails(false)
     if (chosenRun) setParams({}, { replace: true })
   }
-  if (sessionID && session.isPending) return <p className="session-loading" role="status">正在读取会话…</p>
-  if (sessionID && session.isError) return <p className="session-loading" role="alert">{session.error.message}</p>
-  if (sessionID && !ownsSession) return <p className="session-loading" role="alert">此会话不属于当前 Agent。</p>
+  if (sessionID && (session.isPending || !ownsSession || session.isError)) return <>
+    {back && <header className="conversation-topbar">{back}</header>}
+    <p className="session-loading" role={session.isPending ? 'status' : 'alert'}>
+      {session.error?.message ?? (session.isPending ? '正在读取会话…' : '此会话不属于当前 Agent。')}
+    </p>
+  </>
   const fixedVersion = session.data?.version_id ?? createdSession?.version_id
   const draftRevision = session.data?.draft_revision ?? createdSession?.draft_revision
   return <section className="conversation-page">
-    <header className="conversation-header">
+    <header className="session-toolbar conversation-topbar">
+      {back}
       <div className="conversation-title">
-        <h1>{sessionID || agent.name}</h1>
+        <h1 title={sessionID || agent.name}>{sessionID || agent.name}</h1>
         {sessionID && <CopyIDButton label="会话" value={sessionID} icon />}
       </div>
+      {context}
       <div className="conversation-actions">
-        {sessionID && <button type="button" className="secondary" disabled={!latest} onClick={() => setShowDetails(true)}>运行详情</button>}
+        {sessionID && <button type="button" className="secondary" disabled={!latest} onClick={() => setShowDetails(true)}>
+          <Icon name="activity" />运行详情
+        </button>}
+        {toolbarActions}
+        {workspaceToggle}
       </div>
     </header>
     <div className="conversation-body" ref={viewport} tabIndex={0} aria-label="对话记录" onScroll={event => {
@@ -301,12 +313,13 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
       <div className="conversation-content chat-history" ref={content}>
         {messages.hasNextPage && <div className="older-messages">
           <button type="button" className="secondary" disabled={messages.isFetching} onClick={() => { void loadOlder() }}>
+            <Icon name="arrowUp" size={15} />
             {messages.isFetchingNextPage ? '正在读取…' : '加载更早的消息'}
           </button>
         </div>}
         {sessionID && messages.isPending && <p className="muted" role="status">正在读取消息…</p>}
         {(!sessionID || messages.isSuccess) && !history.length && !pending && !showAccepted && !busy && !stream.state?.messages.length &&
-          <div className="empty-conversation"><h2>开始对话</h2>{!sessionID && agent.archived ? <p>此 Agent 已归档。</p>
+          <div className="empty-conversation"><Icon name="bot" size={42} /><h2>开始对话</h2>{!sessionID && agent.archived ? <p>此 Agent 已归档。</p>
             : !sessionID && versions.data?.length === 0 ? <p>请先发布 Agent 版本。</p> : null}</div>}
         {turns.map(({ key, runID, user, assistant }) => {
           const previous = runID && runID !== latest?.id ? runsByID.get(runID) : undefined
@@ -318,36 +331,38 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
             <AssistantTurn space={space} messages={assistant} state={runID === latest?.id ? stream.state : null} />
             {previous && <div className="past-run">
               {previous.status !== 'succeeded' && <span>{statuses[previous.status]}{previous.error && ` · ${previous.error}`}</span>}
-              <button type="button" className="text-link" onClick={() => openRun(previous.id)}>查看本轮运行</button>
+              <button type="button" className="text-link" onClick={() => openRun(previous.id)}><Icon name="activity" size={15} />查看本轮运行</button>
             </div>}
           </div>
         })}
         {latest && <>
-          <div className="run-status" data-testid="run-status" role="status">
+          <RunActivity key={latest.id} state={stream.state} />
+          <div className="run-status" data-status={status} data-testid="run-status" role="status">
             {busy && <span className="working-dot" aria-hidden="true" />}
+            {status === 'succeeded' && <Icon name="check" size={18} />}
+            {status === 'failed' && <Icon name="alert" size={18} />}
             <strong>{statuses[status ?? ''] ?? status}</strong>
             <span>{busy && stopRequested ? '正在停止，等待文件收尾' : currentRun?.error || stream.state?.error}</span>
             {busy && !stopRequested && !liveMessage && <span>等待回复…</span>}
           </div>
-          <RunActivity key={latest.id} state={stream.state} />
-          {stream.error && <p role="alert" className="stream-error">{stream.error} <button type="button" className="secondary" onClick={() => setGeneration(x => x + 1)}>重新同步事件</button></p>}
+          {stream.error && <p role="alert" className="stream-error">{stream.error} <button type="button" className="secondary" onClick={() => setGeneration(x => x + 1)}><Icon name="refresh" />重新同步事件</button></p>}
         </>}
         {pending && <ChatMessage role="user" text={pending.text} space={space} pending />}
       </div>
     </div>
     {!readOnly && <div className="composer-dock">
-      {showJump && <button type="button" className="secondary jump-to-latest" onClick={jumpToLatest}>↓ 回到最新消息</button>}
+      {showJump && <button type="button" className="secondary jump-to-latest" onClick={jumpToLatest}><Icon name="arrowDown" size={15} />回到最新消息</button>}
       {session.data?.workspace_error && !busy && <div className="error workspace-notice">
         <p role="alert">工作目录尚未确认持久化，已阻止下一轮运行。</p>
         <div className="actions">
-          <button disabled={workspaceActionPending} onClick={() => workspaceAction.mutate('workspace-snapshots/retry')}>仅重试保存文件</button>
+          <button disabled={workspaceActionPending} onClick={() => workspaceAction.mutate('workspace-snapshots/retry')}><Icon name="refresh" />仅重试保存文件</button>
           <button className="secondary" disabled={workspaceActionPending || !runs.isSuccess} onClick={() => {
             cleanupKey.current ??= newRequestKey()
             workspaceAction.reset()
             jumpToLatest()
             submit.mutate({ text: cleanupText, files: [], key: cleanupKey.current, workspaceCleanup: true })
-          }}>尝试Agent清理文件</button>
-          <button className="secondary" disabled={workspaceActionPending} onClick={() => workspaceAction.mutate('workspace/restore')}>恢复最近已提交快照</button>
+          }}><Icon name="bot" />尝试Agent清理文件</button>
+          <button className="secondary" disabled={workspaceActionPending} onClick={() => workspaceAction.mutate('workspace/restore')}><Icon name="folder" />恢复最近已提交快照</button>
         </div>
         <p>恢复会丢弃当前未保存文件。</p>
       </div>}
@@ -356,8 +371,8 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
       <form className="chat-composer" onSubmit={event => { event.preventDefault(); send() }}>
         {files.length > 0 && <ul className="composer-files">{files.map((file, index) => <li key={index}>
           <span title={file.name}>{file.name}</span>
-          <button className="secondary" type="button" disabled={submit.isPending} aria-label={`移除附件 ${file.name}`}
-            onClick={() => setFiles(items => items.filter(item => item !== file))}>×</button>
+          <button className="icon-button" type="button" disabled={submit.isPending} aria-label={`移除附件 ${file.name}`} title={`移除附件 ${file.name}`}
+            onClick={() => setFiles(items => items.filter(item => item !== file))}><Icon name="close" size={14} /></button>
         </li>)}</ul>}
         <textarea ref={composer} aria-label="输入任务" value={text} onChange={event => setText(event.target.value)} readOnly={submit.isPending}
           maxLength={262144} rows={2} placeholder="输入任务，继续对话…"
@@ -378,7 +393,7 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
                 if (file.size <= 8 * 1024 * 1024) setFiles(items => [...items, file])
               }} />
             <button type="button" className="secondary attach-button" disabled={submit.isPending || files.length >= 16}
-              onClick={() => fileInput.current?.click()} title="添加附件（每个最多 8 MiB）">+ 附件</button>
+              onClick={() => fileInput.current?.click()} title="添加附件（每个最多 8 MiB）"><Icon name="attach" />附件</button>
             {draftRevision ? <span className="composer-version">草稿调试 · r{draftRevision}</span>
               : fixedVersion ? <span className="composer-version" title={fixedVersion}>固定版本 · {fixedVersion.slice(0, 8)}</span>
               : <select className="composer-version" aria-label="Agent 版本" disabled={submit.isPending || !versions.data?.length}
@@ -391,9 +406,10 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
           </div>
           {busy && latest
             ? <button type="button" className="stop-button secondary" aria-label="取消运行" disabled={cancel.isPending || stopRequested} onClick={() => cancel.mutate(latest.id)}>
-              <span className="stop-icon" aria-hidden="true" />{stopRequested || cancel.isPending ? '正在停止' : '停止'}
+              <Icon name="stop" size={16} />{stopRequested || cancel.isPending ? '正在停止' : '停止'}
             </button>
-            : <button type="submit" className="send-button" aria-label="发送任务" disabled={!canSend}>{submit.isPending ? '正在发送…' : '发送 ↑'}</button>}
+            : <button type="submit" className="send-button" aria-label="发送任务" title={submit.isPending ? '正在发送…' : '发送任务'}
+              aria-busy={submit.isPending} disabled={!canSend}><Icon name={submit.isPending ? 'refresh' : 'arrowUp'} size={21} /></button>}
         </div>
       </form>
       <p className="composer-hint">Enter 发送 · Shift + Enter 换行</p>
@@ -419,11 +435,11 @@ function ChatMessage({ role, text, live, attachments, space, contentID, pending 
   space: string; contentID?: string; pending?: boolean
 }) {
   return <article className={`chat-turn ${role}`}>
-    {role === 'assistant' && <div className="assistant-label"><span className="assistant-icon" aria-hidden="true">✦</span><strong>助手</strong>{live?.incomplete && <small>输出未完成</small>}</div>}
+    {role === 'assistant' && <div className="assistant-label"><Icon name="bot" size={25} className="assistant-icon" /><strong>助手</strong>{live?.incomplete && <small>输出未完成</small>}</div>}
     <div className="chat-turn-content">
       <MessageText text={text} plain={role === 'user'} live={live} />
-      {attachments?.map(a => <a className="attached-file" key={a.id} href={`/api/v1/spaces/${space}/payloads/${a.ref.object_id}`} download>{a.name}</a>)}
-      {contentID && <a className="attached-file" href={`/api/v1/spaces/${space}/payloads/${contentID}`} download>下载完整内容</a>}
+      {attachments?.map(a => <a className="attached-file icon-link" key={a.id} href={`/api/v1/spaces/${space}/payloads/${a.ref.object_id}`} download><Icon name="file" size={16} />{a.name}</a>)}
+      {contentID && <a className="attached-file icon-link" href={`/api/v1/spaces/${space}/payloads/${contentID}`} download><Icon name="download" size={16} />下载完整内容</a>}
       {pending && <small>正在发送…</small>}
     </div>
   </article>
@@ -490,12 +506,12 @@ function AssistantTurn({ space, messages, state }: { space: string; messages: Me
   if (!steps.length && !unattached.length) return null
 
   return <article className="chat-turn assistant">
-    <div className="assistant-label"><span className="assistant-icon" aria-hidden="true">✦</span><strong>助手</strong></div>
+    <div className="assistant-label"><Icon name="bot" size={25} className="assistant-icon" /><strong>助手</strong></div>
     <div className="chat-turn-content assistant-steps">
       {steps.map(step => <div key={step.id} className="assistant-step">
         <MessageText text={step.text} live={step.live} />
         {step.live?.incomplete && <small className="assistant-incomplete">输出未完成</small>}
-        {step.contentID && <a className="attached-file" href={`/api/v1/spaces/${space}/payloads/${step.contentID}`} download>下载完整内容</a>}
+        {step.contentID && <a className="attached-file icon-link" href={`/api/v1/spaces/${space}/payloads/${step.contentID}`} download><Icon name="download" size={16} />下载完整内容</a>}
         <ToolActivity tools={step.tools} />
       </div>)}
       <ToolActivity tools={unattached} />
@@ -507,8 +523,8 @@ function ToolActivity({ tools }: { tools: Tool[] }) {
   const [limit, setLimit] = useState(50)
   if (!tools.length) return null
   return <details className="tool-activity">
-    <summary>工具调用 · {tools.length}</summary>
-    {tools.length > limit && <button className="secondary" onClick={() => setLimit(n => n + 50)}>显示更早的工具调用</button>}
+    <summary><Icon name="chevron" size={14} />工具调用 · {tools.length}</summary>
+    {tools.length > limit && <button className="secondary" onClick={() => setLimit(n => n + 50)}><Icon name="arrowUp" size={15} />显示更早的工具调用</button>}
     {tools.slice(-limit).map(t => <details key={t.id}>
       <summary>{t.name} · {toolStatuses[t.status] ?? t.status}</summary>
       {t.standard ? <pre>{t.arguments}</pre> : <p className="muted">完整参数可在运行详情的 Trace 中查看。</p>}
@@ -526,7 +542,12 @@ function RunActivity({ state, showTools }: { state: Schema['UIState'] | null; sh
       </li>)}</ol>
     </aside>}
     {showTools && <ToolActivity tools={state.tools} />}
-    {state.artifacts.length > 0 && <div className="run-artifacts">{state.artifacts.map(a => <a key={a.id} href={a.download_url} download>{a.name} ↓</a>)}</div>}
+    {state.artifacts.length > 0 && <div className="run-artifacts">{state.artifacts.map(a => <a key={a.id} href={a.download_url} download
+      aria-label={`下载 ${a.name}`} title={`下载 ${a.name}`}>
+      <Icon name="file" size={22} />
+      <span><strong>{a.name}</strong><small>{a.media_type}</small></span>
+      <Icon name="download" size={20} />
+    </a>)}</div>}
   </div>
 }
 
@@ -547,7 +568,9 @@ function RunDetails({ space, session, chosenRun, runs, current, onSelect, onClos
     return () => node?.close()
   }, [])
   return <dialog className="run-details-dialog" ref={dialog} aria-labelledby="run-details-heading" onCancel={event => { event.preventDefault(); onClose() }}>
-    <header><h2 id="run-details-heading">运行详情</h2><button type="button" className="secondary" onClick={onClose}>关闭</button></header>
+    <header><h2 id="run-details-heading" className="icon-link"><Icon name="activity" size={23} />运行详情</h2>
+      <button type="button" className="secondary" onClick={onClose}><Icon name="close" />关闭</button>
+    </header>
     <label>查看运行<select value={selected?.id ?? ''} onChange={event => onSelect(event.target.value)}>
       {!selected && <option value="" disabled>选择运行</option>}
       {runs.map(run => <option key={run.id} value={run.id}>{new Date(run.created_at).toLocaleString()} · {statuses[run.status]} · {run.id.slice(0, 8)}</option>)}
@@ -588,13 +611,9 @@ function CopyIDButton({ label, value, icon = false }: { label: string; value: st
   }
   const title = `复制${label} ID`
   return <>
-    <button type="button" className={icon ? 'secondary conversation-copy-id' : 'secondary'}
+    <button type="button" className={icon ? 'icon-button conversation-copy-id' : 'secondary'}
       aria-label={title} title={icon ? title : undefined} onClick={copy}>
-      {icon ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"
-        strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <rect x="8" y="8" width="12" height="12" rx="2" />
-        <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
-      </svg> : '复制'}
+      <Icon name="copy" size={17} />{!icon && '复制'}
     </button>
     <span className="muted" role="status">{feedback}</span>
   </>

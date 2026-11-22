@@ -2,6 +2,7 @@ import { Link, Navigate, NavLink, useLocation, useParams } from 'react-router-do
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { agentSessionsPath, creativitySessionPath, spacePath } from '../../app/routes'
+import { Icon } from '../../components/Icon'
 import { list, request, type Schema } from '../../lib/api'
 import { Conversation } from './Conversation'
 import { WorkspaceFiles } from './WorkspaceFiles'
@@ -46,21 +47,19 @@ function AgentConversations({ space, agentID, sessionID }: { space: string; agen
   })
   const recent = [...(sessions.data ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))
   return <div className={creativitySessionID ? 'session-workspace' : 'session-workspace session-workspace--history'}>
-    <div className="session-toolbar">
-      {creativitySessionID
-        ? <Link className="text-link" to={creativitySessionPath(space, creativitySessionID)}>← 返回创意会话</Link>
-        : <Link className="text-link" to={spacePath(space, 'agents')}>← Agents</Link>}
-    </div>
+    {!creativitySessionID && <div className="session-back"><Link className="text-link icon-link" to={spacePath(space, 'agents')}
+      aria-label="← Agents"><Icon name="arrowLeft" />Agents</Link></div>}
     {!creativitySessionID && <nav aria-label="会话列表" className="session-rail">
       <div className="session-rail-top">
         {!sharedAgent && agent.data && !agent.data.archived && <NavLink end to={agentSessionsPath(space, agentID)} aria-label="新建会话"
-          onClick={startNew}><span aria-hidden="true">+</span> 新建会话</NavLink>}
+          onClick={startNew}><Icon name="plus" />新建会话</NavLink>}
       </div>
       <div className="session-links">
-        <h2>会话</h2>
+        <h2>历史会话</h2>
         {recent.map(s => <NavLink key={s.id} to={s.creativity ? creativitySessionPath(space, s.id) : agentSessionsPath(space, agentID, s.id)} end
           onClick={() => { if (s.id !== sessionID) setStartedSession('') }} title={s.id}>
-          {s.id}{s.draft_revision && <small>草稿调试</small>}{s.workspace_error && <small>文件待恢复</small>}
+          <Icon name="chat" size={16} />
+          <span>{s.id}{s.draft_revision && <small>草稿调试</small>}{s.workspace_error && <small>文件待恢复</small>}</span>
         </NavLink>)}
         {sessions.isPending && <p role="status">正在读取会话…</p>}
         {sessions.data?.length === 0 && <p>还没有会话</p>}
@@ -68,8 +67,10 @@ function AgentConversations({ space, agentID, sessionID }: { space: string; agen
       </div>
     </nav>}
     <WorkspaceFiles space={space} sessionID={sessionID}>
-      {conversationAgent ? <Conversation key={!sessionID || sessionID === startedSession ? `draft-${draftNumber}` : sessionID} space={space}
-        agent={conversationAgent} sessionID={sessionID} onCreated={setStartedSession} />
+      {workspaceToggle => conversationAgent ? <Conversation key={!sessionID || sessionID === startedSession ? `draft-${draftNumber}` : sessionID} space={space}
+        agent={conversationAgent} sessionID={sessionID} onCreated={setStartedSession} workspaceToggle={workspaceToggle}
+        back={creativitySessionID && <Link className="text-link icon-link" to={creativitySessionPath(space, creativitySessionID)}
+          aria-label="← 返回创意会话"><Icon name="arrowLeft" />返回创意会话</Link>} />
         : <p className="session-loading" role={current.error || agent.error ? 'alert' : 'status'}>{(current.error || agent.error)?.message ?? '正在读取会话…'}</p>}
     </WorkspaceFiles>
   </div>

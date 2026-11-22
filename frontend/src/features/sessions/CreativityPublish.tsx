@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient, type MutationKey } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { agentSessionsPath } from '../../app/routes'
+import { Icon } from '../../components/Icon'
 import { APIError, list, newRequestKey, request, type Schema } from '../../lib/api'
 
 type PublishManifest = Schema['CreativityPublishManifest']
@@ -21,9 +22,11 @@ function ManifestEntries({ manifest, debug = false }: { manifest: PublishManifes
     const label = entry.status ? results[entry.status] : (debug ? debugActions : actions)[entry.action]
     return entry.label ? `${label} · ${entry.label}` : label
   }
-  return <ul>
-    <li>Agent · {manifest.agent.name} — {entryLabel(manifest.agent)}</li>
-    {manifest.skills.map((skill, index) => <li key={`${skill.id ?? skill.name}-${index}`}>Skill · {skill.name} — {entryLabel(skill)}</li>)}
+  return <ul className="manifest-entries" aria-label="发布清单">
+    {[manifest.agent, ...manifest.skills].map((entry, index) => <li key={`${entry.id ?? entry.name}-${index}`}>
+      <span className="manifest-name"><Icon name={index ? 'layers' : 'bot'} />{index ? 'Skill' : 'Agent'} · {entry.name}</span>
+      <span className="manifest-status" data-status={entry.status}>{entryLabel(entry)}</span>
+    </li>)}
   </ul>
 }
 
@@ -79,9 +82,13 @@ export function CreativityPublish({ space, sessionID, busy, snapshot, mutationKe
   }
   return <>
     <button ref={debugButton} type="button" className="secondary" disabled={busy || !snapshot || debug.isPending} onClick={() => tryDraft()}
-      title={!snapshot ? '最近一轮 Run 提交工作区快照后才能调试' : undefined}>{debug.isPending ? '正在打开…' : '去试试'}</button>
+      title={busy ? '请等待当前运行结束' : !snapshot ? '最近一轮 Run 提交工作区快照后才能调试' : undefined}>
+      <Icon name={debug.isPending ? 'refresh' : 'play'} />{debug.isPending ? '正在打开…' : '去试试'}
+    </button>
     <button ref={publishButton} type="button" disabled={busy || !snapshot || debug.isPending} onClick={() => select(snapshot)}
-      title={!snapshot ? '最近一轮 Run 提交工作区快照后才能发布' : undefined}>去发布</button>
+      title={busy ? '请等待当前运行结束' : !snapshot ? '最近一轮 Run 提交工作区快照后才能发布' : undefined}>
+      <Icon name="rocket" />去发布
+    </button>
     {selected && <PublishDialog key={selected} space={space} sessionID={sessionID} selected={selected}
       available={!busy && !debug.isPending && selected === snapshot} close={() => select('')} mutationKey={mutationKey} />}
     {!debug.isIdle && <DraftDebugDialog space={space} chooseModel={chooseDebugModel}
@@ -103,7 +110,7 @@ function DraftDebugDialog({ space, chooseModel, available, pending, error, model
   useEffect(() => { dialog.current?.showModal() }, [])
   return <dialog ref={dialog} className="run-details-dialog creativity-publish-dialog" aria-labelledby="debug-heading"
     onCancel={event => { event.preventDefault(); if (!pending) close() }}>
-    <h2 id="debug-heading">草稿调试</h2>
+    <header><h2 id="debug-heading" className="icon-link"><Icon name="play" size={23} />草稿调试</h2></header>
     {chooseModel && !modelLocked && <div>
       <p>此 Agent 尚未绑定模型。选择模型后将直接打开调试会话。</p>
       <label>调试模型
@@ -115,17 +122,17 @@ function DraftDebugDialog({ space, chooseModel, available, pending, error, model
         </select>
       </label>
       {models.isPending && <p role="status">正在读取可用模型…</p>}
-      {models.isError && <p role="alert">{models.error.message} <button type="button" onClick={() => { void models.refetch() }}>重试读取模型</button></p>}
+      {models.isError && <p role="alert">{models.error.message} <button type="button" onClick={() => { void models.refetch() }}><Icon name="refresh" />重试读取模型</button></p>}
       {models.data?.length === 0 && <p>当前空间没有可用模型，请先在「模型配置」中添加或启用模型。</p>}
     </div>}
-    {pending && <p role="status">正在校验并准备调试会话…</p>}
+    {pending && <p className="dialog-status" role="status"><span className="working-dot" aria-hidden="true" />正在校验并准备调试会话…</p>}
     {error && !modelRequired && <p role="alert">{error.message}</p>}
     {partial && <ManifestEntries manifest={partial} debug />}
     {!available && <p className="muted">当前有运行中的任务，或此快照已不是最近一轮。请在会话结束后重新打开。</p>}
     <div className="dialog-actions">
-      <button type="button" className="secondary" disabled={pending} onClick={close}>关闭</button>
+      <button type="button" className="secondary" disabled={pending} onClick={close}><Icon name="close" />关闭</button>
       {error && !modelRequired && !nameConflict && <button type="button" disabled={!available || pending}
-        onClick={() => start(modelLocked ? '' : modelID)}>{modelLocked ? '使用已确认的模型' : '重试'}</button>}
+        onClick={() => start(modelLocked ? '' : modelID)}><Icon name={modelLocked ? 'check' : 'refresh'} />{modelLocked ? '使用已确认的模型' : '重试'}</button>}
     </div>
   </dialog>
 }
@@ -179,8 +186,13 @@ function PublishDialog({ space, sessionID, selected, available, close, mutationK
   }
   return <dialog ref={dialog} className="run-details-dialog creativity-publish-dialog" aria-labelledby="publish-heading"
     onCancel={event => { event.preventDefault(); if (!confirm.isPending) close() }}>
-    <h2 id="publish-heading">发布 Agent 和 Skills</h2>
-    <p className="muted">发布内容来自此轮 Run 的工作区快照。要改内容，请回到会话修改后再打开发布。</p>
+    <header><h2 id="publish-heading" className="icon-link"><Icon name="rocket" size={23} />发布 Agent 和 Skills</h2></header>
+    {!confirm.isSuccess && !confirm.isError && <p className="muted">发布内容来自此轮 Run 的工作区快照。要改内容，请回到会话修改后再打开发布。</p>}
+    {confirm.isError && <div className="publish-feedback" role="alert">
+      <strong className="dialog-status"><Icon name="alert" />发布未完成</strong>
+      <p>{confirm.error.message} {partial ? '已成功发布的版本和已保存的草稿均已保留。' : '未收到逐项结果，重试时会重新核对。'}</p>
+    </div>}
+    {confirm.isSuccess && <p className="dialog-status publish-success" role="status"><Icon name="check" size={22} />发布完成，可在管理页查看。</p>}
     {chooseModel && <div>
       <p>{modelID ? '所选模型将写入 Agent 草稿，用于发布。' : '此 Agent 尚未绑定模型，请选择当前空间的模型，再检查发布清单。'}</p>
       <label>发布模型
@@ -193,24 +205,22 @@ function PublishDialog({ space, sessionID, selected, available, close, mutationK
         </select>
       </label>
       {models.isPending && <p role="status">正在读取可用模型…</p>}
-      {models.isError && <p role="alert">{models.error.message} <button type="button" onClick={() => { void models.refetch() }}>重试读取模型</button></p>}
+      {models.isError && <p role="alert">{models.error.message} <button type="button" onClick={() => { void models.refetch() }}><Icon name="refresh" />重试读取模型</button></p>}
       {models.data?.length === 0 && <p>当前空间没有可用模型，请先在「模型配置」中添加或启用模型。</p>}
     </div>}
-    {locked && <p>本次发布已固定模型：{models.data?.find(model => model.id === manifest.model_id)?.name ?? manifest.model_id}</p>}
+    {locked && <p className="muted">本次发布已固定模型：{models.data?.find(model => model.id === manifest.model_id)?.name ?? manifest.model_id}</p>}
     {preview.isPending && <p role="status">正在读取发布清单…</p>}
     {preview.isError && !modelRequired && <p role="alert">{preview.error.message}</p>}
-    {manifest && <ManifestEntries manifest={manifest} />}
-    {confirm.isError && <p role="alert">{confirm.error.message} {partial
-      ? '已成功发布的版本和已保存的草稿不会回滚。'
-      : '未收到逐项结果，重试时会重新核对。'}</p>}
-    {confirm.isSuccess && <p role="status">发布完成，可在管理页查看。</p>}
+    {manifest && <><h3>发布清单</h3><ManifestEntries manifest={manifest} /></>}
     {!available && !confirm.isSuccess && <p className="muted">当前有运行中的任务，或此快照已不是最近一轮。请在会话结束后重新打开。</p>}
     <div className="dialog-actions">
-      <button type="button" className="secondary" disabled={confirm.isPending} onClick={close}>关闭</button>
-      {modelConflict && available && <button type="button" onClick={useLockedModel}>使用已确认的模型</button>}
-      {preview.isError && !modelRequired && !modelConflict && available && <button type="button" onClick={() => { void preview.refetch() }}>重试加载</button>}
+      <button type="button" className="secondary" disabled={confirm.isPending} onClick={close}><Icon name="close" />关闭</button>
+      {modelConflict && available && <button type="button" onClick={useLockedModel}><Icon name="check" />使用已确认的模型</button>}
+      {preview.isError && !modelRequired && !modelConflict && available && <button type="button" onClick={() => { void preview.refetch() }}><Icon name="refresh" />重试加载</button>}
       {!confirm.isSuccess && !nameConflict && <button type="button" disabled={!preview.isSuccess || !available || confirm.isPending || modelConflict}
-        onClick={() => confirm.mutate(locked ? '' : modelID)}>{confirm.isPending ? '正在发布…' : confirm.isError ? '重试发布' : '确认发布'}</button>}
+        onClick={() => confirm.mutate(locked ? '' : modelID)}><Icon name={confirm.isPending || confirm.isError ? 'refresh' : 'check'} />
+        {confirm.isPending ? '正在发布…' : confirm.isError ? '重试发布' : '确认发布'}
+      </button>}
     </div>
   </dialog>
 }

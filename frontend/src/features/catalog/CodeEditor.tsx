@@ -22,10 +22,10 @@ export default function CodeEditor({ value, onChange, label, language = 'markdow
     if (!root.current) return
     if (original !== undefined) {
       const a = monaco.editor.createModel(original, language), b = monaco.editor.createModel(value, language)
-      const diff = monaco.editor.createDiffEditor(root.current, { automaticLayout: true, readOnly: true, renderSideBySide: false, minimap: { enabled: false }, ariaLabel: label })
+      const diff = monaco.editor.createDiffEditor(root.current, { theme: 'vs-dark', automaticLayout: true, readOnly: true, renderSideBySide: false, minimap: { enabled: false }, ariaLabel: label })
       diff.setModel({ original: a, modified: b }); return () => { diff.dispose(); a.dispose(); b.dispose() }
     }
-    const instance = monaco.editor.create(root.current, { value, language, automaticLayout: true, ariaLabel: label, readOnly: readOnly ?? !onChange, editContext: false, accessibilitySupport: 'on', minimap: { enabled: false }, wordWrap: 'on', scrollBeyondLastLine: false, fontSize: 13 })
+    const instance = monaco.editor.create(root.current, { value, language, theme: 'vs-dark', automaticLayout: true, ariaLabel: label, readOnly: readOnly ?? !onChange, editContext: false, accessibilitySupport: 'on', minimap: { enabled: false }, wordWrap: 'on', scrollBeyondLastLine: false, fontSize: 13 })
     editor.current = instance
     const change = instance.onDidChangeModelContent(() => latest.current?.(instance.getValue()))
     return () => { change.dispose(); const model = instance.getModel(); instance.dispose(); model?.dispose(); editor.current = null }

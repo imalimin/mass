@@ -1,5 +1,6 @@
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { agentSessionsPath, creativitySessionPath } from '../../app/routes'
+import { Icon } from '../../components/Icon'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Markdown from 'react-markdown'
@@ -58,7 +59,7 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
   })
   const iterationButton = (id: string, name?: string) => <button type="button" className="secondary"
     disabled={!availability.data?.available || iterate.isPending} aria-label={name ? `在创意中迭代 ${name}` : undefined}
-    onClick={() => iterate.mutate(id)}>{iterate.isPending && iterate.variables === id ? '正在恢复…' : '在创意中迭代'}</button>
+    onClick={() => iterate.mutate(id)}><Icon name="branch" />{iterate.isPending && iterate.variables === id ? '正在恢复…' : '在创意中迭代'}</button>
   const query = useQuery({ queryKey: ['private', space.id, kind, 'list'], queryFn: ({ signal }) => list<Schema['Definition']>(base, signal), refetchInterval: q => q.state.error ? false : 5000 })
   const refresh = () => { void client.invalidateQueries({ queryKey: ['private', space.id] }) }
   const select = (id: string) => navigate(`${base}/${id}`)
@@ -70,13 +71,13 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
   return <section className="panel catalog">
     {kind === 'agent' && availability.data && !availability.data.available && <p className="muted">创作 Agent 暂不可用，无法开始创意迭代。</p>}
     {(iterate.error || availability.error) && <p role="alert">{(iterate.error || availability.error)?.message}</p>}
-    {selected ? <><Link className="text-link back-link" to={base}>← 返回 {kind === 'skill' ? 'Skills' : 'Agents'} 列表</Link>
+    {selected ? <><Link className="text-link back-link icon-link" to={base}><Icon name="arrowLeft" />返回 {kind === 'skill' ? 'Skills' : 'Agents'} 列表</Link>
     {kind === 'agent' && iterationButton(selected)}
     <DefinitionEditor key={`${kind}-${selected}`} space={space.id} kind={kind} id={selected} onCopied={select} refresh={refresh} /></> : <>
-    <h2>{kind === 'skill' ? 'Skill 方法库' : 'Agent 定义'}</h2><p className="muted">保存草稿后发布独立版本。Agent 始终绑定指定的 Skill 版本。</p>
+    {kind === 'skill' && <><h2>Skill 方法库</h2><p className="muted">保存草稿后发布独立版本。Agent 始终绑定指定的 Skill 版本。</p></>}
     <form className="inline-form" onSubmit={e => { e.preventDefault(); create.mutate() }}>
       <label>定义名称<input value={name} onChange={e => setName(e.target.value)} pattern={String.raw`[a-z][a-z0-9_\-]{0,63}`} aria-describedby="definition-name-hint" placeholder="例如 report_writer" required /></label>
-      <button disabled={create.isPending || importSkill.isPending}>创建 {kind === 'skill' ? 'Skill' : 'Agent'}</button>
+      <button disabled={create.isPending || importSkill.isPending}><Icon name="plus" />创建 {kind === 'skill' ? 'Skill' : 'Agent'}</button>
       {kind === 'skill' && <>
         <input ref={importInput} type="file" accept=".zip" aria-label="Skill ZIP 文件" hidden onChange={e => {
           const file = e.currentTarget.files?.[0]
@@ -90,11 +91,11 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
     </form>
     <small id="definition-name-hint">以小写英文字母开头，最多 64 个字符，可使用小写英文字母、数字、连字符（-）和下划线（_）。</small>
     {[query.error, create.error, importSkill.error].filter(Boolean).map((e, i) => <p role="alert" key={i}>{errorText(e)}</p>)}
-    <div className="definition-list">{query.data?.map(d => kind === 'agent' ? <div className="agent-entry" key={d.id}>
-      <Link className="resource-link" to={`${base}/${d.id}`}>{d.name}{d.archived ? '（已归档）' : ''}</Link>
+    <div className={kind === 'agent' ? 'definition-list agent-list' : 'definition-list'}>{query.data?.map(d => kind === 'agent' ? <div className="agent-entry" key={d.id}>
+      <Link className="resource-link" to={`${base}/${d.id}`}><Icon name="bot" size={22} /><span>{d.name}{d.archived ? '（已归档）' : ''}</span></Link>
       {iterationButton(d.id, d.name)}
       <Link className="agent-chat-link" to={agentSessionsPath(space.id, d.id)} aria-label={`打开 ${d.name} 的会话`} title="会话与运行">
-        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 4H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2v3l4-3h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2Z" /><path d="M8 11.5h8" /></svg>
+        <Icon name="chat" size={19} />
       </Link>
     </div> : <Link className="resource-link" key={d.id} to={`${base}/${d.id}`}>{d.name}{d.archived ? '（已归档）' : ''}<span aria-hidden="true"> →</span></Link>)}</div>
     {query.isPending && <p role="status">正在读取定义…</p>}{query.data?.length === 0 && <p className="muted">还没有 {kind === 'skill' ? 'Skill' : 'Agent'}，创建第一个定义开始使用。</p>}

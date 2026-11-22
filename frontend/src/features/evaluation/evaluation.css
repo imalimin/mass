@@ -4,22 +4,22 @@
 .evaluation-heading h2 { margin: 0; }
 .evaluation-heading nav { display: flex; gap: 6px; }
 .evaluation-heading nav a { padding: 9px 16px; border-radius: 8px; color: inherit; text-decoration: none; }
-.evaluation-heading nav a.active { background: var(--accent-soft, #e9f0ef); color: #245842; font-weight: 600; }
+.evaluation-heading nav a.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
 .evaluation-workspace fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .evaluation-workspace label { display: grid; gap: 6px; }
 .evaluation-workspace textarea { width: 100%; resize: vertical; }
-.evaluation-case { border: 1px solid var(--border, #dce1de); border-radius: 10px; padding: 16px; margin: 16px 0; }
+.evaluation-case { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 16px 0; }
 .evaluation-case h3 { margin: 0; }
 .evaluation-turn { padding: 14px 0; display: grid; gap: 10px; }
-.evaluation-turn + .evaluation-turn { border-top: 1px solid var(--border, #dce1de); }
+.evaluation-turn + .evaluation-turn { border-top: 1px solid var(--border); }
 .evaluation-turn pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .evaluation-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
 .evaluation-table { width: 100%; overflow-x: auto; }
 .evaluation-table table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }
-.evaluation-table th, .evaluation-table td { padding: 12px 10px; border-bottom: 1px solid var(--border, #dce1de); vertical-align: top; }
-.evaluation-table th { white-space: nowrap; color: var(--muted, #65716b); }
-.evaluation-table .text-link { background: transparent; border: 0; color: #236e58; padding: 0; text-decoration: underline; }
-.evaluation-table small { display: block; margin-top: 5px; color: var(--muted, #65716b); overflow-wrap: anywhere; }
+.evaluation-table th, .evaluation-table td { padding: 12px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.evaluation-table th { white-space: nowrap; color: var(--muted); }
+.evaluation-table .text-link { background: transparent; border: 0; color: var(--accent-text); padding: 0; text-decoration: underline; }
+.evaluation-table small { display: block; margin-top: 5px; color: var(--muted); overflow-wrap: anywhere; }
 .evaluation-toolbar input[type=number] { max-width: 120px; }
 .evaluation-workspace code { overflow-wrap: anywhere; }
 @media (max-width: 640px) { .evaluation-form-grid { grid-template-columns: 1fr; } .evaluation-case { padding: 12px; } }
