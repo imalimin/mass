@@ -59,8 +59,22 @@ class MassServerService : Service() {
         return START_STICKY
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        stopForegroundCompat()
+        pollJob?.cancel()
+        val stopped = runCatching { MassBridge.stop() }.getOrNull()
+        if (stopped != null) {
+            _status.value = stopped
+        }
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         pollJob?.cancel()
+        if (_status.value.isRunning || _status.value.isStarting) {
+            runCatching { _status.value = MassBridge.stop() }
+        }
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -203,10 +217,14 @@ class MassServerService : Service() {
         }
 
         fun stop(context: Context) {
+            val current = _status.value
+            if (!current.isRunning && !current.isStarting && current.state != MassStatus.STATE_STOPPING) {
+                return
+            }
             val intent = Intent(context, MassServerService::class.java).apply {
                 action = ACTION_STOP
             }
-            context.startService(intent)
+            runCatching { context.startService(intent) }
         }
     }
 }

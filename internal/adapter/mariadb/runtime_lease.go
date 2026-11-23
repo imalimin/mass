@@ -18,20 +18,29 @@ import (
 )
 
 type RuntimeLease struct {
-	store      *Store
-	conn       *sql.Conn
-	ID, name   string
-	connection int64
-	mu         sync.Mutex
-	alive      atomic.Bool
-	closed     bool
+	store         *Store
+	conn          *sql.Conn
+	ID, name      string
+	connection    int64
+	mu            sync.Mutex
+	alive         atomic.Bool
+	closed        bool
+	stopKeepalive context.CancelFunc
 }
+
+const (
+	leaseWaitTimeoutSeconds = 30
+	leaseKeepaliveInterval  = 10 * time.Second
+)
 
 func (s *Store) OpenRuntime(ctx context.Context) (*RuntimeLease, error) {
 	conn, err := s.DB.Conn(ctx)
 	if err != nil {
 		return nil, err
 	}
+	// Bound how long a half-open TCP connection (e.g. mobile kill / network drop)
+	// can retain the runtime lock on the MariaDB server.
+	_, _ = conn.ExecContext(ctx, "SET SESSION wait_timeout=?", leaseWaitTimeoutSeconds)
 	l := &RuntimeLease{store: s, conn: conn, ID: uuid.NewString()}
 	var database string
 	if err = conn.QueryRowContext(ctx, "SELECT DATABASE(),CONNECTION_ID()").Scan(&database, &l.connection); err != nil {
@@ -45,7 +54,24 @@ func (s *Store) OpenRuntime(ctx context.Context) (*RuntimeLease, error) {
 		return nil, run.ErrUnavailable
 	}
 	l.alive.Store(true)
+	keepCtx, cancel := context.WithCancel(context.Background())
+	l.stopKeepalive = cancel
+	go l.keepalive(keepCtx)
 	return l, nil
+}
+func (l *RuntimeLease) keepalive(ctx context.Context) {
+	ticker := time.NewTicker(leaseKeepaliveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := l.Check(ctx); err != nil {
+				return
+			}
+		}
+	}
 }
 func (l *RuntimeLease) Check(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
@@ -74,6 +100,9 @@ func (l *RuntimeLease) Close() error {
 	}
 	l.closed = true
 	l.alive.Store(false)
+	if l.stopKeepalive != nil {
+		l.stopKeepalive()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_, err := l.conn.ExecContext(ctx, "SELECT RELEASE_LOCK(?)", l.name)

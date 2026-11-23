@@ -128,7 +128,7 @@ func apiError(w http.ResponseWriter, err error, logger *slog.Logger) {
 		}
 	}
 	if status == 500 {
-		logger.Error("request failed", "request_id", w.Header().Get("X-Request-ID"))
+		logger.Error("request failed", "request_id", w.Header().Get("X-Request-ID"), "error", err.Error())
 	}
 	var item *catalog.PublishItemError
 	if errors.As(err, &item) {

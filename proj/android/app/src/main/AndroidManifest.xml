@@ -33,6 +33,19 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".SessionChatActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:exported="false"
+            android:theme="@style/Theme.Mass"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".DiagnosticsActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:exported="false"
+            android:theme="@style/Theme.Mass" />
+
         <service
             android:name=".MassServerService"
             android:exported="false"

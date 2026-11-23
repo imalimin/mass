@@ -1,5 +1,7 @@
 package com.afinn.mass
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,110 +13,98 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshContainer
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import androidx.compose.ui.unit.sp
+import com.afinn.mass.ui.theme.MassColors
 
+data class SessionListUiState(
+    val loadedKey: String = "",
+    val spaceId: String = MassConfig.DEFAULT_SPACE_ID,
+    val sessions: List<SessionSummary> = emptyList(),
+    val agentMap: Map<String, AgentSummary> = emptyMap(),
+    val nextCursor: String = "",
+    val loading: Boolean = false,
+    val refreshing: Boolean = false,
+    val loadingMore: Boolean = false,
+    val errorMessage: String = ""
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionListScreen(
     config: MassConfig,
     serverStatus: MassStatus,
-    refreshTrigger: Int,
-    onResolvedSpace: (String) -> Unit,
+    uiState: SessionListUiState,
+    onRefresh: () -> Unit,
+    onLoadMore: () -> Unit,
     onSelectSession: (spaceId: String, session: SessionSummary, agentDisplayName: String) -> Unit,
+    onNewSession: (spaceId: String, agentId: String, agentDisplayName: String) -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val scope = rememberCoroutineScope()
-    val baseUrl = config.effectiveApiBaseUrl(serverStatus)
     val backendReady = config.useRemoteServer || serverStatus.isRunning
     val effectiveAgentId = config.agentId.trim().ifBlank { MassConfig.DEFAULT_AGENT_ID }
-
-    var resolvedSpaceId by remember(config.spaceId, baseUrl, config.openapiToken) {
-        mutableStateOf(config.spaceId.trim().ifBlank { MassConfig.DEFAULT_SPACE_ID })
+    val effectiveSpaceId = uiState.spaceId.ifBlank {
+        config.spaceId.trim().ifBlank { MassConfig.DEFAULT_SPACE_ID }
     }
-    var sessions by remember { mutableStateOf<List<SessionSummary>>(emptyList()) }
-    var agentMap by remember { mutableStateOf<Map<String, AgentSummary>>(emptyMap()) }
-    var nextCursor by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
-    var loadingMore by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf("") }
 
-    var showCreateDialog by remember { mutableStateOf(false) }
-    var creating by remember { mutableStateOf(false) }
-    var createError by remember { mutableStateOf("") }
-
-    suspend fun loadInitial() {
-        if (!backendReady) return
-        loading = true
-        errorMessage = ""
-        try {
-            val result = withContext(Dispatchers.IO) {
-                val spaceId = config.spaceId.trim().ifBlank { MassConfig.DEFAULT_SPACE_ID }
-                val agents = runCatching {
-                    MassOpenApiClient.listAgents(baseUrl, config.openapiToken, spaceId)
-                }.getOrDefault(emptyList())
-                val page = MassOpenApiClient.listSessions(
-                    baseUrl = baseUrl,
-                    token = config.openapiToken,
-                    spaceId = spaceId,
-                    agentId = effectiveAgentId,
-                    cursor = "",
-                    limit = 50
-                )
-                Triple(spaceId, agents, page)
+    val pullRefreshState = rememberPullToRefreshState()
+    LaunchedEffect(pullRefreshState.isRefreshing) {
+        if (pullRefreshState.isRefreshing) {
+            if (backendReady) {
+                onRefresh()
+            } else {
+                pullRefreshState.endRefresh()
             }
-            val (spaceId, agents, page) = result
-            resolvedSpaceId = spaceId
-            onResolvedSpace(spaceId)
-            agentMap = agents.associateBy { it.id }
-            sessions = page.items.filterNot { it.hide }
-                .sortedWith(compareByDescending<SessionSummary> { it.createdAt }.thenByDescending { it.id })
-            nextCursor = page.nextCursor
-        } catch (t: Throwable) {
-            errorMessage = t.message ?: "Failed to load sessions"
-        } finally {
-            loading = false
+        }
+    }
+    LaunchedEffect(uiState.refreshing, uiState.loading) {
+        if (!uiState.refreshing && !uiState.loading && pullRefreshState.isRefreshing) {
+            pullRefreshState.endRefresh()
         }
     }
 
-    LaunchedEffect(backendReady, baseUrl, config.openapiToken, config.spaceId, effectiveAgentId, refreshTrigger) {
-        if (backendReady) {
-            loadInitial()
-        }
+    val openNewDraft: () -> Unit = {
+        val agentName = uiState.agentMap[effectiveAgentId]?.name ?: effectiveAgentId
+        onNewSession(effectiveSpaceId, effectiveAgentId, agentName)
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MassColors.Bg)
+            .nestedScroll(pullRefreshState.nestedScrollConnection)
+    ) {
         when {
             !backendReady && !config.useRemoteServer -> {
                 LocalServerNotReadyPlaceholder(
@@ -123,7 +113,7 @@ fun SessionListScreen(
                 )
             }
 
-            loading && sessions.isEmpty() -> {
+            uiState.loading && uiState.sessions.isEmpty() -> {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -131,65 +121,115 @@ fun SessionListScreen(
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    CircularProgressIndicator()
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("正在通过 OpenAPI 加载会话列表…", style = MaterialTheme.typography.bodyMedium)
+                    CircularProgressIndicator(
+                        color = MassColors.Focus,
+                        strokeWidth = 2.5.dp,
+                        modifier = Modifier.size(32.dp)
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "正在加载会话列表…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MassColors.Muted
+                    )
                 }
             }
 
-            errorMessage.isNotBlank() && sessions.isEmpty() -> {
+            uiState.errorMessage.isNotBlank() && uiState.sessions.isEmpty() -> {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
                         .padding(24.dp),
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("加载会话列表失败", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "加载会话列表失败",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MassColors.Text
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
                     Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = MaterialTheme.shapes.medium,
+                        color = MassColors.ErrorBg,
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, MassColors.Danger.copy(alpha = 0.25f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = errorMessage,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            text = uiState.errorMessage,
+                            color = MassColors.Danger,
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.padding(12.dp)
+                            modifier = Modifier.padding(14.dp)
                         )
                     }
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(18.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(onClick = { scope.launch { loadInitial() } }) {
+                        Button(
+                            onClick = onRefresh,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MassColors.Accent,
+                                contentColor = Color.White
+                            )
+                        ) {
                             Text("重试")
                         }
-                        OutlinedButton(onClick = onOpenSettings) {
+                        OutlinedButton(
+                            onClick = onOpenSettings,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, MassColors.Border),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MassColors.Text)
+                        ) {
                             Text("配置后端 / Token")
                         }
                     }
                 }
             }
 
-            sessions.isEmpty() -> {
+            uiState.sessions.isEmpty() -> {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
                         .padding(24.dp),
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("暂无会话", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "当前 Agent（$effectiveAgentId）还没有会话，点击下方或右下角新建会话。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(onClick = { showCreateDialog = true }) {
-                        Text("新建会话")
+                    Surface(
+                        color = MassColors.Surface,
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, MassColors.Border),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 36.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "还没有会话",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MassColors.Text
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "下拉可手动刷新，或点击下方按钮开始新对话",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MassColors.Muted
+                            )
+                            Spacer(modifier = Modifier.height(20.dp))
+                            Button(
+                                onClick = openNewDraft,
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MassColors.Accent,
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Text("新建会话")
+                            }
+                        }
                     }
                 }
             }
@@ -198,45 +238,44 @@ fun SessionListScreen(
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
-                        start = 12.dp,
-                        end = 12.dp,
-                        top = 10.dp,
-                        bottom = 84.dp
+                        start = 14.dp,
+                        end = 14.dp,
+                        top = 12.dp,
+                        bottom = 88.dp
                     ),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    if (errorMessage.isNotBlank()) {
+                    if (uiState.errorMessage.isNotBlank()) {
                         item(key = "error-banner") {
                             Surface(
-                                color = MaterialTheme.colorScheme.errorContainer,
-                                shape = MaterialTheme.shapes.small,
+                                color = MassColors.ErrorBg,
+                                shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
-                                    text = errorMessage,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    text = uiState.errorMessage,
+                                    color = MassColors.Danger,
                                     style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.padding(10.dp)
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
                                 )
                             }
                         }
                     }
 
-                    items(sessions, key = { it.id }) { item ->
+                    items(uiState.sessions, key = { it.id }) { item ->
                         val agentName = item.agentName.ifBlank {
-                            agentMap[item.definitionId]?.name ?: item.definitionId
+                            uiState.agentMap[item.definitionId]?.name ?: item.definitionId
                         }
-                        SessionListCard(
+                        SessionListItemCard(
                             session = item,
-                            agentName = agentName,
                             onClick = {
-                                val spaceId = resolvedSpaceId.ifBlank { item.spaceId }
+                                val spaceId = effectiveSpaceId.ifBlank { item.spaceId }
                                 onSelectSession(spaceId, item, agentName)
                             }
                         )
                     }
 
-                    if (nextCursor.isNotBlank()) {
+                    if (uiState.nextCursor.isNotBlank()) {
                         item(key = "load-more") {
                             Box(
                                 modifier = Modifier
@@ -244,37 +283,22 @@ fun SessionListScreen(
                                     .padding(vertical = 8.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                if (loadingMore) {
-                                    CircularProgressIndicator()
+                                if (uiState.loadingMore) {
+                                    CircularProgressIndicator(
+                                        color = MassColors.Focus,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(24.dp)
+                                    )
                                 } else {
-                                    OutlinedButton(onClick = {
-                                        val spaceId = resolvedSpaceId
-                                        if (spaceId.isBlank() || loadingMore) return@OutlinedButton
-                                        scope.launch {
-                                            loadingMore = true
-                                            try {
-                                                val page = withContext(Dispatchers.IO) {
-                                                    MassOpenApiClient.listSessions(
-                                                        baseUrl = baseUrl,
-                                                        token = config.openapiToken,
-                                                        spaceId = spaceId,
-                                                        agentId = effectiveAgentId,
-                                                        cursor = nextCursor,
-                                                        limit = 50
-                                                    )
-                                                }
-                                                val existingIds = sessions.map { it.id }.toSet()
-                                                val appended = page.items.filterNot { it.hide || it.id in existingIds }
-                                                sessions = (sessions + appended)
-                                                    .sortedWith(compareByDescending<SessionSummary> { it.createdAt }.thenByDescending { it.id })
-                                                nextCursor = page.nextCursor
-                                            } catch (t: Throwable) {
-                                                errorMessage = t.message ?: "Load more failed"
-                                            } finally {
-                                                loadingMore = false
-                                            }
-                                        }
-                                    }) {
+                                    OutlinedButton(
+                                        onClick = onLoadMore,
+                                        shape = RoundedCornerShape(10.dp),
+                                        border = BorderStroke(1.dp, MassColors.Border),
+                                        colors = ButtonDefaults.outlinedButtonColors(
+                                            containerColor = MassColors.Surface,
+                                            contentColor = MassColors.Text
+                                        )
+                                    ) {
                                         Text("加载更多")
                                     }
                                 }
@@ -285,57 +309,28 @@ fun SessionListScreen(
             }
         }
 
-        if (backendReady && resolvedSpaceId.isNotBlank()) {
+        if (pullRefreshState.isRefreshing || pullRefreshState.progress > 0f) {
+            PullToRefreshContainer(
+                state = pullRefreshState,
+                containerColor = MassColors.SurfaceRaised,
+                contentColor = MassColors.Focus,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
+        }
+
+        if (backendReady) {
             FloatingActionButton(
-                onClick = {
-                    createError = ""
-                    showCreateDialog = true
-                },
+                onClick = openNewDraft,
+                shape = RoundedCornerShape(14.dp),
+                containerColor = MassColors.Accent,
+                contentColor = Color.White,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(16.dp)
             ) {
-                Icon(Icons.Default.Add, contentDescription = "New Session")
+                Icon(Icons.Default.Add, contentDescription = "新建会话")
             }
         }
-    }
-
-    if (showCreateDialog) {
-        val currentAgentName = agentMap[effectiveAgentId]?.name.orEmpty()
-        CreateSessionDialog(
-            agentId = effectiveAgentId,
-            agentName = currentAgentName,
-            creating = creating,
-            error = createError,
-            onDismiss = { if (!creating) showCreateDialog = false },
-            onCreate = { title ->
-                val spaceId = resolvedSpaceId.ifBlank { MassConfig.DEFAULT_SPACE_ID }
-                val agentId = effectiveAgentId
-                scope.launch {
-                    creating = true
-                    createError = ""
-                    try {
-                        val created = withContext(Dispatchers.IO) {
-                            MassOpenApiClient.createSession(
-                                baseUrl = baseUrl,
-                                token = config.openapiToken,
-                                spaceId = spaceId,
-                                agentId = agentId,
-                                title = title
-                            )
-                        }
-                        showCreateDialog = false
-                        val agentName = created.agentName.ifBlank { agentMap[agentId]?.name ?: agentId }
-                        sessions = listOf(created) + sessions.filterNot { it.id == created.id }
-                        onSelectSession(spaceId, created, agentName)
-                    } catch (t: Throwable) {
-                        createError = t.message ?: "创建会话失败"
-                    } finally {
-                        creating = false
-                    }
-                }
-            }
-        )
     }
 }
 
@@ -352,45 +347,61 @@ private fun LocalServerNotReadyPlaceholder(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         if (serverStatus.isStarting) {
-            CircularProgressIndicator()
+            CircularProgressIndicator(
+                color = MassColors.Focus,
+                strokeWidth = 2.5.dp,
+                modifier = Modifier.size(32.dp)
+            )
             Spacer(modifier = Modifier.height(16.dp))
-            Text("正在启动本地 MASS Go 服务端…", style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = "正在启动本地 MASS 服务端…",
+                style = MaterialTheme.typography.titleMedium,
+                color = MassColors.Text
+            )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = serverStatus.logs.lastOrNull() ?: "正在连接 MariaDB / TOS 并监听本地端口",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MassColors.Muted
             )
         } else {
             Text(
                 text = if (serverStatus.isError) "本地服务端启动失败" else "尚未连接 MASS 后端",
-                style = MaterialTheme.typography.titleMedium
+                style = MaterialTheme.typography.titleMedium,
+                color = MassColors.Text
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
             if (serverStatus.error.isNotBlank()) {
                 Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    shape = MaterialTheme.shapes.medium,
+                    color = MassColors.ErrorBg,
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
                         text = serverStatus.error,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        color = MassColors.Danger,
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.padding(12.dp)
                     )
                 }
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(14.dp))
             } else {
                 Text(
-                    text = "请在设置中配置形态 A 本地服务端（MariaDB + TOS），或直接填写远端 MASS 后端地址。",
+                    text = "请在设置中配置形态 A 本地服务端（MariaDB + TOS），或填写远端 MASS 后端地址。",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MassColors.Muted
                 )
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(18.dp))
             }
-            Button(onClick = onOpenSettings) {
+            Button(
+                onClick = onOpenSettings,
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MassColors.Accent,
+                    contentColor = Color.White
+                )
+            ) {
                 Text("前往配置")
             }
         }
@@ -398,153 +409,43 @@ private fun LocalServerNotReadyPlaceholder(
 }
 
 @Composable
-private fun SessionListCard(
+private fun SessionListItemCard(
     session: SessionSummary,
-    agentName: String,
     onClick: () -> Unit
 ) {
-    Card(
+    Surface(
+        color = MassColors.Surface,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, MassColors.Border.copy(alpha = 0.65f)),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick)
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = session.displayTitle,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = formatTimestamp(session.createdAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (agentName.isNotBlank()) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = MaterialTheme.shapes.extraSmall
-                    ) {
-                        Text(
-                            text = agentName,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                }
-                if (session.draftRevision > 0) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.tertiaryContainer,
-                        shape = MaterialTheme.shapes.extraSmall
-                    ) {
-                        Text(
-                            text = "草稿调试",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onTertiaryContainer,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                }
-                if (session.workspaceError.isNotBlank()) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = MaterialTheme.shapes.extraSmall
-                    ) {
-                        Text(
-                            text = "文件待恢复",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.weight(1f))
-                Text(
-                    text = session.id,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            Text(
+                text = session.displayTitle,
+                color = MassColors.Text,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = formatTimestamp(session.createdAt),
+                color = MassColors.Muted,
+                fontSize = 12.sp,
+                maxLines = 1
+            )
         }
     }
-}
-
-@Composable
-private fun CreateSessionDialog(
-    agentId: String,
-    agentName: String,
-    creating: Boolean,
-    error: String,
-    onDismiss: () -> Unit,
-    onCreate: (title: String) -> Unit
-) {
-    var title by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("新建会话") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = if (agentName.isNotBlank()) "Agent: $agentName ($agentId)" else "Agent: $agentId",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("会话标题（可选）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                if (error.isNotBlank()) {
-                    Text(
-                        text = error,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                enabled = !creating,
-                onClick = { onCreate(title) }
-            ) {
-                Text(if (creating) "创建中…" else "创建")
-            }
-        },
-        dismissButton = {
-            TextButton(enabled = !creating, onClick = onDismiss) {
-                Text("取消")
-            }
-        }
-    )
 }
 
 internal fun formatTimestamp(iso: String): String {

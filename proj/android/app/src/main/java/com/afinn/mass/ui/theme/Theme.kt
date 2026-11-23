@@ -1,57 +1,48 @@
 package com.afinn.mass.ui.theme
 
-import android.app.Activity
-import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
 
-private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
-)
-
-private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
+private val MassDarkColorScheme = darkColorScheme(
+    primary = MassColors.Accent,
     onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+    primaryContainer = MassColors.AccentSoft,
+    onPrimaryContainer = MassColors.AccentText,
+    secondary = MassColors.Focus,
+    onSecondary = MassColors.Bg,
+    secondaryContainer = MassColors.SurfaceRaised,
+    onSecondaryContainer = MassColors.Text,
+    tertiary = MassColors.AccentText,
+    onTertiary = MassColors.Bg,
+    tertiaryContainer = MassColors.AccentSoft,
+    onTertiaryContainer = MassColors.AccentText,
+    background = MassColors.Bg,
+    onBackground = MassColors.Text,
+    surface = MassColors.Bg,
+    onSurface = MassColors.Text,
+    surfaceVariant = MassColors.Surface,
+    onSurfaceVariant = MassColors.Muted,
+    surfaceContainerLowest = MassColors.Bg,
+    surfaceContainerLow = MassColors.Surface,
+    surfaceContainer = MassColors.Surface,
+    surfaceContainerHigh = MassColors.SurfaceRaised,
+    surfaceContainerHighest = MassColors.Hover,
+    outline = MassColors.Border,
+    outlineVariant = MassColors.Border,
+    error = MassColors.Danger,
+    onError = MassColors.Bg,
+    errorContainer = MassColors.ErrorBg,
+    onErrorContainer = MassColors.Danger
 )
 
 @Composable
 fun MassTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
-
     MaterialTheme(
-        colorScheme = colorScheme,
+        colorScheme = MassDarkColorScheme,
         typography = Typography,
         content = content
     )

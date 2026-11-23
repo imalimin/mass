@@ -1,16 +1,17 @@
 package com.afinn.mass
 
 import android.Manifest
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,15 +26,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -41,35 +42,39 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.afinn.mass.ui.theme.MassColors
 import com.afinn.mass.ui.theme.MassTheme
-
-private data class ActiveSessionNav(
-    val spaceId: String,
-    val session: SessionSummary,
-    val agentName: String
-)
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private val notificationPermissionLauncher = registerForActivityResult(
@@ -78,7 +83,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT)
+        )
         requestNotificationPermissionIfNeeded()
         MassServerService.refreshStatus()
 
@@ -93,7 +101,13 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MassTheme {
-                MassApp(initialConfig = initialConfig)
+                MassHomeApp(
+                    initialConfig = initialConfig,
+                    onExitApp = {
+                        MassServerService.stop(this)
+                        finish()
+                    }
+                )
             }
         }
     }
@@ -113,111 +127,201 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MassApp(initialConfig: MassConfig) {
+private fun MassHomeApp(
+    initialConfig: MassConfig,
+    onExitApp: () -> Unit
+) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val status by MassServerService.status.collectAsState()
+    val listUiState by SessionListCache.state.collectAsState()
+
     var config by remember { mutableStateOf(initialConfig) }
-    var activeSession by remember { mutableStateOf<ActiveSessionNav?>(null) }
-    var activeTitle by remember { mutableStateOf("") }
-    var resolvedSpaceId by remember { mutableStateOf(initialConfig.spaceId) }
     var showSettings by remember { mutableStateOf(false) }
-    var showLogs by remember { mutableStateOf(false) }
-    var listRefreshTrigger by remember { mutableIntStateOf(0) }
-    var chatRefreshTrigger by remember { mutableIntStateOf(0) }
+
+    BackHandler {
+        if (showSettings) {
+            showSettings = false
+        } else {
+            onExitApp()
+        }
+    }
+
+    val baseUrl = config.effectiveApiBaseUrl(status)
+    val backendReady = config.useRemoteServer || status.isRunning
+    val effectiveSpaceId = config.spaceId.trim().ifBlank { MassConfig.DEFAULT_SPACE_ID }
+    val effectiveAgentId = config.agentId.trim().ifBlank { MassConfig.DEFAULT_AGENT_ID }
+    val listKey = "$baseUrl|${config.openapiToken}|$effectiveSpaceId|$effectiveAgentId"
+
+    fun fetchSessions(isPullRefresh: Boolean) {
+        if (!backendReady) return
+        scope.launch {
+            SessionListCache.update { cur ->
+                cur.copy(
+                    loading = !isPullRefresh && cur.sessions.isEmpty(),
+                    refreshing = isPullRefresh,
+                    errorMessage = ""
+                )
+            }
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    val agents = runCatching {
+                        MassOpenApiClient.listAgents(baseUrl, config.openapiToken, effectiveSpaceId)
+                    }.getOrDefault(emptyList())
+                    val page = MassOpenApiClient.listSessions(
+                        baseUrl = baseUrl,
+                        token = config.openapiToken,
+                        spaceId = effectiveSpaceId,
+                        agentId = effectiveAgentId,
+                        cursor = "",
+                        limit = 50
+                    )
+                    agents to page
+                }
+                val (agents, page) = result
+                val sorted = page.items.filterNot { it.hide }
+                    .sortedWith(compareByDescending<SessionSummary> { it.createdAt }.thenByDescending { it.id })
+                SessionListCache.update { cur ->
+                    cur.copy(
+                        loadedKey = listKey,
+                        spaceId = effectiveSpaceId,
+                        sessions = sorted,
+                        agentMap = agents.associateBy { it.id },
+                        nextCursor = page.nextCursor,
+                        loading = false,
+                        refreshing = false,
+                        errorMessage = ""
+                    )
+                }
+            } catch (t: Throwable) {
+                SessionListCache.update { cur ->
+                    cur.copy(
+                        loadedKey = listKey,
+                        loading = false,
+                        refreshing = false,
+                        errorMessage = t.message ?: "加载会话列表失败"
+                    )
+                }
+            }
+        }
+    }
+
+    fun loadMoreSessions() {
+        val cursor = listUiState.nextCursor
+        if (!backendReady || cursor.isBlank() || listUiState.loadingMore) return
+        scope.launch {
+            SessionListCache.update { it.copy(loadingMore = true) }
+            try {
+                val page = withContext(Dispatchers.IO) {
+                    MassOpenApiClient.listSessions(
+                        baseUrl = baseUrl,
+                        token = config.openapiToken,
+                        spaceId = effectiveSpaceId,
+                        agentId = effectiveAgentId,
+                        cursor = cursor,
+                        limit = 50
+                    )
+                }
+                SessionListCache.update { cur ->
+                    val existingIds = cur.sessions.map { it.id }.toSet()
+                    val appended = page.items.filterNot { it.hide || it.id in existingIds }
+                    val merged = (cur.sessions + appended)
+                        .sortedWith(compareByDescending<SessionSummary> { it.createdAt }.thenByDescending { it.id })
+                    cur.copy(
+                        sessions = merged,
+                        nextCursor = page.nextCursor,
+                        loadingMore = false
+                    )
+                }
+            } catch (t: Throwable) {
+                SessionListCache.update { cur ->
+                    cur.copy(
+                        loadingMore = false,
+                        errorMessage = t.message ?: "加载更多失败"
+                    )
+                }
+            }
+        }
+    }
+
+    // Load only on first readiness or when connection/space/agent settings change.
+    // Returning from SessionChatActivity does NOT trigger an automatic refresh.
+    LaunchedEffect(backendReady, listKey) {
+        if (backendReady && listUiState.loadedKey != listKey) {
+            fetchSessions(isPullRefresh = false)
+        }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        containerColor = MassColors.Bg,
         topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    when {
-                        showSettings -> {
+            Column {
+                TopAppBar(
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MassColors.Bg,
+                        titleContentColor = MassColors.Text,
+                        navigationIconContentColor = MassColors.Text,
+                        actionIconContentColor = MassColors.Muted
+                    ),
+                    navigationIcon = {
+                        if (showSettings) {
                             IconButton(onClick = { showSettings = false }) {
-                                Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                             }
                         }
-                        activeSession != null -> {
-                            IconButton(onClick = {
-                                activeSession = null
-                                listRefreshTrigger++
-                            }) {
-                                Icon(Icons.Default.ArrowBack, contentDescription = "Back to sessions")
-                            }
-                        }
-                    }
-                },
-                title = {
-                    when {
-                        showSettings -> {
-                            Text("设置", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-
-                        activeSession != null -> {
-                            val nav = activeSession!!
-                            Column {
-                                Text(
-                                    text = activeTitle.ifBlank { nav.session.displayTitle },
-                                    style = MaterialTheme.typography.titleMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = nav.agentName.ifBlank { nav.session.definitionId },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-
-                        else -> {
+                    },
+                    title = {
+                        if (showSettings) {
+                            Text(
+                                text = "设置",
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        } else {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 StatusDot(
                                     state = if (config.useRemoteServer) MassStatus.STATE_RUNNING else status.state
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        text = "会话列表",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    val endpointLabel = config.effectiveApiBaseUrl(status)
-                                    val spaceLabel = resolvedSpaceId.ifBlank { "OpenAPI" }
-                                    Text(
-                                        text = "$spaceLabel · $endpointLabel",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "MASS",
+                                    fontSize = 19.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.6.sp,
+                                    color = MassColors.Text,
+                                    maxLines = 1
+                                )
                             }
                         }
-                    }
-                },
-                actions = {
-                    if (!showSettings) {
-                        IconButton(onClick = {
-                            if (activeSession != null) {
-                                chatRefreshTrigger++
-                            } else {
-                                listRefreshTrigger++
+                    },
+                    actions = {
+                        IconButton(
+                            onClick = {
+                                DiagnosticsActivity.start(
+                                    context = context,
+                                    spaceId = effectiveSpaceId,
+                                    sessionId = "",
+                                    agentId = effectiveAgentId,
+                                    runId = "",
+                                    baseUrl = baseUrl
+                                )
                             }
-                        }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_mass_activity),
+                                contentDescription = "诊断信息",
+                                tint = MassColors.Muted
+                            )
+                        }
+                        IconButton(onClick = { showSettings = !showSettings }) {
+                            Icon(Icons.Default.Settings, contentDescription = "设置")
                         }
                     }
-                    IconButton(onClick = { showLogs = true }) {
-                        Icon(Icons.Default.Info, contentDescription = "Logs")
-                    }
-                    IconButton(onClick = { showSettings = !showSettings }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
-                }
-            )
+                )
+                HorizontalDivider(color = MassColors.Border.copy(alpha = 0.6f), thickness = 1.dp)
+            }
         }
     ) { innerPadding ->
         Box(
@@ -225,101 +329,91 @@ private fun MassApp(initialConfig: MassConfig) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            when {
-                showSettings -> {
-                    ConfigScreen(
-                        config = config,
-                        status = status,
-                        onConfigChange = { config = it },
-                        onSaveAndApply = { updated ->
-                            val normalized = updated.copy(mode = MassStatus.MODE_FULL)
-                            config = normalized
-                            MassConfigStore.save(context, normalized)
-                            if (normalized.useRemoteServer) {
-                                if (status.isRunning || status.isStarting) {
-                                    MassServerService.stop(context)
-                                }
-                            } else if (normalized.hasFullBackendCredentials()) {
-                                MassServerService.start(context, normalized)
+            if (showSettings) {
+                ConfigScreen(
+                    config = config,
+                    status = status,
+                    onConfigChange = { config = it },
+                    onSaveAndApply = { updated ->
+                        val normalized = updated.copy(mode = MassStatus.MODE_FULL)
+                        config = normalized
+                        MassConfigStore.save(context, normalized)
+                        SessionListCache.update { it.copy(loadedKey = "") }
+                        if (normalized.useRemoteServer) {
+                            if (status.isRunning || status.isStarting) {
+                                MassServerService.stop(context)
                             }
-                            showSettings = false
-                            activeSession = null
-                            listRefreshTrigger++
-                        },
-                        onStopLocalServer = {
-                            MassServerService.stop(context)
+                        } else if (normalized.hasFullBackendCredentials()) {
+                            MassServerService.start(context, normalized)
                         }
-                    )
-                }
-
-                activeSession != null -> {
-                    val nav = activeSession!!
-                    SessionChatScreen(
-                        baseUrl = config.effectiveApiBaseUrl(status),
-                        token = config.openapiToken,
-                        spaceId = nav.spaceId,
-                        initialSession = nav.session,
-                        agentDisplayName = nav.agentName,
-                        refreshTrigger = chatRefreshTrigger,
-                        onTitleUpdated = { activeTitle = it },
-                        onBack = {
-                            activeSession = null
-                            listRefreshTrigger++
-                        }
-                    )
-                }
-
-                else -> {
-                    SessionListScreen(
-                        config = config,
-                        serverStatus = status,
-                        refreshTrigger = listRefreshTrigger,
-                        onResolvedSpace = { resolvedSpaceId = it },
-                        onSelectSession = { spaceId, session, agentName ->
-                            activeTitle = session.displayTitle
-                            activeSession = ActiveSessionNav(spaceId, session, agentName)
-                        },
-                        onOpenSettings = { showSettings = true }
-                    )
-                }
+                        showSettings = false
+                    },
+                    onStopLocalServer = {
+                        MassServerService.stop(context)
+                    }
+                )
+            } else {
+                SessionListScreen(
+                    config = config,
+                    serverStatus = status,
+                    uiState = listUiState,
+                    onRefresh = { fetchSessions(isPullRefresh = true) },
+                    onLoadMore = { loadMoreSessions() },
+                    onSelectSession = { spaceId, session, agentName ->
+                        SessionChatActivity.start(
+                            context = context,
+                            spaceId = spaceId,
+                            agentId = session.definitionId.ifBlank { effectiveAgentId },
+                            agentName = agentName,
+                            session = session
+                        )
+                    },
+                    onNewSession = { spaceId, agentId, agentName ->
+                        SessionChatActivity.start(
+                            context = context,
+                            spaceId = spaceId,
+                            agentId = agentId,
+                            agentName = agentName,
+                            session = null
+                        )
+                    },
+                    onOpenSettings = { showSettings = true }
+                )
             }
         }
-    }
-
-    if (showLogs) {
-        LogDialog(
-            config = config,
-            status = status,
-            onDismiss = { showLogs = false },
-            onCopy = {
-                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                val text = buildString {
-                    appendLine("api_base=${config.effectiveApiBaseUrl(status)}")
-                    appendLine("state=${status.state} mode=${status.mode} url=${status.url}")
-                    if (status.error.isNotBlank()) appendLine("error=${status.error}")
-                    status.logs.forEach { appendLine(it) }
-                }
-                cm.setPrimaryClip(ClipData.newPlainText("MASS Logs", text))
-            }
-        )
     }
 }
 
 @Composable
 private fun StatusDot(state: String) {
     val color = when (state) {
-        MassStatus.STATE_RUNNING -> Color(0xFF2E7D32)
-        MassStatus.STATE_STARTING, MassStatus.STATE_STOPPING -> Color(0xFFF9A825)
-        MassStatus.STATE_ERROR -> Color(0xFFC62828)
-        else -> Color(0xFF757575)
+        MassStatus.STATE_RUNNING -> MassColors.Success
+        MassStatus.STATE_STARTING, MassStatus.STATE_STOPPING -> MassColors.Warning
+        MassStatus.STATE_ERROR -> MassColors.Danger
+        else -> MassColors.Subtle
     }
     Box(
         modifier = Modifier
-            .size(10.dp)
+            .size(8.dp)
             .clip(CircleShape)
             .background(color)
     )
 }
+
+@Composable
+private fun massTextFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = MassColors.Text,
+    unfocusedTextColor = MassColors.Text,
+    focusedContainerColor = MassColors.SurfaceRaised,
+    unfocusedContainerColor = MassColors.SurfaceRaised,
+    focusedBorderColor = MassColors.Focus,
+    unfocusedBorderColor = MassColors.Border,
+    focusedLabelColor = MassColors.AccentText,
+    unfocusedLabelColor = MassColors.Muted,
+    cursorColor = MassColors.Focus,
+    focusedPlaceholderColor = MassColors.Subtle,
+    unfocusedPlaceholderColor = MassColors.Subtle
+)
 
 @Composable
 private fun ConfigScreen(
@@ -330,12 +424,16 @@ private fun ConfigScreen(
     onStopLocalServer: () -> Unit
 ) {
     var showImportDialog by remember { mutableStateOf(false) }
+    var showSecretKey by remember { mutableStateOf(false) }
     var envInput by remember { mutableStateOf("") }
     var portText by remember(config.port) { mutableStateOf(config.port.toString()) }
+    val fieldColors = massTextFieldColors()
+    val fieldShape = RoundedCornerShape(10.dp)
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(MassColors.Bg)
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -345,9 +443,13 @@ private fun ConfigScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("OpenAPI 访问配置", style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = "OpenAPI 访问配置",
+                style = MaterialTheme.typography.titleMedium,
+                color = MassColors.Text
+            )
             TextButton(onClick = { showImportDialog = true }) {
-                Text("粘贴 .env")
+                Text("粘贴 .env", color = MassColors.AccentText)
             }
         }
 
@@ -356,6 +458,8 @@ private fun ConfigScreen(
             onValueChange = { onConfigChange(config.copy(openapiToken = it)) },
             label = { Text("OpenAPI Bearer Token") },
             singleLine = true,
+            shape = fieldShape,
+            colors = fieldColors,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
@@ -363,6 +467,8 @@ private fun ConfigScreen(
             onValueChange = { onConfigChange(config.copy(spaceId = it)) },
             label = { Text("Space ID（默认 ${MassConfig.DEFAULT_SPACE_ID}）") },
             singleLine = true,
+            shape = fieldShape,
+            colors = fieldColors,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
@@ -370,6 +476,8 @@ private fun ConfigScreen(
             onValueChange = { onConfigChange(config.copy(agentId = it)) },
             label = { Text("Agent ID（默认 ${MassConfig.DEFAULT_AGENT_ID}）") },
             singleLine = true,
+            shape = fieldShape,
+            colors = fieldColors,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
@@ -378,15 +486,21 @@ private fun ConfigScreen(
             label = { Text("远端后端 URL（留空则使用本地内置 Go 服务端）") },
             placeholder = { Text("例如 http://192.168.1.10:8080") },
             singleLine = true,
+            shape = fieldShape,
+            colors = fieldColors,
             modifier = Modifier.fillMaxWidth()
         )
 
-        HorizontalDivider()
-        Text("本地内置 Go 服务端（形态 A）", style = MaterialTheme.typography.titleMedium)
+        HorizontalDivider(color = MassColors.Border)
+        Text(
+            text = "本地内置 Go 服务端（形态 A）",
+            style = MaterialTheme.typography.titleMedium,
+            color = MassColors.Text
+        )
         Text(
             text = "当上方远端 URL 留空时，应用在本地 127.0.0.1 启动 MASS Go 服务端连接以下 MariaDB 与 TOS。",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MassColors.Muted
         )
 
         OutlinedTextField(
@@ -400,6 +514,8 @@ private fun ConfigScreen(
             label = { Text("Local HTTP Port (127.0.0.1)") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             singleLine = true,
+            shape = fieldShape,
+            colors = fieldColors,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
@@ -408,6 +524,8 @@ private fun ConfigScreen(
             label = { Text("MASS_MARIADB_DSN") },
             placeholder = { Text("user:pass@tcp(192.168.1.10:3306)/mass") },
             singleLine = true,
+            shape = fieldShape,
+            colors = fieldColors,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
@@ -416,6 +534,8 @@ private fun ConfigScreen(
             label = { Text("MASS_TOS_ENDPOINT") },
             placeholder = { Text("https://tos-cn-guangzhou.volces.com") },
             singleLine = true,
+            shape = fieldShape,
+            colors = fieldColors,
             modifier = Modifier.fillMaxWidth()
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -424,6 +544,8 @@ private fun ConfigScreen(
                 onValueChange = { onConfigChange(config.copy(tosRegion = it)) },
                 label = { Text("MASS_TOS_REGION") },
                 singleLine = true,
+                shape = fieldShape,
+                colors = fieldColors,
                 modifier = Modifier.weight(1f)
             )
             OutlinedTextField(
@@ -431,6 +553,8 @@ private fun ConfigScreen(
                 onValueChange = { onConfigChange(config.copy(tosPrefix = it)) },
                 label = { Text("TOS Prefix") },
                 singleLine = true,
+                shape = fieldShape,
+                colors = fieldColors,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -439,6 +563,8 @@ private fun ConfigScreen(
             onValueChange = { onConfigChange(config.copy(tosBucket = it)) },
             label = { Text("MASS_TOS_BUCKET") },
             singleLine = true,
+            shape = fieldShape,
+            colors = fieldColors,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
@@ -446,16 +572,33 @@ private fun ConfigScreen(
             onValueChange = { onConfigChange(config.copy(tosAccessKey = it)) },
             label = { Text("MASS_TOS_ACCESS_KEY") },
             singleLine = true,
+            shape = fieldShape,
+            colors = fieldColors,
             modifier = Modifier.fillMaxWidth()
         )
-        OutlinedTextField(
-            value = config.tosSecretKey,
-            onValueChange = { onConfigChange(config.copy(tosSecretKey = it)) },
-            label = { Text("MASS_TOS_SECRET_KEY") },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = config.tosSecretKey,
+                onValueChange = { onConfigChange(config.copy(tosSecretKey = it)) },
+                label = { Text("MASS_TOS_SECRET_KEY (${config.tosSecretKey.trim().length} 字符)") },
+                visualTransformation = if (showSecretKey) VisualTransformation.None else PasswordVisualTransformation(),
+                singleLine = true,
+                shape = fieldShape,
+                colors = fieldColors,
+                modifier = Modifier.weight(1f)
+            )
+            OutlinedButton(
+                onClick = { showSecretKey = !showSecretKey },
+                shape = fieldShape,
+                border = BorderStroke(1.dp, MassColors.Border),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MassColors.Text)
+            ) {
+                Text(if (showSecretKey) "隐藏" else "显示")
+            }
+        }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -465,22 +608,34 @@ private fun ConfigScreen(
                 onValueChange = { onConfigChange(config.copy(masterKey = it)) },
                 label = { Text("MASS_MASTER_KEY (32B Base64)") },
                 singleLine = true,
+                shape = fieldShape,
+                colors = fieldColors,
                 modifier = Modifier.weight(1f)
             )
-            OutlinedButton(onClick = {
-                onConfigChange(config.copy(masterKey = MassConfig.generateMasterKey()))
-            }) {
+            OutlinedButton(
+                onClick = {
+                    onConfigChange(config.copy(masterKey = MassConfig.generateMasterKey()))
+                },
+                shape = fieldShape,
+                border = BorderStroke(1.dp, MassColors.Border),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MassColors.Text)
+            ) {
                 Text("生成")
             }
         }
 
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Button(
                 onClick = { onSaveAndApply(config) },
+                shape = fieldShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MassColors.Accent,
+                    contentColor = Color.White
+                ),
                 modifier = Modifier.weight(1f)
             ) {
                 Text(
@@ -494,7 +649,12 @@ private fun ConfigScreen(
                 )
             }
             if (status.isRunning || status.isStarting) {
-                OutlinedButton(onClick = onStopLocalServer) {
+                OutlinedButton(
+                    onClick = onStopLocalServer,
+                    shape = fieldShape,
+                    border = BorderStroke(1.dp, MassColors.Border),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MassColors.Danger)
+                ) {
                     Text("停止")
                 }
             }
@@ -504,6 +664,9 @@ private fun ConfigScreen(
     if (showImportDialog) {
         AlertDialog(
             onDismissRequest = { showImportDialog = false },
+            containerColor = MassColors.SurfaceRaised,
+            titleContentColor = MassColors.Text,
+            textContentColor = MassColors.Text,
             title = { Text("粘贴 .env 导入") },
             text = {
                 OutlinedTextField(
@@ -516,78 +679,31 @@ private fun ConfigScreen(
                     },
                     minLines = 6,
                     maxLines = 12,
+                    shape = fieldShape,
+                    colors = fieldColors,
                     modifier = Modifier.fillMaxWidth()
                 )
             },
             confirmButton = {
-                Button(onClick = {
-                    onConfigChange(MassConfig.applyEnvText(config, envInput))
-                    showImportDialog = false
-                }) {
+                Button(
+                    onClick = {
+                        onConfigChange(MassConfig.applyEnvText(config, envInput))
+                        showImportDialog = false
+                    },
+                    shape = fieldShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MassColors.Accent,
+                        contentColor = Color.White
+                    )
+                ) {
                     Text("应用")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showImportDialog = false }) {
-                    Text("取消")
+                    Text("取消", color = MassColors.Muted)
                 }
             }
         )
     }
-}
-
-@Composable
-private fun LogDialog(
-    config: MassConfig,
-    status: MassStatus,
-    onDismiss: () -> Unit,
-    onCopy: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("运行诊断 (${status.state})") },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(340.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = "OpenAPI Base: ${config.effectiveApiBaseUrl(status)}\n" +
-                        "Local Server: ${status.state} (${status.version.ifBlank { "unknown" }})\n" +
-                        "HTTP Live: ${status.httpLive}",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace
-                )
-                if (status.error.isNotBlank()) {
-                    Text(
-                        text = "Error: ${status.error}",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                if (status.logs.isEmpty()) {
-                    Text("暂无本地服务端日志。", style = MaterialTheme.typography.bodySmall)
-                } else {
-                    status.logs.forEach { line ->
-                        Text(
-                            text = line,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
-        },
-        dismissButton = {
-            TextButton(onClick = onCopy) { Text("复制") }
-        }
-    )
 }

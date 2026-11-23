@@ -12,9 +12,27 @@ static void massAndroidLog(const char* msg) {
 }
 */
 import "C"
-import "unsafe"
+import (
+	"os"
+	"strings"
+	"unsafe"
+)
 
 func init() {
+	if os.Getenv("SSL_CERT_DIR") == "" {
+		var dirs []string
+		for _, dir := range []string{
+			"/apex/com.android.conscrypt/cacerts",
+			"/system/etc/security/cacerts",
+		} {
+			if info, err := os.Stat(dir); err == nil && info.IsDir() {
+				dirs = append(dirs, dir)
+			}
+		}
+		if len(dirs) > 0 {
+			_ = os.Setenv("SSL_CERT_DIR", strings.Join(dirs, ":"))
+		}
+	}
 	defaultManager = newServerManager(func(line string) {
 		cstr := C.CString(line)
 		C.massAndroidLog(cstr)

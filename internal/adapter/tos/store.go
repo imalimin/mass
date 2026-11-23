@@ -94,9 +94,15 @@ func (s *Store) Append(ctx context.Context, key string, offset int64, data []byt
 type Error struct {
 	Operation string
 	Status    int
+	Cause     string
 }
 
-func (e *Error) Error() string   { return fmt.Sprintf("TOS %s failed (HTTP %d)", e.Operation, e.Status) }
+func (e *Error) Error() string {
+	if e.Status == 0 && e.Cause != "" {
+		return fmt.Sprintf("TOS %s failed (transport: %s)", e.Operation, e.Cause)
+	}
+	return fmt.Sprintf("TOS %s failed (HTTP %d)", e.Operation, e.Status)
+}
 func (e *Error) HTTPStatus() int { return e.Status }
 func safeError(operation string, err error) error {
 	if err == nil {
@@ -105,5 +111,16 @@ func safeError(operation string, err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	return &Error{Operation: operation, Status: sdk.StatusCode(err)}
+	status := sdk.StatusCode(err)
+	cause := ""
+	if status == 0 {
+		cause = err.Error()
+		if idx := strings.Index(cause, "?"); idx >= 0 {
+			cause = cause[:idx]
+		}
+		if len(cause) > 240 {
+			cause = cause[:240]
+		}
+	}
+	return &Error{Operation: operation, Status: status, Cause: cause}
 }

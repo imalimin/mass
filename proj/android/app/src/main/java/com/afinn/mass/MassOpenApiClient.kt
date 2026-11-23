@@ -51,10 +51,22 @@ data class RunSummary(
     val status: String,
     val error: String,
     val cancelRequested: Boolean,
-    val createdAt: String
+    val createdAt: String,
+    val userEventId: String = ""
 ) {
     val isActive: Boolean get() = status == "queued" || status == "running"
 }
+
+data class PlanStep(
+    val id: String,
+    val title: String,
+    val status: String
+)
+
+data class RunPlan(
+    val revision: Long,
+    val steps: List<PlanStep>
+)
 
 data class AttachmentInfo(
     val id: String,
@@ -68,7 +80,9 @@ data class ToolCallState(
     val name: String,
     val status: String,
     val arguments: String = "",
-    val result: String = ""
+    val result: String = "",
+    val standard: Boolean = true,
+    val parentMessageId: String = ""
 )
 
 data class ChatMessage(
@@ -77,6 +91,7 @@ data class ChatMessage(
     val role: String,
     val sequence: String,
     val content: String,
+    val sourceEventId: String = "",
     val complete: Boolean = true,
     val truncated: Boolean = false,
     val attachments: List<AttachmentInfo> = emptyList(),
@@ -476,7 +491,8 @@ object MassOpenApiClient {
             status = obj.optString("status"),
             error = obj.optString("error"),
             cancelRequested = obj.optBoolean("cancel_requested", false),
-            createdAt = obj.optString("created_at")
+            createdAt = obj.optString("created_at"),
+            userEventId = obj.optString("user_event_id")
         )
     }
 
@@ -508,7 +524,9 @@ object MassOpenApiClient {
                             name = t.optString("name").ifBlank { "tool" },
                             status = t.optString("status"),
                             arguments = t.optString("arguments"),
-                            result = t.optString("result")
+                            result = t.optString("result"),
+                            standard = t.optBoolean("standard", true),
+                            parentMessageId = t.optString("parent_message_id")
                         )
                     )
                 }
@@ -520,6 +538,7 @@ object MassOpenApiClient {
             role = obj.optString("role"),
             sequence = obj.optString("sequence", "0"),
             content = obj.optString("content"),
+            sourceEventId = obj.optString("source_event_id"),
             complete = obj.optBoolean("complete", true),
             truncated = obj.optBoolean("truncated", false),
             attachments = attachments,
