@@ -85,12 +85,12 @@ func (s *Store) EvaluationDatasets(ctx context.Context, actor, space string, q i
 	return
 }
 
-const experimentColumns = "e.id,e.space_id,e.actor_id,e.created_at,e.dataset_id,e.dataset_version,e.agent_id,e.agent_version_id,e.concurrency,e.idempotency_key,e.request_digest,e.result,e.completed_at,JSON_LENGTH(d.cases)"
+const experimentColumns = "e.id,e.space_id,e.actor_id,e.created_at,e.dataset_id,d.name,e.dataset_version,e.agent_id,e.agent_version_id,e.concurrency,e.idempotency_key,e.request_digest,e.result,e.completed_at,JSON_LENGTH(d.cases)"
 const experimentFrom = " FROM evaluation_experiments e JOIN evaluation_datasets d ON d.space_id=e.space_id AND d.id=e.dataset_id AND d.version=e.dataset_version"
 
 func experimentRow(scan func(...any) error) (v evaluation.Experiment, err error) {
 	var raw []byte
-	err = scan(&v.ID, &v.SpaceID, &v.ActorID, &v.CreatedAt, &v.DatasetID, &v.DatasetVersion, &v.AgentID, &v.AgentVersionID, &v.Concurrency, &v.Key, &v.Digest, &raw, &v.CompletedAt, &v.CaseCount)
+	err = scan(&v.ID, &v.SpaceID, &v.ActorID, &v.CreatedAt, &v.DatasetID, &v.DatasetName, &v.DatasetVersion, &v.AgentID, &v.AgentVersionID, &v.Concurrency, &v.Key, &v.Digest, &raw, &v.CompletedAt, &v.CaseCount)
 	if err == nil && raw != nil {
 		err = json.Unmarshal(raw, &v.Result)
 	}
@@ -138,7 +138,7 @@ func (s *Store) CreateEvaluationExperiment(ctx context.Context, in evaluation.Ex
 		if e = evaluation.ValidateDataset(evaluation.DatasetInput{Name: d.Name, Cases: d.Cases}); e != nil {
 			return e
 		}
-		v.DatasetVersion, v.CaseCount = d.Version, len(d.Cases)
+		v.DatasetName, v.DatasetVersion, v.CaseCount = d.Name, d.Version, len(d.Cases)
 		_, e = tx.ExecContext(ctx, "INSERT INTO evaluation_experiments(id,space_id,actor_id,created_at,dataset_id,dataset_version,agent_id,agent_version_id,concurrency,idempotency_key,request_digest) VALUES(?,?,?,?,?,?,?,?,?,?,?)", v.ID, v.SpaceID, v.ActorID, v.CreatedAt, v.DatasetID, v.DatasetVersion, v.AgentID, v.AgentVersionID, v.Concurrency, v.Key, v.Digest)
 		return e
 	})

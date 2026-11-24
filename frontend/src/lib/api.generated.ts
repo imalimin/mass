@@ -2068,6 +2068,7 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             dataset_id: components["schemas"]["ShortResourceID"];
+            dataset_name?: string;
             dataset_version: number;
             agent_id: components["schemas"]["ShortResourceID"];
             /** Format: uuid */

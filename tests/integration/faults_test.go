@@ -76,29 +76,10 @@ func (m *faultModel) Stream(ctx context.Context, snapshot run.Snapshot, p run.Pr
 	}
 
 	if endpoint, ok := strings.CutPrefix(task, "code while space locked "); ok && len(p.Messages[last+1:]) == 0 {
-		raw, _ := json.Marshal(run.CodeInput{
-			Language: "javascript", Input: json.RawMessage("null"),
-			Code: "net.request({url:" + strconv.Quote(endpoint) + "});fs.mkdir('first/second');" +
-				"fs.writeFile('first/second/finished.txt','ok',{expected_sha256:'missing'});return true;",
+		raw, _ := json.Marshal(map[string]any{
+			"command": "curl -fsS " + strconv.Quote(endpoint) + " && mkdir -p first/second && printf ok > first/second/finished.txt",
 		})
-		return run.Reply{Message: run.Message{Role: "assistant", ToolCalls: []run.Call{{ID: "local-file-tool", Name: "run_code_js", Arguments: string(raw)}}}, FinishReason: "tool_calls"}, nil
-	}
-	if request, ok := strings.CutPrefix(task, "code network deadline "); ok {
-		for _, msg := range p.Messages[last+1:] {
-			if msg.Role == "tool" {
-				var result run.ToolResult
-				if err := json.Unmarshal([]byte(msg.Content), &result); err != nil || result.Error != "code_timeout" || result.SideEffect != "none" {
-					return run.Reply{}, errors.New("agent did not receive the code timeout")
-				}
-				return run.Reply{Message: run.Message{Role: "assistant", Content: "Handled tool timeout"}, FinishReason: "stop"}, nil
-			}
-		}
-		method, endpoint, _ := strings.Cut(request, " ")
-		raw, _ := json.Marshal(run.CodeInput{
-			Language: "javascript", Input: json.RawMessage("null"),
-			Code: "net.request({method:" + strconv.Quote(method) + ",url:" + strconv.Quote(endpoint) + "});return true;",
-		})
-		return run.Reply{Message: run.Message{Role: "assistant", ToolCalls: []run.Call{{ID: "network-deadline", Name: "run_code_js", Arguments: string(raw)}}}, FinishReason: "tool_calls"}, nil
+		return run.Reply{Message: run.Message{Role: "assistant", ToolCalls: []run.Call{{ID: "local-file-tool", Name: run.CommandTool, Arguments: string(raw)}}}, FinishReason: "tool_calls"}, nil
 	}
 
 	if p.Spec.Purpose == "task" && strings.Contains(task, "retry") {
@@ -126,7 +107,7 @@ func (m *faultModel) Stream(ctx context.Context, snapshot run.Snapshot, p run.Pr
 	}
 
 	if strings.Contains(task, "code revocation") {
-		return run.Reply{Message: run.Message{Role: "assistant", ToolCalls: []run.Call{{ID: "revocation-code", Name: "run_code_js", Arguments: `{"language":"javascript","input":null,"code":"fs.writeFile('revoked.txt','kept',{expected_sha256:'missing'});while(true){}"}`}}}, FinishReason: "tool_calls"}, nil
+		return run.Reply{Message: run.Message{Role: "assistant", ToolCalls: []run.Call{{ID: "revocation-code", Name: run.CommandTool, Arguments: `{"command":"printf kept > revoked.txt && sleep 60"}`}}}, FinishReason: "tool_calls"}, nil
 	}
 	if strings.Contains(task, "artifact") {
 		count := 0
@@ -139,7 +120,7 @@ func (m *faultModel) Stream(ctx context.Context, snapshot run.Snapshot, p run.Pr
 		name, args := "", ""
 		if count == 0 {
 			name = "write_file"
-			args = `{"path":"retained.txt","content":"retained D09","expected_sha256":"missing","media_type":"text/plain"}`
+			args = `{"path":"retained.txt","content":"retained D09"}`
 		}
 		if count == 1 {
 			name = "publish_artifact"
@@ -217,7 +198,7 @@ func newFaultRigWithTimeout(t *testing.T, timeoutSeconds int) *faultRig {
 		t.Fatal(err)
 	}
 	r.agent = agent.ID
-	cfg := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Tools: []string{"write_file", "read_file", "publish_artifact", "run_code_js"}, Skills: []catalog.SkillRef{}}
+	cfg := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Tools: []string{"write_file", "read_file", "publish_artifact", run.CommandTool}, Skills: []catalog.SkillRef{}}
 	cfg.Context.MaxInputTokens = 24000
 	cfg.Context.MaxTokens = 512
 	cfg.Context.Compression = "summary"
@@ -548,36 +529,6 @@ func TestToolsDoNotRecheckRunInDatabase(t *testing.T) {
 		t.Fatalf("unexpected final state: status=%s error=%s snapshot=%s", v.Status, v.Error, v.WorkspaceSnapshotID)
 	}
 	r.terminalOnce(v)
-}
-
-func TestCodeNetworkTimeoutKeepsCauseAndEffect(t *testing.T) {
-	r := newFaultRigWithTimeout(t, 30)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		<-req.Context().Done()
-	}))
-	defer server.Close()
-	for _, tc := range []struct{ method, status, code, effect string }{
-		{"GET", "succeeded", "", "none"},
-		{"POST", "failed", "code_timeout", "unknown"},
-	} {
-		t.Run(tc.method, func(t *testing.T) {
-			v := r.wait(r.submit(r.session(), "code network deadline "+tc.method+" "+server.URL).ID)
-			if v.Status != tc.status || v.Error != tc.code {
-				t.Fatal("unexpected run outcome", v.Status, v.Error)
-			}
-			page := awaitToolTrace(t, context.Background(), r.runtime.Trace, r.db.Store, v)
-			var step struct {
-				Tools []struct{ Result run.ToolResult }
-			}
-			if len(page.Items) == 0 || json.Unmarshal(page.Items[0], &step) != nil || len(step.Tools) != 1 {
-				t.Fatal("missing timed-out tool in trace")
-			}
-			got := step.Tools[0].Result
-			if got.Error != "code_timeout" || got.SideEffect != tc.effect {
-				t.Fatal("unexpected tool error or side effect", got.Error, got.SideEffect)
-			}
-		})
-	}
 }
 
 func TestFaultQueuedCancellationAndDatabaseLoss(t *testing.T) {

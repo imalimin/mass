@@ -89,7 +89,7 @@ func (p *provider) Stream(_ context.Context, snapshot run.Snapshot, _ run.Prepar
 			}
 		}
 		if p.badArgs {
-			return run.Reply{Message: run.Message{Role: "assistant", ToolCalls: []run.Call{{ID: "call-1", Name: run.PythonTool, Arguments: `{"code":`}}}, FinishReason: "tool_calls"}, nil
+			return run.Reply{Message: run.Message{Role: "assistant", ToolCalls: []run.Call{{ID: "call-1", Name: run.CommandTool, Arguments: `{"command":`}}}, FinishReason: "tool_calls"}, nil
 		}
 		if p.failLog {
 			p.repo.fail = true

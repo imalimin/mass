@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"mime"
+	"net/http"
 	"os"
 	"path"
 	"reflect"
@@ -25,8 +26,6 @@ type FileService struct {
 	ReadBudget func(int64) error
 	Workspaces Workspaces
 	Content    *ContentStore
-	Cursors    CursorSigner
-	queries    map[string]queryResult
 	MaxBytes   int64
 	Limits     storage.Limits
 	Check      func(context.Context, run.Snapshot) error
@@ -39,14 +38,14 @@ type ReadFileInput struct {
 type WriteFileInput struct {
 	Path           string `json:"path"`
 	Content        string `json:"content"`
-	MediaType      string `json:"media_type"`
-	ExpectedSHA256 string `json:"expected_sha256"`
+	MediaType      string `json:"media_type,omitempty"`
+	ExpectedSHA256 string `json:"expected_sha256,omitempty"`
 }
 type PublishInput struct {
 	Path           string `json:"path"`
-	ExpectedSHA256 string `json:"expected_sha256"`
-	DisplayName    string `json:"display_name"`
-	MediaType      string `json:"media_type"`
+	ExpectedSHA256 string `json:"expected_sha256,omitempty"`
+	DisplayName    string `json:"display_name,omitempty"`
+	MediaType      string `json:"media_type,omitempty"`
 }
 
 var errWorkspaceSymlink = run.ToolFailure("workspace_symlink", "none")
@@ -211,7 +210,7 @@ func (f *FileService) Read(ctx context.Context, s run.Snapshot, in ReadFileInput
 	return result, err
 }
 func (f *FileService) Write(ctx context.Context, s run.Snapshot, in WriteFileInput) (result run.ToolResult, err error) {
-	if !filePath(in.Path) || !utf8.ValidString(in.Content) || int64(len(in.Content)) > f.MaxBytes || in.ExpectedSHA256 == "" || !validMediaType(in.MediaType) {
+	if !filePath(in.Path) || !utf8.ValidString(in.Content) || int64(len(in.Content)) > f.MaxBytes || (in.MediaType != "" && !validMediaType(in.MediaType)) {
 		return result, storage.ErrInvalid
 	}
 	err = f.Workspaces.With(ctx, s.SpaceID, s.SessionID, func(dir WorkspaceDir) error { return f.write(ctx, s, dir, in, &result) })
@@ -221,15 +220,24 @@ func (f *FileService) write(ctx context.Context, s run.Snapshot, dir WorkspaceDi
 	if err := f.Check(ctx, s); err != nil {
 		return err
 	}
-	existing, readErr := f.read(ctx, dir, in.Path)
-	if errors.Is(readErr, fs.ErrNotExist) {
-		if in.ExpectedSHA256 != "missing" {
+	if in.ExpectedSHA256 != "" {
+		existing, readErr := f.read(ctx, dir, in.Path)
+		if errors.Is(readErr, fs.ErrNotExist) {
+			if in.ExpectedSHA256 != "missing" {
+				return storage.ErrConflict
+			}
+		} else if readErr != nil {
+			return readErr
+		} else if in.ExpectedSHA256 != hashBytes(existing) {
 			return storage.ErrConflict
 		}
-	} else if readErr != nil {
-		return readErr
-	} else if in.ExpectedSHA256 != hashBytes(existing) {
-		return storage.ErrConflict
+	} else {
+		if err := checkParents(dir.Root(), in.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		if info, err := dir.Root().Lstat(in.Path); err == nil && info.IsDir() {
+			return storage.ErrWorkspace
+		}
 	}
 	if err := f.checkWrite(ctx, dir.Root(), in.Path, int64(len(in.Content))); err != nil {
 		return err
@@ -276,8 +284,27 @@ func (f *FileService) write(ctx context.Context, s run.Snapshot, dir WorkspaceDi
 	return nil
 }
 
+func detectArtifactMediaType(filePath string, file *os.File) string {
+	if byExt := mime.TypeByExtension(strings.ToLower(path.Ext(filePath))); validMediaType(byExt) {
+		return byExt
+	}
+	var head [512]byte
+	n, _ := io.ReadFull(file, head[:])
+	_, _ = file.Seek(0, io.SeekStart)
+	if n > 0 {
+		if detected := http.DetectContentType(head[:n]); validMediaType(detected) {
+			return detected
+		}
+	}
+	return "application/octet-stream"
+}
+
 func (f *FileService) Publish(ctx context.Context, s run.Snapshot, callID string, in PublishInput) (artifact run.Artifact, result run.ToolResult, err error) {
-	if !filePath(in.Path) || in.ExpectedSHA256 == "" || in.ExpectedSHA256 == "missing" || len(in.DisplayName) == 0 || len(in.DisplayName) > 200 || strings.ContainsAny(in.DisplayName, "\r\n\x00/\\") || !validMediaType(in.MediaType) {
+	displayName := in.DisplayName
+	if displayName == "" && filePath(in.Path) {
+		displayName = path.Base(in.Path)
+	}
+	if !filePath(in.Path) || in.ExpectedSHA256 == "missing" || len(displayName) == 0 || len(displayName) > 200 || strings.ContainsAny(displayName, "\r\n\x00/\\") || (in.MediaType != "" && !validMediaType(in.MediaType)) {
 		return artifact, result, storage.ErrInvalid
 	}
 	err = f.Workspaces.With(ctx, s.SpaceID, s.SessionID, func(dir WorkspaceDir) error {
@@ -289,12 +316,16 @@ func (f *FileService) Publish(ctx context.Context, s run.Snapshot, callID string
 			return err
 		}
 		defer file.Close()
+		mediaType := in.MediaType
+		if mediaType == "" {
+			mediaType = detectArtifactMediaType(in.Path, file)
+		}
 		id := uuid.NewString()
 		o, err := f.Content.putAt(ctx, s.ActorID, s.SpaceID, id, "artifact", "application/octet-stream", f.Content.objectKey(s.SpaceID, id), file, in.ExpectedSHA256)
 		if err != nil {
 			return err
 		}
-		artifact = run.Artifact{ID: uuid.NewString(), SpaceID: s.SpaceID, SessionID: s.SessionID, RunID: s.ID, CallID: callID, ObjectID: o.ID, SHA256: o.SHA256, Name: in.DisplayName, MediaType: in.MediaType, Path: in.Path}
+		artifact = run.Artifact{ID: uuid.NewString(), SpaceID: s.SpaceID, SessionID: s.SessionID, RunID: s.ID, CallID: callID, ObjectID: o.ID, SHA256: o.SHA256, Name: displayName, MediaType: mediaType, Path: in.Path}
 		artifact.URL = "/api/v1/spaces/" + s.SpaceID + "/artifacts/" + artifact.ID + "/download"
 		data, _ := json.Marshal(artifact)
 		result = run.ToolResult{Status: "completed", Data: data, SideEffect: "committed", Complete: true, SourceRefs: []storage.Ref{{Role: "artifact", ObjectID: o.ID, SHA256: o.SHA256}}}

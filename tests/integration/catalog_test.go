@@ -205,7 +205,7 @@ func exerciseCatalog(t *testing.T, blobs storage.BlobStore, prefix string) {
 	api("POST", path(agent)+"/resources", map[string]any{}, 404)
 	api("PUT", path(agent)+"/draft", map[string]any{"expected_revision": agent.Revision, "document": map[string]any{"assets": []any{}}}, 400)
 	config := func(version string) string {
-		c := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Skills: []catalog.SkillRef{{ID: s1.ID, Version: version}, {ID: s2.ID, Version: "v1"}}, Tools: []string{"read_file", "run_code"}}
+		c := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Skills: []catalog.SkillRef{{ID: s1.ID, Version: version}, {ID: s2.ID, Version: "v1"}}, Tools: []string{"read_file", "run_command"}}
 		c.Context.MaxInputTokens = 24000
 		c.Context.MaxTokens = 4000
 		c.Context.Compression = "summary"

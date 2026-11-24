@@ -131,13 +131,13 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 			switch tools {
 			case 0:
 				name = "write_file"
-				args = `{"path":"notes.txt","content":"hello workspace","media_type":"text/plain","expected_sha256":"missing"}`
+				args = `{"path":"notes.txt","content":"hello workspace","expected_sha256":"missing"}`
 			case 1:
 				name = "read_file"
 				args = `{"path":"notes.txt"}`
 			case 2:
 				name = "publish_artifact"
-				args = fmt.Sprintf(`{"path":"notes.txt","expected_sha256":%q,"display_name":"notes.txt","media_type":"text/plain"}`, sha)
+				args = fmt.Sprintf(`{"path":"notes.txt","expected_sha256":%q}`, sha)
 			default:
 				out.Content = "completed and published notes.txt"
 				out.ResponseMeta.FinishReason = "stop"

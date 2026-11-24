@@ -6,11 +6,6 @@ export async function startModelFixture() {
   let calls = 0
   const requests = []
   const server = createServer(async (req, res) => {
-    if (req.url === '/tools-network-probe') { res.writeHead(200); res.end('{}'); return }
-    if (req.url.startsWith('/tools-network-drop?')) {
-      for await (const chunk of req) { /* Consume the request before dropping the connection. */ }
-      req.socket.end(); return
-    }
     if (req.method === 'POST' && req.url === '/tools-input') {
       let value = ''; for await (const b of req) value += b
       res.writeHead(value === '10' ? 201 : 400, { 'Content-Type': 'application/json' }); res.end('{"accepted":true}'); return
@@ -40,49 +35,38 @@ export async function startModelFixture() {
     }
     const sha = createHash('sha256').update('hello workspace').digest('hex')
     let name, args
-    if (task.startsWith('network failure ')) {
-      if (count === 0) {
-        const origin = `http://127.0.0.1:${server.address().port}`
-        const large = task === 'network failure GET excerpt'
-        const code = `${large ? 'host("net.request", {"url": input["probe"]})\nlog("x" * 8000)\n' : ''}return host("net.request", {"url": input["url"], "method": input["method"], "headers": {"Authorization": "Bearer fixture-request-secret"}})`
-        name = 'run_code'
-        args = { language: 'python', code, input: { url: `${origin}/tools-network-drop?token=fixture-query-secret`, method: task.endsWith('POST') ? 'POST' : 'GET', probe: `${origin}/tools-network-probe` } }
-      } else {
-        frame({ role: 'assistant', content: '模型已收到网络错误并继续。' }, 'stop', usage)
-        res.end('data: [DONE]\n\n'); return
-      }
-    }
-    else if (task.startsWith('D05')) {
+    if (task.startsWith('D05')) {
       const results = messages.slice(index + 1).filter(m => m.role === 'tool').map(m => JSON.parse(m.content))
       const failed = results.find(r => r.status !== 'completed'); if (failed) throw new Error(`D05 tool failed: ${JSON.stringify(failed)}`)
       const data = i => results[i]?.data ?? {}
-      const binding = messages.find(m => m.role === 'system').content.match(/<skill id="([^"]+)"/)?.[1]
+      const systemMsg = messages.find(m => m.role === 'system')?.content ?? ''
+      if (!systemMsg.includes('<skill_resources>\n- rules.txt')) throw new Error('missing <skill_resources> in system prompt')
+      const binding = systemMsg.match(/<skill id="([^"]+)"/)?.[1]
       const attachments = JSON.parse(task.split('[MASS accepted attachments; use read_attachment by ID: ')[1].slice(0, -1))
-      const hash = i => data(i).sha256
       const steps = status => [{ id: 'report', title: 'Create summary', status }]
       const actions = [
-        () => ['list_skill_resources', { skill_binding_id: binding, limit: 1 }],
         () => ['read_skill_resource', { skill_binding_id: binding, path: 'rules.txt' }],
         () => ['read_attachment', { attachment_id: attachments[0].id, format: 'json' }],
-        () => ['write_file', { path: 'records.json', content: JSON.stringify(data(2).value), media_type: 'application/json', expected_sha256: 'missing' }],
-        () => ['read_file', { path: 'records.json', expected_sha256: hash(3) }],
-        () => ['list_files', { directory: '.', limit: 1 }],
-        () => ['glob_files', { pattern: '**/*.json' }],
-        () => ['search_files', { pattern: 'amount', mode: 'literal', path_glob: '*.json' }],
-        () => ['update_plan', { expected_revision: 0, steps: steps('in_progress') }],
-        () => ['run_code_js', { language: 'javascript', input: { multiplier: data(1).content }, code: `let rows;for(let i=0;i<2;i++)rows=JSON.parse(fs.readFile('records.json').content);const total=rows.reduce((sum,r)=>sum+r.amount,0)*Number(input.multiplier);const csv=CSV.stringify([['total'],[String(total)]]);if(CSV.parse(csv)[1][0]!==String(total))throw Error('csv');fs.mkdir('reports');const written=fs.writeFile('summary.json',JSON.stringify({total,label:'draft'}),{expected_sha256:'missing',media_type:'application/json'});if(net.request({method:'POST',url:'http://127.0.0.1:${server.address().port}/tools-input',body:String(total)}).status!==201)throw Error('network');log({total});return {total,sha256:written.sha256};` }],
-        () => ['edit_file', { path: 'summary.json', expected_sha256: data(9).value.sha256, edits: [{ old_text: 'draft', new_text: 'final' }] }],
-        () => ['move_file', { source: 'summary.json', target: 'reports/summary.json', expected_sha256: hash(10) }],
-        () => ['publish_artifact', { path: 'reports/summary.json', expected_sha256: hash(11), display_name: 'summary.json', media_type: 'application/json' }],
-        () => ['delete_file', { path: 'reports/summary.json', expected_sha256: hash(11) }],
-        () => ['update_plan', { expected_revision: 1, steps: steps('completed') }],
+        () => ['write_file', { path: 'records.json', content: JSON.stringify(data(1).value) }],
+        () => ['read_file', { path: 'records.json' }],
+        () => ['update_plan', { steps: steps('in_progress') }],
+        () => {
+          const rows = JSON.parse(data(3).content)
+          const total = rows.reduce((sum, r) => sum + r.amount, 0) * Number(data(0).content)
+          return ['write_file', { path: 'summary.json', content: JSON.stringify({ total, label: 'draft' }) }]
+        },
+        () => ['edit_file', { path: 'summary.json', edits: [{ old_text: 'draft', new_text: 'final' }] }],
+        () => ['run_command', { command: `mkdir -p reports && mv summary.json reports/summary.json && curl -fsS -X POST -d 10 http://127.0.0.1:${server.address().port}/tools-input` }],
+        () => ['publish_artifact', { path: 'reports/summary.json' }],
+        () => ['run_command', { command: 'rm -f reports/summary.json' }],
+        () => ['update_plan', { steps: steps('completed') }],
       ]
       if (actions[count]) [name, args] = actions[count]()
     }
     else if (task === 'run a host command') {
       const results = messages.slice(index + 1).filter(m => m.role === 'tool').map(m => JSON.parse(m.content))
       const actions = [
-        ['run_command', { command: 'sh', args: ['-c', 'printf problem >&2; exit 7'] }],
+        ['run_command', { command: 'printf problem >&2; exit 7' }],
         ['run_command', { command: 'sh', args: ['-c', 'printf "%s" "$1" > command.txt', 'mass', 'hello workspace'] }],
         ['publish_artifact', { path: 'command.txt', expected_sha256: sha, display_name: 'command.txt', media_type: 'text/plain' }],
       ]
@@ -94,22 +78,14 @@ export async function startModelFixture() {
       const retried = messages.slice(0, index).some(message => message.role === 'user' && message.content === task)
       const scratch = retried ? 'scratch-2.txt' : 'scratch.txt'
       const actions = [
-        ['glob_files', { pattern: '{configs,configs/**,scratch*.txt}', limit: 100 }],
         ['read_file', { path: `configs/${scratch}` }],
-        ['delete_file', { path: scratch, expected_sha256: createHash('sha256').update('temporary').digest('hex') }],
+        ['run_command', { command: `rm -f ${scratch}` }],
       ]
-      if (count === 1) {
-        const items = results[0].data.items
-        const link = items?.find(item => item.path === 'configs')
-        if (link?.type !== 'symlink' || Object.keys(link).length !== 2 || items.some(item => item.path.startsWith('configs/')) || !items.some(item => item.path === scratch)) {
-          throw new Error('file enumeration failed to report the link and ordinary files separately')
-        }
-      }
-      if (count === 2 && (results[1].error !== 'workspace_symlink' || results[1].side_effect !== 'none')) throw new Error('expected recoverable symlink access error')
+      if (count === 1 && (results[0].error !== 'workspace_symlink' || results[0].side_effect !== 'none')) throw new Error('expected recoverable symlink access error')
       if (actions[count]) [name, args] = actions[count]
     }
     else if (/second|读取已有/.test(task)) { if (!count) { name = 'read_file'; args = { path: 'notes.txt' } } }
-    else if (count === 0) { name = 'write_file'; args = { path: 'notes.txt', content: 'hello workspace', media_type: 'text/plain', expected_sha256: 'missing' } }
+    else if (count === 0) { name = 'write_file'; args = { path: 'notes.txt', content: 'hello workspace' } }
     else if (count === 1) { name = 'read_file'; args = { path: 'notes.txt' } }
     else if (count === 2) { name = 'publish_artifact'; args = { path: 'notes.txt', expected_sha256: sha, display_name: 'notes.txt', media_type: 'text/plain' } }
     if (name) {
@@ -117,7 +93,7 @@ export async function startModelFixture() {
       if (progress) frame({ role: 'assistant', content: progress })
       frame({ role: 'assistant', tool_calls: [{ index: 0, id: task.startsWith('D05') ? 'reused-native-id' : randomUUID(), type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, 'tool_calls', usage)
     }
-    else { frame({ role: 'assistant', content: task.startsWith('D05') ? '十四工具处理完成，汇总结果为 10。' : task === 'run a host command' ? '已运行宿主命令并发布 command.txt' : task === '帮我清理当前工作区的非产物中间文件' ? '已处理清理请求。' : /second|读取已有/.test(task) ? '已读取已有文件：hello workspace' : '已完成写入、读取和发布 notes.txt' }); frame({}, 'stop', usage) }
+    else { frame({ role: 'assistant', content: task.startsWith('D05') ? '核心工具处理完成，汇总结果为 10。' : task === 'run a host command' ? '已运行宿主命令并发布 command.txt' : task === '帮我清理当前工作区的非产物中间文件' ? '已处理清理请求。' : /second|读取已有/.test(task) ? '已读取已有文件：hello workspace' : '已完成写入、读取和发布 notes.txt' }); frame({}, 'stop', usage) }
     res.end('data: [DONE]\n\n')
   })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')

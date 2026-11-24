@@ -89,6 +89,7 @@ try {
   await expect(page.getByRole('status')).toContainText('成功 2 · 失败 0')
   const result = await api('GET', `${root}/evaluation/experiments/${experiment.id}`)
   assert.equal(result.concurrency, 65535)
+  assert.equal(result.dataset_name, '多轮文本验收')
   assert.equal(result.dataset_version, 2)
   assert.equal(result.result['1'].run_ids.length, 2)
   assert.notEqual(result.result['1'].session_id, result.result['2'].session_id)

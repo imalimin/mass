@@ -2,12 +2,14 @@ package resource
 
 import (
 	"context"
-	"github.com/imalimin/mass/internal/domain/run"
-	"github.com/imalimin/mass/internal/domain/storage"
-	"github.com/imalimin/mass/internal/journal"
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/imalimin/mass/internal/domain/run"
+	"github.com/imalimin/mass/internal/domain/storage"
+	"github.com/imalimin/mass/internal/journal"
 )
 
 var stepID = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
@@ -33,11 +35,8 @@ func ValidatePlan(p run.Plan) bool {
 	}
 	return active <= 1
 }
-func PreparePlan(ctx context.Context, j *journal.Journal, s run.Snapshot, expected int64, steps []run.PlanStep) (run.ToolResult, error) {
-	p := run.Plan{Revision: expected + 1, Steps: steps}
-	if !ValidatePlan(p) {
-		return run.ToolResult{}, storage.ErrInvalid
-	}
+
+func PreparePlan(ctx context.Context, j *journal.Journal, s run.Snapshot, steps []run.PlanStep) (run.ToolResult, error) {
 	history, err := RunHistory(ctx, j, s.ActorID, s.SpaceID, s.SessionID, s.ID, "plan.updated")
 	if err != nil {
 		return run.ToolResult{}, err
@@ -48,15 +47,31 @@ func PreparePlan(ctx context.Context, j *journal.Journal, s run.Snapshot, expect
 			journal.Decode(event.Data, &current)
 		}
 	}
-	if current.Revision != expected {
-		return run.ToolResult{}, storage.ErrConflict
+	used := map[string]bool{}
+	for _, step := range steps {
+		if step.ID != "" {
+			used[step.ID] = true
+		}
 	}
-	for _, old := range current.Steps {
-		for _, step := range steps {
-			if old.ID == step.ID && old.Title != step.Title {
-				return run.ToolResult{}, storage.ErrConflict
+	normalized := make([]run.PlanStep, len(steps))
+	nextNum := 1
+	for i, step := range steps {
+		if step.ID == "" {
+			for {
+				candidate := fmt.Sprintf("step-%d", nextNum)
+				nextNum++
+				if !used[candidate] {
+					step.ID = candidate
+					used[candidate] = true
+					break
+				}
 			}
 		}
+		normalized[i] = step
+	}
+	p := run.Plan{Revision: current.Revision + 1, Steps: normalized}
+	if !ValidatePlan(p) {
+		return run.ToolResult{}, storage.ErrInvalid
 	}
 	result := dataResult(p, "committed")
 	result.Plan = &p

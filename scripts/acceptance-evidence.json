@@ -633,37 +633,37 @@
       },
       {
         "path": "internal/resource/tool_files_test.go",
-        "anchor": "TestBoundedReadAndStableQueryPages"
+        "anchor": "TestBoundedReadAndSkillSources"
       }
     ]
   },
   {
     "id": "A43",
     "status": "local_evidence",
-    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "note": "Source evidence is checked; run_command on macOS Seatbelt replaces legacy embedded code VMs.",
     "sources": [
       {
-        "path": "internal/adapter/javascript/runner_test.go",
-        "anchor": "TestVMContractAndBoundedResults"
+        "path": "internal/adapter/command/command_darwin_test.go",
+        "anchor": "TestCommandSeatbelt"
       },
       {
-        "path": "internal/adapter/javascript/runner_test.go",
-        "anchor": "TestCancellationKeepsSlotUntilHostActuallyExits"
+        "path": "internal/resource/command_test.go",
+        "anchor": "TestCommandServiceInjectsAndCleansUpEnv"
       }
     ]
   },
   {
     "id": "A44",
     "status": "local_evidence",
-    "note": "Source evidence is checked; functional tests are run by verify-d09-local.",
+    "note": "Source evidence is checked; Seatbelt sandbox isolates workspace and network access for run_command.",
     "sources": [
       {
-        "path": "internal/adapter/javascript/runner_test.go",
-        "anchor": "TestVMContractAndBoundedResults"
+        "path": "internal/adapter/command/command_darwin_test.go",
+        "anchor": "TestCommandSeatbelt"
       },
       {
-        "path": "internal/resource/network_test.go",
-        "anchor": "TestNetworkStatusLimitsRedirectAndAuthorization"
+        "path": "internal/runtime/tool/builtin/files_test.go",
+        "anchor": "TestRunCommandShellDefaultAndExplicitArgs"
       }
     ]
   },

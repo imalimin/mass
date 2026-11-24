@@ -2,15 +2,49 @@ package registry
 
 import (
 	"encoding/json"
+	"testing"
+
+	jschema "github.com/eino-contrib/jsonschema"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/santhosh-tekuri/jsonschema/v6"
-	"testing"
 )
 
-func TestAllToolSchemasAndFrozenDefinitions(t *testing.T) {
+func TestAllToolSchemasAndLegacyCompatibility(t *testing.T) {
 	specs := Specs()
-	if len(specs) != 17 {
-		t.Fatal(len(specs))
+	if len(specs) != 8 {
+		t.Fatalf("expected 8 core tools, got %d", len(specs))
+	}
+	validSamples := map[string][]map[string]any{
+		run.CommandTool: {
+			{"command": "ls -la | head -n 5"},
+			{"command": "yt-dlp", "args": []any{"--version"}},
+		},
+		"read_file": {
+			{"path": "notes.txt"},
+			{"path": "notes.txt", "range": map[string]any{"start_line": 1, "end_line": 10}},
+		},
+		"write_file": {
+			{"path": "notes.txt", "content": "hello"},
+			{"path": "notes.txt", "content": "hello", "expected_sha256": "missing"},
+		},
+		"edit_file": {
+			{"path": "notes.txt", "edits": []any{map[string]any{"old_text": "a", "new_text": "b"}}},
+		},
+		"read_skill_resource": {
+			{"skill_binding_id": "ver-1", "path": "assets/rules.txt"},
+		},
+		"read_attachment": {
+			{"attachment_id": "att-1"},
+			{"attachment_id": "att-1", "format": "json", "record_offset": 0, "record_limit": 50},
+		},
+		"update_plan": {
+			{"steps": []any{map[string]any{"title": "Inspect workspace", "status": "in_progress"}}},
+			{"steps": []any{map[string]any{"id": "step-a", "title": "Inspect workspace", "status": "completed"}}},
+		},
+		"publish_artifact": {
+			{"path": "report.json"},
+			{"path": "report.json", "display_name": "report.json", "media_type": "application/json"},
+		},
 	}
 	seen := map[string]bool{}
 	for _, spec := range specs {
@@ -18,46 +52,32 @@ func TestAllToolSchemasAndFrozenDefinitions(t *testing.T) {
 			t.Fatal("duplicate", spec.Name)
 		}
 		seen[spec.Name] = true
-		for i, raw := range []json.RawMessage{spec.Schema, spec.ResultSchema} {
-			var doc any
-			if err := json.Unmarshal(raw, &doc); err != nil {
-				t.Fatal(err)
-			}
-			c := jsonschema.NewCompiler()
-			if err := c.AddResource("https://mass.local/schema", doc); err != nil {
-				t.Fatal(err)
-			}
-			compiled, err := c.Compile("https://mass.local/schema")
-			if err != nil {
-				t.Fatal(spec.Name, err)
-			}
-			if language := run.CodeLanguage(spec.Name); i == 0 && language != "" {
-				input := map[string]any{"language": language, "code": "return 1", "input": nil}
-				if err := compiled.Validate(input); err != nil {
-					t.Fatal(spec.Name, err)
-				}
-				delete(input, "input")
-				if err := compiled.Validate(input); err != nil {
-					t.Fatal("optional input rejected", spec.Name, err)
-				}
-				input["input"] = nil
-				input["language"] = "other"
-				if compiled.Validate(input) == nil {
-					t.Fatal("wrong language accepted", spec.Name)
-				}
-			}
-			if i == 1 {
-				value := map[string]any{"call_id": "call", "status": "completed", "data": map[string]any{}, "side_effect": "none", "complete": true, "source_refs": []any{}}
-				if compiled.Validate(value) == nil {
-					t.Fatal("empty completed result accepted", spec.Name)
-				}
-				value["status"] = "failed"
-				if err := compiled.Validate(value); err != nil {
-					t.Fatal("failed result rejected", spec.Name, err)
-				}
+		var wireSchema jschema.Schema
+		if err := json.Unmarshal(spec.Schema, &wireSchema); err != nil {
+			t.Fatalf("%s failed eino jsonschema unmarshal: %v", spec.Name, err)
+		}
+		var doc any
+		if err := json.Unmarshal(spec.Schema, &doc); err != nil {
+			t.Fatal(err)
+		}
+		c := jsonschema.NewCompiler()
+		if err := c.AddResource("https://mass.local/schema", doc); err != nil {
+			t.Fatal(err)
+		}
+		compiled, err := c.Compile("https://mass.local/schema")
+		if err != nil {
+			t.Fatal(spec.Name, err)
+		}
+		for _, sample := range validSamples[spec.Name] {
+			if err := compiled.Validate(sample); err != nil {
+				t.Fatalf("%s rejected valid sample %v: %v", spec.Name, sample, err)
 			}
 		}
+		if compiled.Validate(map[string]any{"unexpected_extra_field": true}) == nil {
+			t.Fatalf("%s accepted unknown property", spec.Name)
+		}
 	}
+
 	r := &Registry{}
 	frozen := specs[0]
 	frozen.Description = "frozen description"
@@ -65,11 +85,25 @@ func TestAllToolSchemasAndFrozenDefinitions(t *testing.T) {
 	if err != nil || actual[0].Description != frozen.Description {
 		t.Fatal("definition changed", err)
 	}
-	actual, err = r.Describe([]run.ToolSpec{{Name: "read_file", Version: "1", Schema: json.RawMessage(`null`)}})
-	if err != nil || string(actual[0].Schema) == "null" {
-		t.Fatal("legacy empty schema not resolved", err)
+	actual, err = r.Describe([]run.ToolSpec{
+		{Name: "list_files", Version: "1"},
+		{Name: "glob_files", Version: "1"},
+		{Name: "search_files", Version: "1"},
+		{Name: "move_file", Version: "1"},
+		{Name: "delete_file", Version: "1"},
+		{Name: "list_skill_resources", Version: "1"},
+		{Name: "run_code", Version: "1"},
+		{Name: "run_code_js", Version: "1"},
+		{Name: "run_code_go", Version: "1"},
+		{Name: "read_file", Version: "1", Schema: json.RawMessage(`null`)},
+	})
+	if err != nil || len(actual) != 1 || actual[0].Name != "read_file" || string(actual[0].Schema) == "null" {
+		t.Fatalf("legacy tool filtering or empty schema resolution failed: %v, %+v", err, actual)
 	}
 	if _, err = r.Describe([]run.ToolSpec{{Name: "shell", Version: "1"}}); err == nil {
 		t.Fatal("unknown tool accepted")
+	}
+	if _, err = r.Describe([]run.ToolSpec{{Name: "read_file", Version: "1"}, {Name: "read_file", Version: "1"}}); err == nil {
+		t.Fatal("duplicate tool accepted")
 	}
 }

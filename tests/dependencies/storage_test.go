@@ -5,7 +5,6 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/bmatcuk/doublestar/v4"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pressly/goose/v3"
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -26,9 +25,6 @@ func TestStorageDependencyContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = tos.PutObjectV2Input{PutObjectBasicInput: tos.PutObjectBasicInput{Bucket: "test-only", Key: "unique-object", ForbidOverwrite: true, ContentLength: 3}}
-	if ok, err := doublestar.Match("reports/**/*.csv", "reports/2026/q1.csv"); err != nil || !ok {
-		t.Fatalf("glob: %v %v", ok, err)
-	}
 	compiler := jsonschema.NewCompiler()
 	if err := compiler.AddResource("urn:mass:tool", map[string]any{"type": "object", "required": []any{"path"}}); err != nil {
 		t.Fatal(err)

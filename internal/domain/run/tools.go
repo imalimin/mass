@@ -1,7 +1,6 @@
 package run
 
 import (
-	"encoding/json"
 	"github.com/imalimin/mass/internal/domain/storage"
 )
 
@@ -38,54 +37,19 @@ type Plan struct {
 }
 type ToolPolicy struct {
 	Version             string `json:"version"`
-	MaxCodeBytes        int    `json:"max_code_bytes"`
+	MaxCodeBytes        int    `json:"max_code_bytes,omitempty"`
 	TimeoutMS           int64  `json:"timeout_ms"`
-	MaxInputBytes       int64  `json:"max_input_bytes"`
-	MaxOutputBytes      int64  `json:"max_output_bytes"`
-	MaxFileOperations   int    `json:"max_file_operations"`
-	MaxNetworkRequests  int    `json:"max_network_requests"`
-	MaxNetworkBodyBytes int64  `json:"max_network_body_bytes"`
+	MaxInputBytes       int64  `json:"max_input_bytes,omitempty"`
+	MaxOutputBytes      int64  `json:"max_output_bytes,omitempty"`
+	MaxFileOperations   int    `json:"max_file_operations,omitempty"`
+	MaxNetworkRequests  int    `json:"max_network_requests,omitempty"`
+	MaxNetworkBodyBytes int64  `json:"max_network_body_bytes,omitempty"`
 	MaxLogBytes         int    `json:"max_log_bytes"`
 }
 
-const (
-	PythonTool     = "run_code"
-	JavaScriptTool = "run_code_js"
-	GoTool         = "run_code_go"
-	CommandTool    = "run_command"
-)
+const CommandTool = "run_command"
 
-func CodeLanguage(tool string) string {
-	switch tool {
-	case PythonTool:
-		return "python"
-	case JavaScriptTool:
-		return "javascript"
-	case GoTool:
-		return "go"
-	default:
-		return ""
-	}
-}
-
-type CodeInput struct {
-	Language string          `json:"language"`
-	Code     string          `json:"code"`
-	Input    json.RawMessage `json:"input"`
-}
-type CodeHost interface {
-	Invoke(name string, arguments json.RawMessage) (json.RawMessage, error)
-}
-type CodeOutput struct {
-	Engine       string            `json:"-"`
-	Value        json.RawMessage   `json:"value"`
-	Logs         []json.RawMessage `json:"logs"`
-	Detail       string            `json:"error_detail,omitempty"`
-	Error        string            `json:"error,omitempty"`
-	LogsComplete bool              `json:"logs_complete"`
-}
-
-// NetworkFailure describes the most recent failed HTTP request within a code tool call.
+// NetworkFailure retains historical code-tool network failure fields when replaying archived tool results.
 type NetworkFailure struct {
 	RequestNo  int    `json:"request_no"`
 	Method     string `json:"method"`

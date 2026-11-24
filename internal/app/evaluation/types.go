@@ -68,6 +68,7 @@ type Experiment struct {
 	ActorID        string              `json:"actor_id"`
 	CreatedAt      time.Time           `json:"created_at"`
 	DatasetID      string              `json:"dataset_id"`
+	DatasetName    string              `json:"dataset_name,omitempty"`
 	DatasetVersion int64               `json:"dataset_version"`
 	AgentID        string              `json:"agent_id"`
 	AgentVersionID string              `json:"agent_version_id"`

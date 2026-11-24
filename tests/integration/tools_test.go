@@ -6,6 +6,19 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"testing/fstest"
+	"time"
+
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	einoadapter "github.com/imalimin/mass/internal/adapter/eino"
@@ -25,17 +38,6 @@ import (
 	transport "github.com/imalimin/mass/internal/transport/http"
 	"github.com/imalimin/mass/tests/fakes"
 	"github.com/imalimin/mass/tests/testdb"
-	"io"
-	"log/slog"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"strings"
-	"sync/atomic"
-	"testing"
-	"testing/fstest"
-	"time"
 )
 
 func TestToolsVertical(t *testing.T) {
@@ -44,6 +46,7 @@ func TestToolsVertical(t *testing.T) {
 	}
 	exerciseTools(t, fakes.NewBlobs(), "test/tools/")
 }
+
 func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	t.Helper()
 	ctx := context.Background()
@@ -84,8 +87,6 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		t.Fatal(err)
 	}
 	if _, ok := blobs.(*fakes.Blobs); ok {
-		// A valid resource inventory may exceed the Journal's 64 KiB event limit.
-		// Aliases share immutable content while preserving 100 distinct logical paths.
 		asset := skill.Document.Assets[0]
 		for i := 1; i < 100; i++ {
 			alias := asset
@@ -107,10 +108,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	}
 	config := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Skills: []catalog.SkillRef{{ID: skill.ID, Version: "v1"}}, Tools: []string{}}
 	for _, spec := range registry.Specs() {
-		// The host command tool has a separate platform-specific smoke test.
-		if spec.Name != run.CommandTool {
-			config.Tools = append(config.Tools, spec.Name)
-		}
+		config.Tools = append(config.Tools, spec.Name)
 	}
 	config.Context.MaxInputTokens = 196000
 	config.Context.MaxTokens = 1024
@@ -126,7 +124,6 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Repeated migration preserves the fixed tool definition.
 	for i := 0; i < 2; i++ {
 		if err = db.MigrateTo(ctx, 15); err != nil {
 			t.Fatal(err)
@@ -146,24 +143,22 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	requests := atomic.Int32{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		if r.Method != "POST" || r.Header.Get("Authorization") != "Bearer fixture-network-secret" || r.URL.Query().Get("token") != "fixture-query-secret" {
-			t.Error("network arguments changed")
-		}
 		body, _ := io.ReadAll(r.Body)
-		if string(body) != "5" {
-			t.Error("network body", string(body))
+		if r.Method != "POST" || string(body) != "5" {
+			t.Error("unexpected network payload", r.Method, string(body))
 		}
-		w.Header().Set("Set-Cookie", "fixture-response-secret")
 		w.WriteHeader(201)
 		io.WriteString(w, `{"accepted":true}`)
 	}))
 	defer server.Close()
-	modelCalls := atomic.Int32{}
 	fake := &einoadapter.ModelTransport{Fake: &einoadapter.FakeChatModel{Respond: func(ctx context.Context, messages []*schema.Message) ([]*schema.Message, error) {
-		modelCalls.Add(1)
 		task := ""
 		lastUser := 0
+		systemPrompt := ""
 		for i, m := range messages {
+			if m.Role == schema.System {
+				systemPrompt = m.Content
+			}
 			if m.Role == schema.User && !strings.HasPrefix(m.Content, "[MASS") {
 				task = m.Content
 				lastUser = i
@@ -179,107 +174,43 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 				results = append(results, r)
 			}
 		}
-		if strings.Contains(task, "code error") {
-			if len(results) == 0 {
-				code := fmt.Sprintf(`fs.writeFile('kept.txt','preserved',{expected_sha256:'missing'});net.request({url:%q,method:'POST',headers:{Authorization:'Bearer fixture-network-secret'},body:'5'});throw Error('after effects');`, server.URL+"?token=fixture-query-secret")
-				return toolReply("run_code_js", map[string]any{"language": "javascript", "code": code, "input": nil}), nil
-			}
-			if results[0].Status != "failed" || results[0].Error != "code_exception" || results[0].SideEffect != "committed" ||
-				!bytes.Contains(results[0].Data, []byte("after effects")) {
-				t.Error("exception lost details or confirmed effects", results[0])
-			}
-			return textReply("preserved after code error"), nil
-		}
-		if task == "correct invalid run_code_js arguments and source" {
+		if task == "correct invalid tool arguments" {
 			switch len(results) {
 			case 0:
-				return toolReply("run_code_js", map[string]any{"language": "javascript", "input": nil}), nil
+				return toolReply("write_file", map[string]any{"path": "only-path.txt"}), nil
 			case 1:
 				got := results[0]
 				if got.Status != "failed" || got.Error != "invalid_tool_input" || got.SideEffect != "none" ||
-					!bytes.Contains(got.Data, []byte("missing property")) || !bytes.Contains(got.Data, []byte("code")) {
+					!bytes.Contains(got.Data, []byte("missing property")) || !bytes.Contains(got.Data, []byte("content")) {
 					return nil, fmt.Errorf("missing argument error detail: %s", got.Data)
 				}
-				return toolReply("run_code_js", map[string]any{"language": "javascript", "code": "const = ;", "input": nil}), nil
+				return toolReply("write_file", map[string]any{"path": "recovered.txt", "content": "ok"}), nil
 			case 2:
-				got := results[1]
-				if got.Status != "failed" || got.Error != "code_exception" || got.SideEffect != "none" ||
-					!bytes.Contains(got.Data, []byte("mass-code-v1.js")) {
-					return nil, fmt.Errorf("missing syntax error detail: %s", got.Data)
+				if results[1].Status != "completed" {
+					return nil, fmt.Errorf("corrected write_file did not succeed: %s", results[1].Data)
 				}
-				return toolReply("run_code_js", map[string]any{"language": "javascript", "code": "return 42;", "input": nil}), nil
-			case 3:
-				if results[2].Status != "completed" || !bytes.Contains(results[2].Data, []byte(`"value":42`)) {
-					return nil, fmt.Errorf("corrected code did not succeed: %s", results[2].Data)
-				}
-				return textReply("corrected code completed"), nil
+				return textReply("corrected tool completed"), nil
 			default:
 				return nil, fmt.Errorf("unexpected tool result count: %d", len(results))
 			}
 		}
-		if strings.Contains(task, "host methods") {
-			if len(results) == 0 {
-				return toolReply("run_code_js", map[string]any{"language": "javascript", "input": nil, "code": `const a=fs.writeFile('host.txt','before',{expected_sha256:'missing'});const b=fs.editFile('host.txt',[{old_text:'before',new_text:'after'}],{expected_sha256:a.sha256});fs.mkdir('hostdir');const c=fs.rename('host.txt','hostdir/host.txt',{expected_sha256:b.sha256});const names=fs.list('hostdir');if(names.items.length!==1)throw Error('list');if(fs.readFile('hostdir/host.txt',{expected_sha256:c.sha256}).content!=='after')throw Error('read');fs.remove('hostdir/host.txt',{expected_sha256:c.sha256});if(fs.list('hostdir').items.length!==0)throw Error('remove');return {ok:true};`}), nil
-			}
-			if results[0].Status != "completed" {
-				t.Error("host method failed", string(results[0].Data))
-			}
-			return textReply("all host methods completed"), nil
-		}
-		if strings.Contains(task, "host quota") {
-			if len(results) == 0 {
-				code := `for(let i=0;i<13;i++)fs.readFile('records.json');return true;`
-				if strings.Contains(task, "bytes") {
-					code = `fs.writeFile('bytes.txt','x'.repeat(300000),{expected_sha256:'missing'});for(let i=0;i<10;i++)fs.readFile('bytes.txt');return true;`
-				}
-				if strings.Contains(task, "network") {
-					code = fmt.Sprintf(`for(let i=0;i<3;i++)net.request({url:%q,method:'POST',headers:{Authorization:'Bearer fixture-network-secret'},body:'5'});return true;`, server.URL+"?token=fixture-query-secret")
-				}
-				return toolReply("run_code_js", map[string]any{"language": "javascript", "input": nil, "code": code}), nil
-			}
-			var data map[string]any
-			json.Unmarshal(results[0].Data, &data)
-			expectedIO, effect := float64(12), "none"
-			if strings.Contains(task, "bytes") {
-				expectedIO, effect = 7, "committed"
-			}
-			if strings.Contains(task, "network") {
-				expectedIO, effect = 2, "committed"
-			}
-			if results[0].Status != "failed" || results[0].SideEffect != effect || data["io_count"] != expectedIO || data["io_complete"] != true {
-				t.Error("host quota bypassed", results[0].Status, results[0].SideEffect, string(results[0].Data))
-			}
-			return textReply("host quota acknowledged"), nil
-		}
-		if strings.Contains(task, "large code") {
-			if len(results) == 0 {
-				return toolReply("run_code_js", map[string]any{"language": "javascript", "input": nil, "code": "//" + strings.Repeat("x", 33000) + "\nreturn 1;"}), nil
-			}
-			if results[0].Status != "completed" {
-				t.Error("valid source over 32 KiB rejected", results[0].Status)
-			}
-			return textReply("large source completed"), nil
-		}
 		if strings.Contains(task, "attachment fixtures") {
 			return textReply("attachments accepted"), nil
 		}
-		if strings.Contains(task, "unknown io") {
-			return toolReply("run_code_js", map[string]any{"language": "javascript", "code": `fs.writeFile('unknown.txt','once',{expected_sha256:'missing'});return 1;`, "input": nil}), nil
-		}
 		if strings.Contains(task, "plan failure") {
-			return toolReply("update_plan", map[string]any{"expected_revision": 0, "steps": []any{map[string]any{"id": "only", "title": "Atomic plan", "status": "in_progress"}}}), nil
+			return toolReply("update_plan", map[string]any{"steps": []any{map[string]any{"id": "only", "title": "Atomic plan", "status": "in_progress"}}}), nil
 		}
-		if strings.Contains(task, "code limit") {
+		if strings.Contains(task, "large write") {
 			if len(results) == 0 {
-				return toolReply("run_code_js", map[string]any{"language": "javascript", "code": `return 'x'.repeat(2097153);`, "input": nil}), nil
+				return toolReply("write_file", map[string]any{"path": "large.txt", "content": strings.Repeat("x", 33000)}), nil
 			}
-			if results[0].Status != "failed" || results[0].SideEffect != "none" {
-				t.Error("output limit result", results[0])
+			if results[0].Status != "completed" {
+				t.Error("valid write over 32 KiB rejected", results[0].Status)
 			}
-			return textReply("output limit acknowledged"), nil
+			return textReply("large write completed"), nil
 		}
-		if strings.Contains(task, "code cancel") {
-			return toolReply("run_code_js", map[string]any{"language": "javascript", "code": `fs.writeFile('cancelled.txt','kept',{expected_sha256:'missing'});while(true){}`, "input": nil}), nil
+		if strings.Contains(task, "command cancel") {
+			return toolReply(run.CommandTool, map[string]any{"command": "printf kept > cancelled.txt && sleep 60"}), nil
 		}
 		data := func(index int) map[string]any {
 			var v map[string]any
@@ -288,18 +219,17 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 			}
 			return v
 		}
-		stringAt := func(index int, key string) string { v, _ := data(index)[key].(string); return v }
 		step := len(results)
 		var name string
 		var args map[string]any
 		switch step {
 		case 0:
-			name = "list_skill_resources"
-			args = map[string]any{"skill_binding_id": skillVersion.ID, "limit": 1}
-		case 1:
+			if !strings.Contains(systemPrompt, "<skill_resources>\n- assets/rules.txt") {
+				return nil, fmt.Errorf("skill resources missing from system prompt")
+			}
 			name = "read_skill_resource"
 			args = map[string]any{"skill_binding_id": skillVersion.ID, "path": "assets/rules.txt"}
-		case 2:
+		case 1:
 			name = "read_attachment"
 			marker := "[MASS accepted attachments; use read_attachment by ID: "
 			pos := strings.Index(task, marker)
@@ -312,75 +242,34 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 				return nil, fmt.Errorf("attachment binding missing")
 			}
 			args = map[string]any{"attachment_id": list[0].ID, "format": "json"}
-		case 3:
+		case 2:
 			name = "write_file"
-			raw, _ := json.Marshal(data(2)["value"])
-			args = map[string]any{"path": "records.json", "content": string(raw), "media_type": "application/json", "expected_sha256": "missing"}
-		case 4:
+			raw, _ := json.Marshal(data(1)["value"])
+			args = map[string]any{"path": "records.json", "content": string(raw)}
+		case 3:
 			name = "read_file"
-			args = map[string]any{"path": "records.json", "expected_sha256": stringAt(3, "sha256")}
+			args = map[string]any{"path": "records.json"}
+		case 4:
+			name = "update_plan"
+			args = map[string]any{"steps": []any{map[string]any{"id": "report", "title": "Create summary", "status": "in_progress"}}}
 		case 5:
-			name = "list_files"
-			args = map[string]any{"directory": ".", "limit": 1}
+			name = "write_file"
+			args = map[string]any{"path": "summary.json", "content": `{"total":10,"label":"draft"}`}
 		case 6:
-			name = "glob_files"
-			args = map[string]any{"pattern": "**/*.json"}
-		case 7:
-			name = "search_files"
-			args = map[string]any{"pattern": "amount", "mode": "literal", "path_glob": "*.json"}
-		case 8:
-			name = "update_plan"
-			args = map[string]any{"expected_revision": 0, "steps": []any{map[string]any{"id": "report", "title": "Create summary", "status": "in_progress"}}}
-		case 9:
-			name = "run_code_js"
-			code := fmt.Sprintf(`let all=[];for(let i=0;i<2;i++){const file=fs.readFile('records.json');all=JSON.parse(file.content)};const total=all.reduce((s,r)=>s+r.amount,0)*Number(input.multiplier);const csv=CSV.stringify([['total'],[String(total)]]);if(CSV.parse(csv)[1][0]!==String(total))throw Error('csv');fs.mkdir('reports');const written=fs.writeFile('summary.json',JSON.stringify({total,label:'draft'}),{expected_sha256:'missing',media_type:'application/json'});const response=net.request({method:'POST',url:%q,headers:{Authorization:'Bearer fixture-network-secret'},body:String(total/2)});if(response.status!==201)throw Error('request');log({total});return {total,path:'summary.json',sha256:written.sha256};`, server.URL+"?token=fixture-query-secret")
-			args = map[string]any{"language": "javascript", "code": code, "input": map[string]any{"multiplier": stringAt(1, "content")}}
-		case 10:
 			name = "edit_file"
-			value, _ := data(9)["value"].(map[string]any)
-			args = map[string]any{"path": "summary.json", "expected_sha256": value["sha256"], "edits": []any{map[string]any{"old_text": "draft", "new_text": "final"}}}
-		case 11:
-			name = "move_file"
-			args = map[string]any{"source": "summary.json", "target": "reports/summary.json", "expected_sha256": stringAt(10, "sha256")}
-		case 12:
+			args = map[string]any{"path": "summary.json", "edits": []any{map[string]any{"old_text": "draft", "new_text": "final"}}}
+		case 7:
+			name = run.CommandTool
+			args = map[string]any{"command": "mkdir -p reports && mv summary.json reports/summary.json && curl -fsS -X POST -d 5 " + strconv.Quote(server.URL)}
+		case 8:
 			name = "publish_artifact"
-			args = map[string]any{"path": "reports/summary.json", "expected_sha256": stringAt(11, "sha256"), "display_name": "summary.json", "media_type": "application/json"}
-		case 13:
-			name = "delete_file"
-			args = map[string]any{"path": "reports/summary.json", "expected_sha256": stringAt(11, "sha256")}
-		case 14:
+			args = map[string]any{"path": "reports/summary.json"}
+		case 9:
+			name = run.CommandTool
+			args = map[string]any{"command": "rm -f reports/summary.json"}
+		case 10:
 			name = "update_plan"
-			args = map[string]any{"expected_revision": 1, "steps": []any{map[string]any{"id": "report", "title": "Create summary", "status": "completed"}}}
-		case 15:
-			name = run.PythonTool
-			args = map[string]any{"language": "python", "input": "records.json", "code": `import os
-assert "MASS_MARIADB_DSN" not in os.environ
-assert "MASS_MASTER_KEY" not in os.environ
-try:
-    open("/etc/hosts")
-except OSError:
-    pass
-else:
-    raise RuntimeError("host filesystem access")
-assert """a
-b""" == "a\nb"
-rows = json.loads(host("fs.readFile", {"arguments": [input]})["content"])
-log(len(rows))
-return sum(row["amount"] for row in rows)`}
-		case 16:
-			if data(15)["value"] != float64(5) {
-				return nil, fmt.Errorf("unexpected Python result: %s", results[15].Data)
-			}
-			name = run.GoTool
-			args = map[string]any{"language": "go", "input": data(15)["value"], "code": `if _, err := os.ReadFile("/etc/hosts"); err == nil { panic("host filesystem access") }
-rows := host("csv.parse", "a,b\n1,2").([]any)
-log(len(rows))
-return input.(float64) + float64(len(rows))`}
-		case 17:
-			if data(16)["value"] != float64(7) {
-				return nil, fmt.Errorf("unexpected Go result: %s", results[16].Data)
-			}
-			return textReply("D05 summary complete"), nil
+			args = map[string]any{"steps": []any{map[string]any{"id": "report", "title": "Create summary", "status": "completed"}}}
 		default:
 			return textReply("D05 summary complete"), nil
 		}
@@ -395,10 +284,8 @@ return input.(float64) + float64(len(rows))`}
 	c.Runtime.SnapshotTimeout = 60 * time.Second
 	c.Storage.MaxObjectBytes = limits.MaxArchiveFileBytes
 	c.Storage.MaxWorkspaceBytes = limits.MaxTotalBytes
-
 	c.Tools.Code.Timeout = 60 * time.Second
-	c.Tools.Code.MaxFileOperations = 12
-	c.Tools.Code.MaxNetworkRequests = 2
+
 	runtime, lifecycle, err := bootstrap.StartRuntime(ctx, c, db.Store, auth, catalogue, content, manager, snapshots, "d05-test", slog.New(slog.NewTextHandler(io.Discard, nil)), fake)
 	if err != nil {
 		t.Fatal(err)
@@ -521,52 +408,24 @@ return input.(float64) + float64(len(rows))`}
 		}
 		validate("GET", path, w)
 	}
-	hosts, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "host methods"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hosts = wait(hosts.ID); hosts.Status != "succeeded" {
-		t.Fatal("host method run", hosts.Error)
-	}
-	// A code exception preserves confirmed file changes and gives the model a failed result.
-	broken, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "code error"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	broken = wait(broken.ID)
-	if broken.Status != "succeeded" {
-		t.Fatal("code error recovery", broken.Error)
-	}
-	if requests.Load() != 2 {
-		t.Fatal("request lost or repeated after exception", requests.Load())
-	}
-	var actual string
-	err = manager.With(ctx, space.ID, session.ID, func(dir resource.WorkspaceDir) error {
-		raw, e := dir.Root().ReadFile("kept.txt")
-		actual = string(raw)
-		return e
-	})
-	if err != nil || actual != "preserved" {
-		t.Fatal("exception rolled back file", actual, err)
-	}
 	corrected, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{
-		Key: uuid.NewString(), Text: "correct invalid run_code_js arguments and source",
+		Key: uuid.NewString(), Text: "correct invalid tool arguments",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if corrected = wait(corrected.ID); corrected.Status != "succeeded" {
-		t.Fatal("run_code_js could not recover in the same run", corrected.Error)
+		t.Fatal("tool could not recover in the same run", corrected.Error)
 	}
 	correctedTrace := awaitToolTrace(t, ctx, runtime.Trace, db.Store, corrected)
 	var rejectedStep trace.ModelStep
-	if len(correctedTrace.Items) != 5 || json.Unmarshal(correctedTrace.Items[0], &rejectedStep) != nil ||
+	if len(correctedTrace.Items) != 4 || json.Unmarshal(correctedTrace.Items[0], &rejectedStep) != nil ||
 		len(rejectedStep.Tools) != 1 || rejectedStep.Tools[0].Status != "failed" || rejectedStep.Tools[0].DurationMS != nil ||
 		!bytes.Contains(rejectedStep.Tools[0].Result, []byte("invalid_tool_input")) {
 		t.Fatal("trace did not record the rejected tool call")
 	}
 	// Raw upload does not make an attachment available to a running tool.
-	files := &resource.FileService{Workspaces: manager, Content: content, Cursors: auth, MaxBytes: 1 << 20, Limits: limits, Check: func(ctx context.Context, s run.Snapshot) error { return auth.CheckAccess(ctx, s.ActorID, s.SpaceID) }}
+	files := &resource.FileService{Workspaces: manager, Content: content, MaxBytes: 1 << 20, Limits: limits, Check: func(ctx context.Context, s run.Snapshot) error { return auth.CheckAccess(ctx, s.ActorID, s.SpaceID) }}
 	sources := &resource.Sources{Files: files, Journal: j}
 	unaccepted, err := runtime.Service.UploadAttachment(ctx, actor.ID, space.ID, session.ID, "unaccepted.txt", "text/plain", strings.NewReader("not accepted"))
 	if err != nil {
@@ -623,7 +482,6 @@ return input.(float64) + float64(len(rows))`}
 	if _, err = sources.ReadAttachment(ctx, bound.Snapshot, resource.SourceInput{AttachmentID: binary.ID, Format: "text"}); err == nil {
 		t.Fatal("binary attachment treated as text")
 	}
-	// New upload API has the same schema and authority as the application service.
 	uploadPath := "/spaces/" + space.ID + "/sessions/" + session.ID + "/attachments"
 	uploadBody, _ := json.Marshal(map[string]any{"name": "api.txt", "media_type": "text/plain", "content_base64": base64.StdEncoding.EncodeToString([]byte("API attachment"))})
 	request := httptest.NewRequest("POST", "http://mass.test/api/v1"+uploadPath, bytes.NewReader(uploadBody))
@@ -636,17 +494,7 @@ return input.(float64) + float64(len(rows))`}
 		t.Fatal("upload API", response.Code, response.Body.String())
 	}
 	validate("POST", uploadPath, response)
-	// Limit failures are explicit tool results and preserve accurate effects.
-	limited, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "code limit"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	limited = wait(limited.ID)
-	if limited.Status != "succeeded" {
-		t.Fatal("limit handling", limited.Error)
-	}
-	// Cancel after a confirmed write and wait for the VM to actually leave.
-	cancelling, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "code cancel"})
+	cancelling, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "command cancel"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -668,7 +516,7 @@ return input.(float64) + float64(len(rows))`}
 	runtime.Cancel(cancelling.ID)
 	cancelling = wait(cancelling.ID)
 	if cancelling.Status != "cancelled" || cancelling.WorkspaceSnapshotID == "" {
-		t.Fatal("code cancellation", cancelling.Status, cancelling.Error)
+		t.Fatal("command cancellation", cancelling.Status, cancelling.Error)
 	}
 	manager.With(ctx, space.ID, session.ID, func(dir resource.WorkspaceDir) error {
 		raw, e := dir.Root().ReadFile("cancelled.txt")
@@ -678,19 +526,6 @@ return input.(float64) + float64(len(rows))`}
 		return nil
 	})
 	if _, ok := blobs.(*fakes.Blobs); ok {
-		for _, task := range []string{"host quota file", "host quota network", "host quota bytes"} {
-			quota, e := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: task})
-			if e != nil {
-				t.Fatal(e)
-			}
-			if quota = wait(quota.ID); quota.Status != "succeeded" {
-				t.Fatal("host quota handling", task, quota.Error)
-			}
-		}
-		if requests.Load() != 4 {
-			t.Fatal("network quota did not stop third request", requests.Load())
-		}
-		// A failed plan write must not update the durable plan.
 		if _, err = db.Admin.DB.Exec("CREATE TRIGGER reject_plan_result BEFORE INSERT ON run_plans FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='injected'"); err != nil {
 			t.Fatal(err)
 		}
@@ -711,12 +546,12 @@ return input.(float64) + float64(len(rows))`}
 			t.Fatal("plan committed without tool result")
 		}
 
-		large, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "large code"})
+		large, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "large write"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if large = wait(large.ID); large.Status != "succeeded" {
-			t.Fatal("large source execution", large.Error)
+			t.Fatal("large write execution", large.Error)
 		}
 		largeUI, e := runtime.UI.CatchUp(ctx, actor.ID, space.ID, large.ID)
 		if e != nil || len(largeUI.State.Tools) != 1 || largeUI.State.Tools[0].Standard || largeUI.State.Tools[0].Arguments != "" {
@@ -730,8 +565,9 @@ return input.(float64) + float64(len(rows))`}
 		t.Fatal(err)
 	}
 
-	t.Log("D05: all 16 tools, Python/JavaScript/Go, file/network/CSV, plan, artifact and in-memory tool results passed")
+	t.Log("D05: all 8 core tools, shell command, skill/attachment, plan, artifact and in-memory tool results passed")
 }
+
 func toolReply(name string, args any) []*schema.Message {
 	raw, _ := json.Marshal(args)
 	return []*schema.Message{{Role: schema.Assistant, ToolCalls: []schema.ToolCall{{Index: pointer(0), ID: "reused-native-id", Type: "function", Function: schema.FunctionCall{Name: name, Arguments: string(raw)}}}, ResponseMeta: &schema.ResponseMeta{FinishReason: "tool_calls", Usage: &schema.TokenUsage{PromptTokens: 100, CompletionTokens: 10}}}}

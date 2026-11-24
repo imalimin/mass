@@ -98,29 +98,6 @@ func (r *Sources) skill(ctx context.Context, s run.Snapshot, id string) (run.Ski
 	}
 	return run.Skill{}, run.ToolFailure("skill_not_bound", "none")
 }
-func (r *Sources) List(ctx context.Context, s run.Snapshot, binding, prefix, cursor string, limit int) (run.ToolResult, error) {
-	if err := r.Files.Check(ctx, s); err != nil {
-		return run.ToolResult{}, err
-	}
-	skill, err := r.skill(ctx, s, binding)
-	if err != nil {
-		return run.ToolResult{}, err
-	}
-	if len(prefix) > 1024 || strings.ContainsAny(prefix, "\\\x00") || strings.Contains(prefix, "..") {
-		return run.ToolResult{}, storage.ErrInvalid
-	}
-	return r.Files.page(s, "skill:"+binding, PageInput{Pattern: prefix, Cursor: cursor, Limit: limit}, func() (queryResult, error) {
-		q := queryResult{Items: []json.RawMessage{}, Complete: true}
-		for _, a := range skill.Resources {
-			q.Scanned++
-			if strings.HasPrefix(a.Path, prefix) {
-				raw, _ := json.Marshal(a)
-				q.Items = append(q.Items, raw)
-			}
-		}
-		return q, nil
-	})
-}
 func (r *Sources) ReadSkill(ctx context.Context, s run.Snapshot, in SourceInput) (run.ToolResult, error) {
 	if !filePath(in.Path) {
 		return run.ToolResult{}, storage.ErrInvalid

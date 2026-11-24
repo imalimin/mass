@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/imalimin/mass/internal/domain/run"
@@ -144,7 +145,17 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 	}
 	system := definition.Platform + "\n\n" + definition.Instructions
 	for _, skill := range definition.Skills {
-		system += fmt.Sprintf("\n\n<skill id=%q version=%q>\n%s\n</skill>", skill.VersionID, skill.Version, skill.Markdown)
+		body := skill.Markdown
+		if len(skill.Resources) > 0 {
+			var list strings.Builder
+			list.WriteString("\n\n<skill_resources>")
+			for _, res := range skill.Resources {
+				fmt.Fprintf(&list, "\n- %s (%d bytes)", res.Path, res.Size)
+			}
+			list.WriteString("\n</skill_resources>")
+			body += list.String()
+		}
+		system += fmt.Sprintf("\n\n<skill id=%q version=%q>\n%s\n</skill>", skill.VersionID, skill.Version, body)
 	}
 	add := func(messages []run.Message, sources []journal.Event, reason string) {
 		b := run.ContextBlock{Start: len(result.Messages), End: len(result.Messages) + len(messages), Reason: reason, EventIDs: []string{}, Refs: []storage.Ref{}, Digest: journal.Digest(messages)}
@@ -327,7 +338,7 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 						return result, storage.ErrIntegrity
 					}
 					fields := map[string]any{"status": tr.Status, "side_effect": tr.SideEffect, "error": tr.Error, "complete": tr.Complete, "excerpt": prefix(string(tr.Data), ExcerptBytes), "truncated": true}
-					if run.CodeLanguage(call.Name) != "" {
+					if call.Name == "run_code" || call.Name == "run_code_js" || call.Name == "run_code_go" {
 						var data struct {
 							NetworkFailure *run.NetworkFailure `json:"network_failure"`
 						}

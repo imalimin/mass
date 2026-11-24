@@ -22,7 +22,7 @@ const Latest = "latest"
 
 const maxSkillEntries = 100
 
-var Tools = []string{"list_files", "glob_files", "search_files", "read_file", "write_file", "edit_file", "move_file", "delete_file", "list_skill_resources", "read_skill_resource", "read_attachment", run.PythonTool, run.JavaScriptTool, run.GoTool, run.CommandTool, "update_plan", "publish_artifact"}
+var Tools = []string{run.CommandTool, "read_file", "write_file", "edit_file", "read_skill_resource", "read_attachment", "update_plan", "publish_artifact"}
 
 func ValidName(s string) bool { return namePattern.MatchString(s) }
 func ValidLabel(s string) bool {

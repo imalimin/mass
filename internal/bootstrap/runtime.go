@@ -9,7 +9,6 @@ import (
 	"time"
 
 	storearchive "github.com/imalimin/mass/internal/adapter/archive"
-	"github.com/imalimin/mass/internal/adapter/codevm"
 	"github.com/imalimin/mass/internal/adapter/command"
 	einoadapter "github.com/imalimin/mass/internal/adapter/eino"
 	"github.com/imalimin/mass/internal/adapter/mariadb"
@@ -146,32 +145,13 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	if transport == nil {
 		transport = &einoadapter.ModelTransport{Timeout: c.LLM.Timeout}
 	}
-	policy := run.ToolPolicy{Version: "mass-tools-v1", MaxCodeBytes: c.Tools.Code.MaxSourceBytes, TimeoutMS: c.Tools.Code.Timeout.Milliseconds(), MaxInputBytes: int64(c.Tools.Code.MaxInputBytes), MaxOutputBytes: int64(c.Tools.Code.MaxOutputBytes), MaxFileOperations: c.Tools.Code.MaxFileOperations, MaxNetworkRequests: c.Tools.Code.MaxNetworkRequests, MaxNetworkBodyBytes: int64(c.Tools.Code.MaxNetworkBodyBytes), MaxLogBytes: c.Tools.Code.MaxLogBytes}
-	if policy.MaxCodeBytes == 0 {
-		policy.MaxCodeBytes = 65536
-	}
+	policy := run.ToolPolicy{Version: "mass-tools-v1", TimeoutMS: c.Tools.Code.Timeout.Milliseconds(), MaxLogBytes: c.Tools.Code.MaxLogBytes}
 	if policy.TimeoutMS == 0 {
 		policy.TimeoutMS = 5000
-	}
-	if policy.MaxInputBytes == 0 {
-		policy.MaxInputBytes = 2 << 20
-	}
-	if policy.MaxOutputBytes == 0 {
-		policy.MaxOutputBytes = 2 << 20
-	}
-	if policy.MaxFileOperations == 0 {
-		policy.MaxFileOperations = 100
-	}
-	if policy.MaxNetworkRequests == 0 {
-		policy.MaxNetworkRequests = 10
-	}
-	if policy.MaxNetworkBodyBytes == 0 {
-		policy.MaxNetworkBodyBytes = 2 << 20
 	}
 	if policy.MaxLogBytes == 0 {
 		policy.MaxLogBytes = 65536
 	}
-	codeEngine := codevm.New(c.Tools.Code.MaxConcurrent, filepath.Join(traceRoot, ".go-wasi"))
 	supervisorService.NewRunner = func(ctx context.Context, s run.Snapshot, started time.Time, missingLocalFiles []string) (supervisor.Runner, error) {
 		budget := control.New(s, started)
 		budget.DiagnosticContext = ctx
@@ -188,9 +168,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		}
 		gateway := &modelgateway.Gateway{Journal: runJournal, Content: runContent, Transport: transport, Credentials: credentials, Control: budget, Trace: recorder, Delta: store.LiveUI.Delta}
 		contextPlanner.Model = gateway
-		fileService := &resource.FileService{Workspaces: workspaces, Content: runContent, Cursors: auth, MaxBytes: 1 << 20, Limits: storage.Limits{MaxArchiveFileBytes: c.Storage.MaxObjectBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
-		fileService.EnableRunPagination()
-		code := &resource.CodeService{Engine: codeEngine, Files: fileService, Network: &resource.Network{}}
+		fileService := &resource.FileService{Workspaces: workspaces, Content: runContent, MaxBytes: 1 << 20, Limits: storage.Limits{MaxArchiveFileBytes: c.Storage.MaxObjectBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
 		commands := &resource.CommandService{
 			Workspaces:     workspaces,
 			ExecuteWithEnv: command.ExecuteWithEnv,
@@ -211,7 +189,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 			},
 		}
 		sources := &resource.Sources{Files: fileService, Journal: runJournal, SharedSkillAsset: catalogue.ReadPublicAgentSkillAsset}
-		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: sources, Code: code, Command: commands, Journal: runJournal}, Control: budget, Journal: runJournal, Trace: recorder}
+		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: sources, Command: commands, Journal: runJournal}, Control: budget, Journal: runJournal, Trace: recorder}
 		return &executor.Executor{Planner: contextPlanner, Model: gateway, Tools: tools, Control: budget}, nil
 	}
 	// The connection-scoped lock proves the old dispatcher is gone before recovery.

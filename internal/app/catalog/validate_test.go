@@ -21,6 +21,7 @@ func TestStrictDefinitionValidation(t *testing.T) {
 		"duplicate nested field": strings.Replace(reporterJSON, `"max_steps": 5`, `"max_steps": 5, "max_steps": 5`, 1),
 		"wrong key case":         strings.Replace(reporterJSON, `"name"`, `"Name"`, 1),
 		"unknown tool":           `{"tools":["run_shell"],` + reporterJSON[1:],
+		"retired tool":           `{"tools":["list_files"],` + reporterJSON[1:],
 		"duplicate tool":         `{"tools":["read_file","read_file"],` + reporterJSON[1:],
 		"invalid limit":          strings.Replace(reporterJSON, `"max_steps": 5`, `"max_steps": 0`, 1),
 		"invalid schema version": strings.Replace(reporterJSON, `"schema_version": 1`, `"schema_version": 2`, 1),

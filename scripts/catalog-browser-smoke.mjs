@@ -123,7 +123,7 @@ try {
   await expect(page.locator('[data-editor="agent.json"]')).toBeVisible()
   await page.getByText('高级配置', { exact: true }).click()
   await expect(page.getByRole('button', { name: '上传资源', exact: true })).toHaveCount(0)
-  await page.getByLabel('绑定模型').selectOption({ label: '发布模型' }); await page.getByLabel('Skill 版本：extract', { exact: true }).selectOption('v1'); await page.getByLabel('Skill 版本：report_template', { exact: true }).selectOption('v1'); await page.getByLabel('run_code_js', { exact: true }).check(); await page.getByText('run_code_js 运行 JavaScript', { exact: false }).waitFor()
+  await page.getByLabel('绑定模型').selectOption({ label: '发布模型' }); await page.getByLabel('Skill 版本：extract', { exact: true }).selectOption('v1'); await page.getByLabel('Skill 版本：report_template', { exact: true }).selectOption('v1'); await page.getByLabel('run_command', { exact: true }).check(); await page.getByText('run_command 在 macOS 沙箱中执行', { exact: false }).waitFor()
   const maxSteps = page.getByLabel('最大步数', { exact: true })
   const runTimeout = page.getByLabel('运行超时（秒）', { exact: true })
   await expect(maxSteps).toHaveValue('30')

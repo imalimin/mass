@@ -121,4 +121,126 @@ func TestCommandSeatbelt(t *testing.T) {
 			t.Fatalf("unexpected clip duration %q", got)
 		}
 	})
+	t.Run("installed go toolchain", func(t *testing.T) {
+		if _, err := exec.LookPath("go"); err != nil {
+			t.Skip(err)
+		}
+		outside := filepath.Join(root, "go-private")
+		if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		src := fmt.Sprintf(`package main
+import (
+	"fmt"
+	"os"
+)
+func main() {
+	if _, err := os.ReadFile(%q); err == nil {
+		os.Exit(2)
+	}
+	fmt.Print("go-sandbox-ok")
+}
+`, outside)
+		if err := os.WriteFile(filepath.Join(workspace, "main.go"), []byte(src), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := success(t, "sh", "-c", "go run main.go"); got != "go-sandbox-ok" {
+			t.Fatalf("go run output = %q, want %q", got, "go-sandbox-ok")
+		}
+		if got := success(t, "sh", "-c", "CGO_ENABLED=0 go run main.go"); got != "go-sandbox-ok" {
+			t.Fatalf("CGO_ENABLED=0 go run output = %q, want %q", got, "go-sandbox-ok")
+		}
+	})
+	t.Run("installed python and node", func(t *testing.T) {
+		outside := filepath.Join(root, "script-private")
+		if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := exec.LookPath("python3"); err == nil {
+			pyCmd := fmt.Sprintf(`python3 -c 'import json, pathlib, sys
+try:
+    pathlib.Path(%q).read_text()
+    sys.exit(2)
+except PermissionError:
+    pass
+print(json.dumps({"ok": True}), end="")'`, outside)
+			if got := success(t, "sh", "-c", pyCmd); got != `{"ok": true}` {
+				t.Fatalf("python3 output = %q", got)
+			}
+		}
+		if _, err := exec.LookPath("node"); err == nil {
+			nodeCmd := fmt.Sprintf(`node -e 'const fs = require("fs");
+try { fs.readFileSync(%q); process.exit(2); } catch {}
+process.stdout.write(JSON.stringify({ ok: true }));'`, outside)
+			if got := success(t, "sh", "-c", nodeCmd); got != `{"ok":true}` {
+				t.Fatalf("node output = %q", got)
+			}
+		}
+	})
+}
+
+func TestToolchainRootsAutoDetection(t *testing.T) {
+	shimDir := t.TempDir()
+	goRoot := t.TempDir()
+	pyPrefix := t.TempDir()
+	pyBase := t.TempDir()
+	nodeRoot := t.TempDir()
+	nodeBinDir := filepath.Join(nodeRoot, "bin")
+	if err := os.MkdirAll(nodeBinDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	nodeRealBin := filepath.Join(nodeBinDir, "node")
+	if err := os.WriteFile(nodeRealBin, []byte("#!/bin/sh\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	writeShim := func(name, script string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(shimDir, name), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeShim("go", fmt.Sprintf("#!/bin/sh\n[ \"$GOTOOLCHAIN\" = \"local\" ] || exit 1\n[ \"$GOPROXY\" = \"off\" ] || exit 1\n[ \"$MISE_AUTO_INSTALL\" = \"0\" ] || exit 1\nif [ \"$1\" = \"env\" ] && [ \"$2\" = \"GOROOT\" ]; then printf '%%s\\n' %q; fi\n", goRoot))
+	writeShim("python3", fmt.Sprintf("#!/bin/sh\n[ \"$UV_PYTHON_DOWNLOADS\" = \"never\" ] || exit 1\n[ \"$MISE_AUTO_INSTALL\" = \"0\" ] || exit 1\nprintf '%%s\\n%%s\\n' %q %q\n", pyPrefix, pyBase))
+	writeShim("node", fmt.Sprintf("#!/bin/sh\n[ \"$MISE_AUTO_INSTALL\" = \"0\" ] || exit 1\nprintf '%%s\\n' %q\n", nodeRealBin))
+
+	roots := toolchainRoots(shimDir)
+	hasRoot := func(target string) bool {
+		resolved := evalSymlinksOrEmpty(target)
+		for _, r := range roots {
+			if r == target || (resolved != "" && r == resolved) {
+				return true
+			}
+		}
+		return false
+	}
+	for label, target := range map[string]string{
+		"go": goRoot, "python prefix": pyPrefix, "python base": pyBase, "node": nodeRoot,
+	} {
+		if !hasRoot(target) {
+			t.Errorf("missing auto-detected %s root %s in %v", label, target, roots)
+		}
+	}
+	profile, params := sandbox(filepath.Join(t.TempDir(), "work"), t.TempDir(), filepath.Join(shimDir, "go"), shimDir)
+	if !strings.Contains(profile, "/Library/Developer/CommandLineTools") {
+		t.Fatal("CommandLineTools missing from sandbox policy")
+	}
+	joined := strings.Join(params, "\n")
+	for _, target := range []string{goRoot, pyPrefix, pyBase, nodeRoot} {
+		if !strings.Contains(joined, "="+target) {
+			t.Fatalf("auto-detected root %s missing from sandbox params:\n%s", target, joined)
+		}
+	}
+
+	// Absent tools produce no hardcoded roots; broad system/home paths are rejected.
+	emptyDir := t.TempDir()
+	if got := toolchainRoots(emptyDir); len(got) != 0 {
+		t.Fatalf("expected no toolchain roots when none are in PATH, got %v", got)
+	}
+	home := t.TempDir()
+	for _, broad := range []string{"/", "/usr", "/usr/local", "/opt/homebrew", "/Users", home} {
+		if isSafeToolchainRoot(broad, home) {
+			t.Fatalf("broad root %q was accepted", broad)
+		}
+	}
 }

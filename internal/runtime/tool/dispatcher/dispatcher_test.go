@@ -47,19 +47,18 @@ func TestInvalidArgumentsAreRecoverableToolResults(t *testing.T) {
 	spec := run.ToolSpec{Name: "update_plan", Version: "1", Schema: json.RawMessage(`{
 		"type":"object","additionalProperties":false,
 		"properties":{
-			"expected_revision":{"type":"integer"},
 			"steps":{"type":"array","items":{"type":"object","additionalProperties":false,
 				"properties":{"id":{"type":"string"},"title":{"type":"string"},"status":{"type":"string"}},
-				"required":["id","title","status"]}}
+				"required":["title","status"]}}
 		},
-		"required":["expected_revision","steps"]
+		"required":["steps"]
 	}`)}
 	for _, tc := range []struct {
 		name      string
 		arguments string
 	}{
-		{"unknown field", `{"expected_revision":0,"steps":[{"id":"setup","title":"Setup","status":"in_progress","content_type":""}]}`},
-		{"invalid json", `{"expected_revision":`},
+		{"unknown field", `{"steps":[{"id":"setup","title":"Setup","status":"in_progress","content_type":""}]}`},
+		{"invalid json", `{"steps":`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder, snapshot, handler := fixture(spec, tc.arguments)
@@ -83,14 +82,13 @@ func TestValidArgumentsExecuteHandler(t *testing.T) {
 	spec := run.ToolSpec{Name: "update_plan", Version: "1", Schema: json.RawMessage(`{
 		"type":"object","additionalProperties":false,
 		"properties":{
-			"expected_revision":{"type":"integer"},
 			"steps":{"type":"array","items":{"type":"object","additionalProperties":false,
 				"properties":{"id":{"type":"string"},"title":{"type":"string"},"status":{"type":"string"}},
-				"required":["id","title","status"]}}
+				"required":["title","status"]}}
 		},
-		"required":["expected_revision","steps"]
+		"required":["steps"]
 	}`)}
-	arguments := `{"expected_revision":0,"steps":[{"id":"setup","title":"Setup","status":"in_progress"}]}`
+	arguments := `{"steps":[{"title":"Setup","status":"in_progress"}]}`
 	recorder, snapshot, handler := fixture(spec, arguments)
 	d := &Dispatcher{Registry: registry{spec: spec}, Handler: handler, Control: control{}, Trace: recorder}
 	if err := d.DispatchAndRecord(context.Background(), snapshot, run.Call{ID: "call-1", NativeID: "native-1", Name: "update_plan", Arguments: arguments, ResponseEventID: "event-1"}); err != nil {

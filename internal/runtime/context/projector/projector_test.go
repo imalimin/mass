@@ -133,3 +133,41 @@ func TestCompleteGroupsAndExplicitFailures(t *testing.T) {
 		t.Fatal("corrupt content accepted")
 	}
 }
+
+func TestSkillResourcesInjectedIntoSystemPrompt(t *testing.T) {
+	ctx := context.Background()
+	blobs := fakes.NewBlobs()
+	repo := objects{}
+	content := &resource.ContentStore{Repo: repo, Blobs: blobs, Prefix: "test", MaxBytes: 32 << 20}
+	s := run.Snapshot{
+		ID: uuid.NewString(), ActorID: uuid.NewString(), SpaceID: storage.NewShortID(), SessionID: storage.NewShortID(),
+		Definition: run.Definition{
+			Platform: "platform", Instructions: "agent", MaxInputTokens: 100000, OutputTokens: 256,
+			Model: run.ModelConfig{ContextWindow: 120000},
+			Skills: []run.Skill{
+				{ID: "s1", VersionID: "ver-1", Version: "v1", Markdown: "# Skill One", Resources: []run.SkillResource{{Path: "assets/rules.txt", Size: 12}, {Path: "scripts/run.py", Size: 64}}},
+				{ID: "s2", VersionID: "ver-2", Version: "v1", Markdown: "# Skill Two"},
+			},
+		},
+	}
+	raw, _ := json.Marshal(s.Definition)
+	o, err := content.Put(ctx, s.ActorID, s.SpaceID, uuid.NewString(), "test", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.DefinitionRef = storage.Ref{Role: "definition", ObjectID: o.ID, SHA256: o.SHA256}
+	ev := journal.New(s.ActorID, "session.created", "", journal.SessionData{DefinitionRef: &s.DefinitionRef, DefinitionID: storage.NewShortID(), VersionID: uuid.NewString()}, s.DefinitionRef)
+	history := []journal.Event{{Proposed: ev, SpaceID: s.SpaceID, SessionID: s.SessionID, Sequence: 1}}
+	p := &projector.Projector{Content: content}
+	prepared, err := p.Project(ctx, s, history, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sys := prepared.Messages[0].Content
+	if !strings.Contains(sys, "<skill_resources>\n- assets/rules.txt (12 bytes)\n- scripts/run.py (64 bytes)\n</skill_resources>") {
+		t.Fatalf("expected skill_resources list in system prompt, got:\n%s", sys)
+	}
+	if strings.Count(sys, "<skill_resources>") != 1 {
+		t.Fatalf("skill without resources should not render <skill_resources>:\n%s", sys)
+	}
+}

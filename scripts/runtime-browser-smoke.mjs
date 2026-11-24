@@ -20,8 +20,7 @@ try {
   await createAgent.getByLabel('名称', { exact: true }).fill('file-assistant')
   await createAgent.getByRole('button', { name: '创建', exact: true }).click(); const editor = page.locator('[data-editor="AGENTS.md"]'); await editor.locator('.view-lines').click(); await page.keyboard.insertText('# File assistant\nRead and write session files.')
   await page.getByLabel('绑定模型').selectOption({ label: '运行模型' })
-  await page.getByRole('checkbox', { name: 'delete_file', exact: true }).check()
-  await page.getByRole('checkbox', { name: 'glob_files', exact: true }).check()
+  await page.getByRole('checkbox', { name: 'run_command', exact: true }).check()
   const publishing = page.waitForResponse(r => r.url().endsWith('/versions') && r.request().method() === 'POST'); await page.getByRole('button', { name: '发布版本', exact: true }).click(); const published = await publishing; assert.equal(published.status(), 201); const version = await published.json()
   await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByRole('link', { name: '打开 file-assistant 的会话', exact: true }).click()
   const send = async text => { await page.getByLabel('输入任务', { exact: true }).fill(text); const accepted = page.waitForResponse(r => /\/sessions\/[^/]+\/runs$/.test(r.url()) && r.request().method() === 'POST'); await page.getByRole('button', { name: '发送任务', exact: true }).click(); const response = await accepted; assert.equal(response.status(), 202, await response.text()); return response.json() }

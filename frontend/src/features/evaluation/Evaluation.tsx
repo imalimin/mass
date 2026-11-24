@@ -147,11 +147,12 @@ function Experiments({ workspace }: { workspace: Schema['Space'] }) {
     {experiments.error && <p role="alert">{experiments.error.message}</p>}{experiments.isPending && <p role="status">正在读取实验…</p>}
     {experiments.data?.length === 0 && <p className="muted">还没有实验。</p>}
     {!!experiments.data?.length && <WorkspaceListTable label="实验列表" className="experiment-list-table"
-      columns={['实验', '创建时间', '状态', '进度', '成功率']}>
+      columns={['实验', '评测集名称', '创建时间', '状态', '进度', '成功率']}>
       {[...experiments.data].sort((a, b) => b.created_at.localeCompare(a.created_at)).map(v => {
         const finished = v.succeeded + v.failed
         return <tr key={v.id}>
           <td><Link className="workspace-list-name" to={`${path}/${v.id}`}>{v.id}</Link></td>
+          <td>{v.dataset_name || v.dataset_id}</td>
           <td><time dateTime={v.created_at}>{evaluationDateTime.format(new Date(v.created_at))}</time></td>
           <td>{labels[v.status]}</td>
           <td>{finished} / {v.case_count}</td>
@@ -213,7 +214,7 @@ function ExperimentDetail({ space }: { space: string }) {
   if (experiment.error) return <p role="alert">{experiment.error.message}</p>
   if (!v) return null
   return <section className="panel"><div className="evaluation-toolbar"><h2>实验 · {labels[v.status]}</h2><Link to={spacePath(space, 'evaluation/experiments')}>返回实验列表</Link></div>
-    <p><code>{v.id}</code></p><p>评测集：<Link to={`${spacePath(space, `evaluation/datasets/${v.dataset_id}`)}?version=${v.dataset_version}`}>{dataset.data?.name ?? v.dataset_id} · v{v.dataset_version}</Link> · 并发 {v.concurrency} · Agent <code>{v.agent_id}</code> · 版本 <code>{v.agent_version_id}</code></p>
+    <p><code>{v.id}</code></p><p>评测集：<Link to={`${spacePath(space, `evaluation/datasets/${v.dataset_id}`)}?version=${v.dataset_version}`}>{dataset.data?.name ?? v.dataset_name ?? v.dataset_id} · v{v.dataset_version}</Link> · 并发 {v.concurrency} · Agent <code>{v.agent_id}</code> · 版本 <code>{v.agent_version_id}</code></p>
     <p role="status">成功 {v.succeeded} · 失败 {v.failed} · 未完成 {v.case_count - v.succeeded - v.failed}</p>
     {v.status === 'interrupted' && <p className="error">实验已中断，未保存的过程数据不可用。请从实验列表发起新的实验。</p>}{dataset.error && <p role="alert">{dataset.error.message}</p>}
     <div className="evaluation-table"><table><thead><tr><th>用例</th><th>状态</th><th>已受理 / 成功 / 总轮次</th>{metricLabels.map(label => <th key={label}>{label}</th>)}<th>回放</th></tr></thead><tbody>{dataset.data?.cases?.map((c, i) => {

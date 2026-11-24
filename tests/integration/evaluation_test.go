@@ -382,7 +382,7 @@ func TestEvaluationHTTPMultiTurn(t *testing.T) {
 		}
 		reply := &schema.Message{Role: schema.Assistant, Content: "bluebird", ResponseMeta: &schema.ResponseMeta{FinishReason: "stop", Usage: &schema.TokenUsage{PromptTokens: 100, CompletionTokens: 10}}}
 		if tools == 0 && (latest == "remember" || latest == "recall") {
-			name, args := "write_file", `{"path":"memory.txt","content":"bluebird","media_type":"text/plain","expected_sha256":"missing"}`
+			name, args := "write_file", `{"path":"memory.txt","content":"bluebird"}`
 			if latest == "recall" {
 				name, args = "read_file", `{"path":"memory.txt"}`
 			}

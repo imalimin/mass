@@ -11,9 +11,11 @@
 .evaluation-turn pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .evaluation-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
 .dataset-list-table { min-width: 490px; }
-.experiment-list-table { min-width: 560px; }
-:is(.dataset-list-table, .experiment-list-table) :is(th, td):first-child { width: 32%; }
-.dataset-list-table th:last-child, .experiment-list-table th:nth-child(2) { width: 12rem; }
+.experiment-list-table { min-width: 680px; }
+.dataset-list-table :is(th, td):first-child { width: 32%; }
+.experiment-list-table :is(th, td):first-child { width: 22%; }
+.experiment-list-table :is(th, td):nth-child(2) { width: 24%; }
+.dataset-list-table th:last-child, .experiment-list-table th:nth-child(3) { width: 12rem; }
 .dataset-form-dialog { width: min(760px, calc(100vw - 36px)); }
 .evaluation-create-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
 .evaluation-create-actions > :first-child { margin-inline-end: auto; }

@@ -4,15 +4,11 @@ go 1.26.9
 
 require (
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20261016232758-89cedd3fd549
-	github.com/bmatcuk/doublestar/v4 v4.10.3
 	github.com/cloudwego/eino v0.9.21
 	github.com/cloudwego/eino-ext/components/model/ark v0.1.71
-	github.com/dop251/goja v0.0.0-20261017142635-e6862644b38f
 	github.com/go-sql-driver/mysql v1.10.1
-	github.com/goccy/go-python v0.4.0
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	github.com/tetratelabs/wazero v1.12.0
 	github.com/volcengine/ve-tos-golang-sdk/v2 v2.9.10
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
 )
@@ -25,12 +21,8 @@ require (
 	github.com/bytedance/sonic v1.15.0 // indirect
 	github.com/bytedance/sonic/loader v0.5.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
-	github.com/dlclark/regexp2/v2 v2.8.1 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
-	github.com/eino-contrib/jsonschema v1.0.3 // indirect
-	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
-	github.com/goccy/pythonwasm2go v0.4.0 // indirect
-	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
+	github.com/eino-contrib/jsonschema v1.0.3
 	github.com/google/uuid v1.6.0
 	github.com/goph/emperror v0.17.2 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect

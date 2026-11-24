@@ -142,26 +142,6 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 	if len(raw) > 2<<20 {
 		return diagnostic.Failure(ctx, "tool.execution_failed", run.ErrOverflow, "stage=result_size tool=%s call_id=%s bytes=%d max_bytes=%d side_effect=%s", call.Name, call.ID, len(raw), 2<<20, result.SideEffect)
 	}
-	if len(spec.ResultSchema) > 0 {
-		var doc any
-		if json.Unmarshal(spec.ResultSchema, &doc) != nil {
-			return run.ErrProtocol
-		}
-		validator := jsonschema.NewCompiler()
-		validator.AssertFormat()
-		if err = validator.AddResource("https://mass.local/result", doc); err != nil {
-			return err
-		}
-		compiled, err := validator.Compile("https://mass.local/result")
-		if err != nil {
-			return err
-		}
-		var value any
-		json.Unmarshal(raw, &value)
-		if err = compiled.Validate(value); err != nil {
-			return run.ErrProtocol
-		}
-	}
 	d.Trace.Tool(s.ID, call.ID, result.Status, elapsed, raw)
 	recordCtx := ctx
 	if ctx.Err() != nil {

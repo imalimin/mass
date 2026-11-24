@@ -214,35 +214,35 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 		case latestUser == "Prepare next release":
 			switch latestTools {
 			case 0:
-				tool, args = "write_file", fmt.Sprintf(`{"path":"AGENTS.md","content":"Second release from the same session","media_type":"text/plain","expected_sha256":"%x"}`, sha256.Sum256([]byte("Follow the published instructions.")))
+				tool, args = "write_file", fmt.Sprintf(`{"path":"AGENTS.md","content":"Second release from the same session","expected_sha256":"%x"}`, sha256.Sum256([]byte("Follow the published instructions.")))
 			case 1:
-				tool, args = "write_file", fmt.Sprintf(`{"path":"skills/source-skill/guide.txt","content":"second improvement","media_type":"text/plain","expected_sha256":"%x"}`, sha256.Sum256([]byte("improved Skill")))
+				tool, args = "write_file", fmt.Sprintf(`{"path":"skills/source-skill/guide.txt","content":"second improvement","expected_sha256":"%x"}`, sha256.Sum256([]byte("improved Skill")))
 			case 2:
-				tool, args = "write_file", `{"path":"skills/extra-skill/addendum.txt","content":"new resource for the same Skill","media_type":"text/plain","expected_sha256":"missing"}`
+				tool, args = "write_file", `{"path":"skills/extra-skill/addendum.txt","content":"new resource for the same Skill","expected_sha256":"missing"}`
 			}
 		case continueAfterArchive:
 		case createAgent && len(toolMessages) == 0:
-			tool, args = "write_file", `{"path":"AGENTS.md","content":"Created in Creativity","media_type":"text/plain","expected_sha256":"missing"}`
+			tool, args = "write_file", `{"path":"AGENTS.md","content":"Created in Creativity","expected_sha256":"missing"}`
 		case createAgent && len(toolMessages) == 1:
-			tool, args = "write_file", fmt.Sprintf(`{"path":"agent.json","content":%q,"media_type":"application/json","expected_sha256":"missing"}`, string(newAgentJSON))
+			tool, args = "write_file", fmt.Sprintf(`{"path":"agent.json","content":%q,"expected_sha256":"missing"}`, string(newAgentJSON))
 		case createAgent && len(toolMessages) == 2:
-			tool, args = "write_file", `{"path":"proj.yaml","content":"unexpected: true","media_type":"text/plain","expected_sha256":"missing"}`
+			tool, args = "write_file", `{"path":"proj.yaml","content":"unexpected: true","expected_sha256":"missing"}`
 		case createAgent:
 		case iteration && len(toolMessages) == 0:
-			tool, args = "write_file", `{"path":"result.txt","content":"iteration result","media_type":"text/plain","expected_sha256":"missing"}`
+			tool, args = "write_file", `{"path":"result.txt","content":"iteration result","expected_sha256":"missing"}`
 		case iteration && len(toolMessages) == 1:
-			tool, args = "write_file", fmt.Sprintf(`{"path":"skills/source-skill/guide.txt","content":"improved Skill","media_type":"text/plain","expected_sha256":"%x"}`, sha256.Sum256([]byte("latest skill resource")))
+			tool, args = "write_file", fmt.Sprintf(`{"path":"skills/source-skill/guide.txt","content":"improved Skill","expected_sha256":"%x"}`, sha256.Sum256([]byte("latest skill resource")))
 		case iteration && len(toolMessages) == 2:
-			tool, args = "write_file", `{"path":"skills/extra-skill/SKILL.md","content":"---\nname: extra-skill\ndescription: Extra fixture.\n---\nUse the extra skill.","media_type":"text/plain","expected_sha256":"missing"}`
+			tool, args = "write_file", `{"path":"skills/extra-skill/SKILL.md","content":"---\nname: extra-skill\ndescription: Extra fixture.\n---\nUse the extra skill.","expected_sha256":"missing"}`
 		case iteration && len(toolMessages) == 3:
-			tool, args = "update_plan", `{"expected_revision":0,"steps":[{"id":"review","title":"Review changes","status":"completed"}]}`
+			tool, args = "update_plan", `{"steps":[{"id":"review","title":"Review changes","status":"completed"}]}`
 		case !iteration && len(toolMessages) == 0:
 			tool, args = "read_skill_resource", fmt.Sprintf(`{"skill_binding_id":%q,"path":"guide.txt"}`, skillVersion.ID)
 		case !iteration && len(toolMessages) == 1:
 			if !strings.Contains(toolMessages[0], "bound published resource") {
 				return nil, fmt.Errorf("bound Skill resource not returned: %s", toolMessages[0])
 			}
-			tool, args = "write_file", `{"path":"result.txt","content":"created in target","media_type":"text/plain","expected_sha256":"missing"}`
+			tool, args = "write_file", `{"path":"result.txt","content":"created in target","expected_sha256":"missing"}`
 		}
 		if tool != "" {
 			reply.Content, reply.ResponseMeta.FinishReason = "", "tool_calls"

@@ -6586,6 +6586,10 @@ components:
           format: date-time
         dataset_id:
           $ref: '#/components/schemas/ShortResourceID'
+        dataset_name:
+          type: string
+          minLength: 1
+          maxLength: 100
         dataset_version:
           type: integer
           minimum: 1
