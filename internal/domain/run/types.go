@@ -48,12 +48,58 @@ type ToolSpec struct {
 	ResultSchema json.RawMessage `json:"result_schema,omitempty"`
 }
 type Skill struct {
-	ID        string          `json:"id"`
-	VersionID string          `json:"version_id"`
-	Version   string          `json:"version"`
-	SHA256    string          `json:"sha256"`
-	Markdown  string          `json:"markdown"`
-	Resources []SkillResource `json:"resources,omitempty"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name,omitempty"`
+	Description string          `json:"description,omitempty"`
+	ObjectID    string          `json:"object_id,omitempty"`
+	VersionID   string          `json:"version_id"`
+	Version     string          `json:"version"`
+	SHA256      string          `json:"sha256"`
+	Markdown    string          `json:"markdown"`
+	Resources   []SkillResource `json:"resources,omitempty"`
+}
+
+// SkillMountNames assigns deterministic, collision-free folder names for bound Skills.
+func SkillMountNames(skills []Skill) []string {
+	names := make([]string, len(skills))
+	used := map[string]int{}
+	for i, skill := range skills {
+		base := skill.Name
+		if base == "" {
+			base = skill.ID
+		}
+		if base == "" {
+			base = skill.VersionID
+		}
+		if base == "" {
+			base = "skill"
+		}
+		count := used[base] + 1
+		used[base] = count
+		if count == 1 {
+			names[i] = base
+		} else {
+			names[i] = base + "-" + string(rune('0'+count))
+			if count >= 10 {
+				names[i] = base + "-" + itoa(count)
+			}
+		}
+	}
+	return names
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var digits [20]byte
+	i := len(digits)
+	for n > 0 {
+		i--
+		digits[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(digits[i:])
 }
 
 type DraftSkillPackage struct {

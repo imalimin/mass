@@ -11,8 +11,8 @@ import (
 
 func TestAllToolSchemasAndLegacyCompatibility(t *testing.T) {
 	specs := Specs()
-	if len(specs) != 8 {
-		t.Fatalf("expected 8 core tools, got %d", len(specs))
+	if len(specs) != 7 {
+		t.Fatalf("expected 7 core tools, got %d", len(specs))
 	}
 	validSamples := map[string][]map[string]any{
 		run.CommandTool: {
@@ -21,6 +21,7 @@ func TestAllToolSchemasAndLegacyCompatibility(t *testing.T) {
 		},
 		"read_file": {
 			{"path": "notes.txt"},
+			{"path": "$MASS_SKILLS_DIR/rules/SKILL.md"},
 			{"path": "notes.txt", "range": map[string]any{"start_line": 1, "end_line": 10}},
 		},
 		"write_file": {
@@ -29,9 +30,6 @@ func TestAllToolSchemasAndLegacyCompatibility(t *testing.T) {
 		},
 		"edit_file": {
 			{"path": "notes.txt", "edits": []any{map[string]any{"old_text": "a", "new_text": "b"}}},
-		},
-		"read_skill_resource": {
-			{"skill_binding_id": "ver-1", "path": "assets/rules.txt"},
 		},
 		"read_attachment": {
 			{"attachment_id": "att-1"},
@@ -92,6 +90,7 @@ func TestAllToolSchemasAndLegacyCompatibility(t *testing.T) {
 		{Name: "move_file", Version: "1"},
 		{Name: "delete_file", Version: "1"},
 		{Name: "list_skill_resources", Version: "1"},
+		{Name: "read_skill_resource", Version: "1"},
 		{Name: "run_code", Version: "1"},
 		{Name: "run_code_js", Version: "1"},
 		{Name: "run_code_go", Version: "1"},

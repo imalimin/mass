@@ -131,27 +131,21 @@ func (s *Service) WithPublicAgent(ctx context.Context, space, agent, version str
 	return repo.WithPublicAgent(ctx, space, agent, version, fn)
 }
 
-func (s *Service) ReadPublicAgentSkillAsset(ctx context.Context, space string, skill run.Skill, asset run.SkillResource) ([]byte, storage.Object, error) {
+func (s *Service) OpenPublicAgentSkillPackage(ctx context.Context, space string, skill run.Skill) (storage.Object, *resource.File, error) {
 	repo, ok := s.Repo.(publicAgentRepository)
-	if !ok || !asset.Package || !resource.ValidSkillPath(asset.Path) {
-		return nil, storage.Object{}, storage.ErrIntegrity
+	if !ok {
+		return storage.Object{}, nil, storage.ErrIntegrity
 	}
 	object, err := repo.PublishedSkillObject(ctx, space, skill.ID, skill.VersionID)
 	if err != nil {
-		return nil, object, err
+		return object, nil, err
 	}
-	if object.ID != asset.ObjectID || object.SHA256 != skill.SHA256 {
-		return nil, object, storage.ErrIntegrity
+	if object.SHA256 != skill.SHA256 {
+		return object, nil, storage.ErrIntegrity
 	}
 	file, err := s.Content.ReadVerified(ctx, object)
 	if err != nil {
-		return nil, object, err
+		return object, nil, err
 	}
-	defer file.Close()
-	zipped, err := resource.OpenSkillPackage(file, object)
-	if err != nil {
-		return nil, object, err
-	}
-	data, err := resource.ReadSkillEntry(zipped, asset.Path, resource.SkillFileMaxBytes)
-	return data, object, err
+	return object, file, nil
 }

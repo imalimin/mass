@@ -21,6 +21,9 @@ type EditInput struct {
 }
 
 func (f *FileService) Edit(ctx context.Context, s run.Snapshot, in EditInput) (result run.ToolResult, err error) {
+	if _, _, isSkill := splitSkillPath(in.Path); isSkill {
+		return result, run.ToolFailure("skill_read_only", "none")
+	}
 	if !filePath(in.Path) || len(in.Edits) < 1 || len(in.Edits) > 100 {
 		return result, storage.ErrInvalid
 	}

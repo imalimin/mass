@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,10 +20,14 @@ import (
 )
 
 func Execute(ctx context.Context, workspace, name string, args []string, maxOutput int) (resource.CommandOutput, error) {
-	return ExecuteWithEnv(ctx, workspace, name, args, nil, maxOutput)
+	return ExecuteWithOptions(ctx, workspace, name, args, resource.CommandOptions{}, maxOutput)
 }
 
 func ExecuteWithEnv(ctx context.Context, workspace, name string, args []string, extraEnv []string, maxOutput int) (resource.CommandOutput, error) {
+	return ExecuteWithOptions(ctx, workspace, name, args, resource.CommandOptions{Env: extraEnv}, maxOutput)
+}
+
+func ExecuteWithOptions(ctx context.Context, workspace, name string, args []string, opts resource.CommandOptions, maxOutput int) (resource.CommandOutput, error) {
 	var out resource.CommandOutput
 	path, err := exec.LookPath(name)
 	if err != nil {
@@ -49,13 +54,38 @@ func ExecuteWithEnv(ctx context.Context, workspace, name string, args []string, 
 		return out, err
 	}
 
+	env := append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + tmp, "TMPDIR=" + tmp, "LANG=en_US.UTF-8"}, opts.Env...)
+	var readOnlyDirs []string
+	if len(opts.SkillDirs) > 0 {
+		skillsDir := filepath.Join(tmp, "skills")
+		if err := os.Mkdir(skillsDir, 0700); err != nil {
+			return out, err
+		}
+		names := make([]string, 0, len(opts.SkillDirs))
+		for skillName := range opts.SkillDirs {
+			names = append(names, skillName)
+		}
+		sort.Strings(names)
+		for _, skillName := range names {
+			target, err := filepath.EvalSymlinks(opts.SkillDirs[skillName])
+			if err != nil || !filepath.IsAbs(target) {
+				return out, errors.New("bound skill directory must resolve to an absolute path")
+			}
+			if err := os.Symlink(target, filepath.Join(skillsDir, skillName)); err != nil {
+				return out, err
+			}
+			readOnlyDirs = append(readOnlyDirs, target)
+		}
+		env = append(env, resource.SkillsDirEnv+"="+skillsDir)
+	}
+
 	pathEnv := os.Getenv("PATH")
-	profile, params := sandbox(workspace, tmp, program, pathEnv)
+	profile, params := sandbox(workspace, tmp, program, pathEnv, readOnlyDirs...)
 	argv := append([]string{"-p", profile}, params...)
 	argv = append(argv, "--", path)
 	cmd := exec.CommandContext(ctx, "/usr/bin/sandbox-exec", append(argv, args...)...)
 	cmd.Dir = workspace
-	cmd.Env = append([]string{"PATH=" + pathEnv, "HOME=" + tmp, "TMPDIR=" + tmp, "LANG=en_US.UTF-8"}, extraEnv...)
+	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return killGroup(cmd.Process.Pid) }
 	// A child that keeps an output descriptor open must not hold up Wait.
@@ -134,7 +164,7 @@ const basePolicy = `
     (global-name "com.apple.ocspd"))
 `
 
-func sandbox(workspace, tmp, program, pathEnv string) (string, []string) {
+func sandbox(workspace, tmp, program, pathEnv string, readOnlyDirs ...string) (string, []string) {
 	var profile strings.Builder
 	profile.WriteString(basePolicy)
 	var params []string
@@ -173,6 +203,9 @@ func sandbox(workspace, tmp, program, pathEnv string) (string, []string) {
 	rule("deny file-read* file-map-executable", "subpath", filepath.Dir(workspace))
 	for _, dir := range []string{workspace, tmp} {
 		rule("allow file-read* file-write* file-map-executable", "subpath", dir)
+	}
+	for _, dir := range readOnlyDirs {
+		rule("allow file-read* file-map-executable", "subpath", dir)
 	}
 	return profile.String(), params
 }

@@ -145,8 +145,8 @@ func TestSkillResourcesInjectedIntoSystemPrompt(t *testing.T) {
 			Platform: "platform", Instructions: "agent", MaxInputTokens: 100000, OutputTokens: 256,
 			Model: run.ModelConfig{ContextWindow: 120000},
 			Skills: []run.Skill{
-				{ID: "s1", VersionID: "ver-1", Version: "v1", Markdown: "# Skill One", Resources: []run.SkillResource{{Path: "assets/rules.txt", Size: 12}, {Path: "scripts/run.py", Size: 64}}},
-				{ID: "s2", VersionID: "ver-2", Version: "v1", Markdown: "# Skill Two"},
+				{ID: "s1", VersionID: "ver-1", Name: "rules", Version: "v1", Description: "Apply calculation rules.", Markdown: "# Skill One\nSECRET_BODY_DO_NOT_INLINE", Resources: []run.SkillResource{{Path: "assets/rules.txt", Size: 12}, {Path: "scripts/run.py", Size: 64}}},
+				{ID: "s2", VersionID: "ver-2", Name: "helper", Version: "v1", Markdown: "# Skill Two\nSECOND_BODY_DO_NOT_INLINE"},
 			},
 		},
 	}
@@ -164,10 +164,23 @@ func TestSkillResourcesInjectedIntoSystemPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	sys := prepared.Messages[0].Content
-	if !strings.Contains(sys, "<skill_resources>\n- assets/rules.txt (12 bytes)\n- scripts/run.py (64 bytes)\n</skill_resources>") {
-		t.Fatalf("expected skill_resources list in system prompt, got:\n%s", sys)
+	for _, want := range []string{
+		"<available_skills>",
+		`- name="rules" version="v1" entry="$MASS_SKILLS_DIR/rules/SKILL.md"`,
+		"description: Apply calculation rules.",
+		"  resources:\n  - $MASS_SKILLS_DIR/rules/assets/rules.txt (12 bytes)\n  - $MASS_SKILLS_DIR/rules/scripts/run.py (64 bytes)",
+		`- name="helper" version="v1" entry="$MASS_SKILLS_DIR/helper/SKILL.md"`,
+	} {
+		if !strings.Contains(sys, want) {
+			t.Fatalf("expected %q in system prompt, got:\n%s", want, sys)
+		}
 	}
-	if strings.Count(sys, "<skill_resources>") != 1 {
-		t.Fatalf("skill without resources should not render <skill_resources>:\n%s", sys)
+	for _, forbidden := range []string{"SECRET_BODY_DO_NOT_INLINE", "SECOND_BODY_DO_NOT_INLINE"} {
+		if strings.Contains(sys, forbidden) {
+			t.Fatalf("skill body should not be injected eagerly (%q):\n%s", forbidden, sys)
+		}
+	}
+	if strings.Count(sys, "  resources:\n") != 1 {
+		t.Fatalf("skill without resources should not render resources block:\n%s", sys)
 	}
 }

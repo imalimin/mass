@@ -4,151 +4,29 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
-	"github.com/imalimin/mass/internal/domain/run"
-	"github.com/imalimin/mass/internal/domain/storage"
-	"github.com/imalimin/mass/internal/journal"
 	"io"
 	"mime"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/imalimin/mass/internal/domain/run"
+	"github.com/imalimin/mass/internal/domain/storage"
+	"github.com/imalimin/mass/internal/journal"
 )
 
 type Sources struct {
-	Files            *FileService
-	Journal          *journal.Journal
-	SharedSkillAsset func(context.Context, string, run.Skill, run.SkillResource) ([]byte, storage.Object, error)
+	Files   *FileService
+	Journal *journal.Journal
 }
+
 type SourceInput struct {
 	RecordOffset int        `json:"record_offset"`
 	RecordLimit  int        `json:"record_limit"`
-	Binding      string     `json:"skill_binding_id"`
-	Path         string     `json:"path"`
 	AttachmentID string     `json:"attachment_id"`
 	Format       string     `json:"format"`
 	Range        *run.Range `json:"range"`
 }
 
-func (r *Sources) skill(ctx context.Context, s run.Snapshot, id string) (run.Skill, error) {
-	for i, skill := range s.Definition.Skills {
-		if skill.VersionID != id {
-			continue
-		}
-		if skill.Resources != nil {
-			return skill, nil
-		}
-		if r.Files.Content.Inline != nil {
-			var definition run.Definition
-			if err := ReadJSON(ctx, r.Files.Content, s.ActorID, s.SpaceID, s.DefinitionRef.ObjectID, 16<<20, &definition); err != nil {
-				return skill, err
-			}
-			if i >= len(definition.Skills) || definition.Skills[i].VersionID != id {
-				return skill, storage.ErrIntegrity
-			}
-			return definition.Skills[i], nil
-		}
-		// Exact version objects remain referenced by session.created, including D04.
-		page, err := r.Journal.Read(ctx, s.ActorID, s.SpaceID, s.SessionID, 0, nil, 1)
-		if err != nil {
-			return skill, err
-		}
-		for _, e := range page.Events {
-			if e.Type != "session.created" {
-				continue
-			}
-			for _, ref := range e.Refs {
-				if ref.Role == "skill_version" && ref.Ordinal == i && ref.SHA256 == skill.SHA256 {
-					var bundle struct {
-						Document struct {
-							Assets []run.SkillResource `json:"assets"`
-						} `json:"document"`
-					}
-					o, f, err := r.Files.Content.Read(ctx, s.ActorID, s.SpaceID, ref.ObjectID)
-					if err != nil {
-						return skill, err
-					}
-					defer f.Close()
-					var raw []byte
-					if o.Kind == SkillPackageKind {
-						z, e := OpenSkillPackage(f, o)
-						if e != nil {
-							return skill, e
-						}
-						raw, err = ReadSkillEntry(z, SkillManifestPath, 4<<20)
-					} else {
-						raw, err = io.ReadAll(io.LimitReader(f, (16<<20)+1))
-						if len(raw) > 16<<20 {
-							err = storage.ErrIntegrity
-						}
-					}
-					if err != nil || json.Unmarshal(raw, &bundle) != nil {
-						return skill, storage.ErrIntegrity
-					}
-					skill.Resources = bundle.Document.Assets
-					if o.Kind == SkillPackageKind {
-						for j := range skill.Resources {
-							skill.Resources[j].ObjectID = o.ID
-							skill.Resources[j].Package = true
-						}
-					}
-					return skill, nil
-				}
-			}
-		}
-		return skill, storage.ErrIntegrity
-	}
-	return run.Skill{}, run.ToolFailure("skill_not_bound", "none")
-}
-func (r *Sources) ReadSkill(ctx context.Context, s run.Snapshot, in SourceInput) (run.ToolResult, error) {
-	if !filePath(in.Path) {
-		return run.ToolResult{}, storage.ErrInvalid
-	}
-	if err := r.Files.Check(ctx, s); err != nil {
-		return run.ToolResult{}, err
-	}
-	skill, err := r.skill(ctx, s, in.Binding)
-	if err != nil {
-		return run.ToolResult{}, err
-	}
-	for _, a := range skill.Resources {
-		if a.Path != in.Path {
-			continue
-		}
-		var raw []byte
-		source := storage.Ref{Role: "source", ObjectID: a.ObjectID, SHA256: a.SHA256}
-		if s.AgentSourceSpaceID != "" {
-			if r.SharedSkillAsset == nil {
-				return run.ToolResult{}, storage.ErrIntegrity
-			}
-			var object storage.Object
-			raw, object, err = r.SharedSkillAsset(ctx, s.AgentSourceSpaceID, skill, a)
-			source.SHA256 = object.SHA256
-		} else if a.Package {
-			var o storage.Object
-			raw, o, err = ReadSkillPackageFile(ctx, r.Files.Content, s.ActorID, s.SpaceID, a.ObjectID, a.Path)
-			source.SHA256 = o.SHA256
-		} else {
-			raw, err = ReadBytes(ctx, r.Files.Content, s.ActorID, s.SpaceID, a.ObjectID, SkillFileMaxBytes)
-		}
-		if err != nil {
-			return run.ToolResult{}, err
-		}
-		if hashBytes(raw) != a.SHA256 {
-			return run.ToolResult{}, storage.ErrIntegrity
-		}
-		data, err := rangeData(raw, in.Range)
-		if err != nil {
-			return run.ToolResult{}, err
-		}
-		data["skill_binding_id"] = skill.VersionID
-		data["path"] = a.Path
-		data["version"] = skill.Version
-		result := dataResult(data, "none", source)
-		result.Complete = data["complete"].(bool)
-		result.Truncated = !result.Complete
-		return result, nil
-	}
-	return run.ToolResult{}, run.ToolFailure("resource_not_bound", "none")
-}
 func (r *Sources) ReadAttachment(ctx context.Context, s run.Snapshot, in SourceInput) (run.ToolResult, error) {
 	if err := r.Files.Check(ctx, s); err != nil {
 		return run.ToolResult{}, err
@@ -271,7 +149,6 @@ func (r *Sources) ReadAttachment(ctx context.Context, s run.Snapshot, in SourceI
 			}
 		}
 		data = map[string]any{"value": value, "format": format, "parser_version": "mass-attachment-v1", "parser_complete": true, "complete": complete, "truncated": !complete, "record_offset": offset, "next_record_offset": next, "size": len(raw), "sha256": a.Ref.SHA256}
-
 	default:
 		return run.ToolResult{}, run.ToolFailure("unsupported_format", "none")
 	}
@@ -284,6 +161,7 @@ func (r *Sources) ReadAttachment(ctx context.Context, s run.Snapshot, in SourceI
 	result.Truncated = !result.Complete
 	return result, nil
 }
+
 func parseCSV(ctx context.Context, text string, maxRows int) ([][]string, error) {
 	reader := csv.NewReader(strings.NewReader(text))
 	rows := [][]string{}

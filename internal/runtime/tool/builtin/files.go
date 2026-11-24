@@ -75,8 +75,6 @@ func (h *Handler) Execute(ctx context.Context, s run.Snapshot, call run.Call, ar
 			edits = append(edits, resource.Edit{Old: e["old_text"].(string), New: e["new_text"].(string)})
 		}
 		result, err = h.Files.Edit(ctx, s, resource.EditInput{Path: text("path"), ExpectedSHA256: text("expected_sha256"), Edits: edits})
-	case "read_skill_resource":
-		result, err = h.Sources.ReadSkill(ctx, s, resource.SourceInput{Binding: text("skill_binding_id"), Path: text("path"), Range: span})
 	case "read_attachment":
 		result, err = h.Sources.ReadAttachment(ctx, s, resource.SourceInput{AttachmentID: text("attachment_id"), Format: text("format"), Range: span, RecordOffset: number("record_offset"), RecordLimit: number("record_limit")})
 	case "update_plan":

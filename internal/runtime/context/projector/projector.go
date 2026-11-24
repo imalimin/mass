@@ -144,18 +144,25 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 		return result, err
 	}
 	system := definition.Platform + "\n\n" + definition.Instructions
-	for _, skill := range definition.Skills {
-		body := skill.Markdown
-		if len(skill.Resources) > 0 {
-			var list strings.Builder
-			list.WriteString("\n\n<skill_resources>")
-			for _, res := range skill.Resources {
-				fmt.Fprintf(&list, "\n- %s (%d bytes)", res.Path, res.Size)
+	if len(definition.Skills) > 0 {
+		names := run.SkillMountNames(definition.Skills)
+		var skillsBlock strings.Builder
+		skillsBlock.WriteString("\n\n<available_skills>\nUse read_file to read a skill's SKILL.md or resources on demand, and run_command to execute skill scripts. Bound skill directories are read-only.")
+		for i, skill := range definition.Skills {
+			mount := names[i]
+			fmt.Fprintf(&skillsBlock, "\n- name=%q version=%q entry=\"$%s/%s/%s\"", mount, skill.Version, resource.SkillsDirEnv, mount, resource.SkillDocumentPath)
+			if skill.Description != "" {
+				fmt.Fprintf(&skillsBlock, "\n  description: %s", skill.Description)
 			}
-			list.WriteString("\n</skill_resources>")
-			body += list.String()
+			if len(skill.Resources) > 0 {
+				skillsBlock.WriteString("\n  resources:")
+				for _, res := range skill.Resources {
+					fmt.Fprintf(&skillsBlock, "\n  - $%s/%s/%s (%d bytes)", resource.SkillsDirEnv, mount, res.Path, res.Size)
+				}
+			}
 		}
-		system += fmt.Sprintf("\n\n<skill id=%q version=%q>\n%s\n</skill>", skill.VersionID, skill.Version, body)
+		skillsBlock.WriteString("\n</available_skills>")
+		system += skillsBlock.String()
 	}
 	add := func(messages []run.Message, sources []journal.Event, reason string) {
 		b := run.ContextBlock{Start: len(result.Messages), End: len(result.Messages) + len(messages), Reason: reason, EventIDs: []string{}, Refs: []storage.Ref{}, Digest: journal.Digest(messages)}

@@ -152,6 +152,10 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 	if policy.MaxLogBytes == 0 {
 		policy.MaxLogBytes = 65536
 	}
+	skillCache := &resource.SkillCache{
+		Root:               filepath.Join(traceRoot, ".skill-cache"),
+		SharedSkillPackage: catalogue.OpenPublicAgentSkillPackage,
+	}
 	supervisorService.NewRunner = func(ctx context.Context, s run.Snapshot, started time.Time, missingLocalFiles []string) (supervisor.Runner, error) {
 		budget := control.New(s, started)
 		budget.DiagnosticContext = ctx
@@ -168,10 +172,12 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		}
 		gateway := &modelgateway.Gateway{Journal: runJournal, Content: runContent, Transport: transport, Credentials: credentials, Control: budget, Trace: recorder, Delta: store.LiveUI.Delta}
 		contextPlanner.Model = gateway
-		fileService := &resource.FileService{Workspaces: workspaces, Content: runContent, MaxBytes: 1 << 20, Limits: storage.Limits{MaxArchiveFileBytes: c.Storage.MaxObjectBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
+		fileService := &resource.FileService{Workspaces: workspaces, Content: runContent, Skills: skillCache, MaxBytes: 1 << 20, Limits: storage.Limits{MaxArchiveFileBytes: c.Storage.MaxObjectBytes, MaxTotalBytes: c.Storage.MaxWorkspaceBytes}, Check: func(ctx context.Context, _ run.Snapshot) error { return budget.Check(ctx) }}
 		commands := &resource.CommandService{
-			Workspaces:     workspaces,
-			ExecuteWithEnv: command.ExecuteWithEnv,
+			Workspaces:         workspaces,
+			Content:            runContent,
+			Skills:             skillCache,
+			ExecuteWithOptions: command.ExecuteWithOptions,
 			Env: func(s run.Snapshot) ([]string, func(), error) {
 				apiURL := localAPIBaseURL(c)
 				if apiURL == "" || auth == nil {
@@ -188,7 +194,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 				}, revoke, nil
 			},
 		}
-		sources := &resource.Sources{Files: fileService, Journal: runJournal, SharedSkillAsset: catalogue.ReadPublicAgentSkillAsset}
+		sources := &resource.Sources{Files: fileService, Journal: runJournal}
 		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: sources, Command: commands, Journal: runJournal}, Control: budget, Journal: runJournal, Trace: recorder}
 		return &executor.Executor{Planner: contextPlanner, Model: gateway, Tools: tools, Control: budget}, nil
 	}

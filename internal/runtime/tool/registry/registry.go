@@ -17,6 +17,7 @@ var legacyTools = map[string]bool{
 	"move_file":            true,
 	"delete_file":          true,
 	"list_skill_resources": true,
+	"read_skill_resource":  true,
 	"run_code":             true,
 	"run_code_js":          true,
 	"run_code_go":          true,
@@ -46,11 +47,11 @@ func Specs() []run.ToolSpec {
 		raw, _ := json.Marshal(object(props, required...))
 		specs = append(specs, run.ToolSpec{Name: name, Version: "1", Description: description, Schema: raw})
 	}
-	add(run.CommandTool, "Run a command in the current session workspace (macOS Seatbelt sandbox). By default command is executed as a shell script via sh -c (supporting pipes, redirects, &&, globs, file management, CLI tools, Python/Node/Go, and network access). Optionally pass args to execute an installed binary from PATH directly without a shell.", map[string]any{
+	add(run.CommandTool, "Run a command in the current session workspace (macOS Seatbelt sandbox). By default command is executed as a shell script via sh -c (supporting pipes, redirects, &&, globs, file management, CLI tools, Python/Node/Go, network access, and read-only bound skills under $MASS_SKILLS_DIR). Optionally pass args to execute an installed binary from PATH directly without a shell.", map[string]any{
 		"command": map[string]any{"type": "string", "minLength": 1, "maxLength": 65536},
 		"args":    map[string]any{"type": "array", "items": str()},
 	}, "command")
-	add("read_file", "Read workspace file content and SHA-256 (bounded 64 KiB UTF-8 or base64 view). Optional byte or line range.", map[string]any{
+	add("read_file", "Read a workspace file or read-only bound skill file ($MASS_SKILLS_DIR/<skill>/<path>), returning content and SHA-256 (bounded 64 KiB UTF-8 or base64 view). Optional byte or line range.", map[string]any{
 		"path":            path,
 		"expected_sha256": sha,
 		"range":           ranges,
@@ -73,11 +74,6 @@ func Specs() []run.ToolSpec {
 			}, "old_text", "new_text"),
 		},
 	}, "path", "edits")
-	add("read_skill_resource", "Read a resource file from a bound Skill (use the skill id and resource paths listed in <skill> system instructions). Optional byte or line range.", map[string]any{
-		"skill_binding_id": str(),
-		"path":             path,
-		"range":            ranges,
-	}, "skill_binding_id", "path")
 	add("read_attachment", "Read an accepted session attachment by ID. Supports text (with optional byte/line range) or structured json/csv (with optional record_offset/record_limit).", map[string]any{
 		"attachment_id": str(),
 		"record_offset": integer(0, 10000),

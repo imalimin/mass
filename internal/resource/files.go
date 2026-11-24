@@ -26,6 +26,7 @@ type FileService struct {
 	ReadBudget func(int64) error
 	Workspaces Workspaces
 	Content    *ContentStore
+	Skills     *SkillCache
 	MaxBytes   int64
 	Limits     storage.Limits
 	Check      func(context.Context, run.Snapshot) error
@@ -153,15 +154,39 @@ func openWorkspaceFile(dir WorkspaceDir, p string) (*os.File, fs.FileInfo, error
 	return file, info, nil
 }
 
-func (f *FileService) read(ctx context.Context, dir WorkspaceDir, p string) ([]byte, error) {
+func splitSkillPath(raw string) (skillName, rel string, ok bool) {
+	var trimmed string
+	switch {
+	case strings.HasPrefix(raw, "$"+SkillsDirEnv+"/"):
+		trimmed = strings.TrimPrefix(raw, "$"+SkillsDirEnv+"/")
+	case strings.HasPrefix(raw, "${"+SkillsDirEnv+"}/"):
+		trimmed = strings.TrimPrefix(raw, "${"+SkillsDirEnv+"}/")
+	default:
+		return "", "", false
+	}
+	name, rest, found := strings.Cut(trimmed, "/")
+	if !found || name == "" || rest == "" {
+		return "", "", false
+	}
+	return name, rest, true
+}
+
+func (f *FileService) readRoot(ctx context.Context, root *os.Root, p string) ([]byte, error) {
 	if !filePath(p) {
 		return nil, storage.ErrInvalid
 	}
-	file, info, err := openWorkspaceFile(dir, p)
+	if err := checkParents(root, p); err != nil {
+		return nil, err
+	}
+	file, err := root.Open(p)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, storage.ErrWorkspace
+	}
 	if info.Size() > storage.MaxContentObjectBytes {
 		return nil, run.ErrOverflow
 	}
@@ -183,7 +208,57 @@ func (f *FileService) read(ctx context.Context, dir WorkspaceDir, p string) ([]b
 	}
 	return raw, nil
 }
+
+func (f *FileService) read(ctx context.Context, dir WorkspaceDir, p string) ([]byte, error) {
+	return f.readRoot(ctx, dir.Root(), p)
+}
+
+func (f *FileService) readSkillFile(ctx context.Context, s run.Snapshot, in ReadFileInput, skillName, rel string) (run.ToolResult, error) {
+	if err := f.Check(ctx, s); err != nil {
+		return run.ToolResult{}, err
+	}
+	if !filePath(rel) {
+		return run.ToolResult{}, storage.ErrInvalid
+	}
+	if f.Skills == nil {
+		return run.ToolResult{}, run.ToolFailure("skill_not_bound", "none")
+	}
+	mounts, err := f.Skills.Mounts(ctx, f.Content, s)
+	if err != nil {
+		return run.ToolResult{}, err
+	}
+	mountDir, ok := mounts[skillName]
+	if !ok {
+		return run.ToolResult{}, run.ToolFailure("skill_not_bound", "none")
+	}
+	root, err := os.OpenRoot(mountDir)
+	if err != nil {
+		return run.ToolResult{}, err
+	}
+	defer root.Close()
+	raw, err := f.readRoot(ctx, root, rel)
+	if err != nil {
+		return run.ToolResult{}, err
+	}
+	sha := hashBytes(raw)
+	if in.ExpectedSHA256 != "" && in.ExpectedSHA256 != sha {
+		return run.ToolResult{}, storage.ErrConflict
+	}
+	view, err := rangeData(raw, in.Range)
+	if err != nil {
+		return run.ToolResult{}, err
+	}
+	view["path"] = in.Path
+	result := dataResult(view, "none")
+	result.Complete = view["complete"].(bool)
+	result.Truncated = !result.Complete
+	return result, nil
+}
+
 func (f *FileService) Read(ctx context.Context, s run.Snapshot, in ReadFileInput) (run.ToolResult, error) {
+	if skillName, rel, ok := splitSkillPath(in.Path); ok {
+		return f.readSkillFile(ctx, s, in, skillName, rel)
+	}
 	var result run.ToolResult
 	err := f.Workspaces.With(ctx, s.SpaceID, s.SessionID, func(dir WorkspaceDir) error {
 		if err := f.Check(ctx, s); err != nil {
@@ -210,6 +285,9 @@ func (f *FileService) Read(ctx context.Context, s run.Snapshot, in ReadFileInput
 	return result, err
 }
 func (f *FileService) Write(ctx context.Context, s run.Snapshot, in WriteFileInput) (result run.ToolResult, err error) {
+	if _, _, isSkill := splitSkillPath(in.Path); isSkill {
+		return result, run.ToolFailure("skill_read_only", "none")
+	}
 	if !filePath(in.Path) || !utf8.ValidString(in.Content) || int64(len(in.Content)) > f.MaxBytes || (in.MediaType != "" && !validMediaType(in.MediaType)) {
 		return result, storage.ErrInvalid
 	}

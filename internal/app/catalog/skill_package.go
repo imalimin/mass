@@ -49,6 +49,7 @@ func decodeSkillBundle(o storage.Object, f *resource.File, expectedSHA string) (
 		return b, err
 	}
 	b.Document.Markdown = string(raw)
+	b.PackageObjectID = o.ID
 	for i := range b.Document.Assets {
 		b.Document.Assets[i].ObjectID = o.ID
 		b.Document.Assets[i].Package = true

@@ -78,7 +78,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	skill, err = catalogue.Save(ctx, actor.ID, space.ID, "skill", skill.ID, skill.Revision, catalog.Document{Markdown: "Read the multiplier from assets/rules.txt.", Assets: []catalog.Asset{}})
+	skill, err = catalogue.Save(ctx, actor.ID, space.ID, "skill", skill.ID, skill.Revision, catalog.Document{Markdown: "---\nname: rules\ndescription: Calculation multiplier rules.\n---\nRead the multiplier from assets/rules.txt.", Assets: []catalog.Asset{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		asset := skill.Document.Assets[0]
 		for i := 1; i < 100; i++ {
 			alias := asset
-			alias.Path = fmt.Sprintf("assets/%0490d.txt", i)
+			alias.Path = fmt.Sprintf("assets/%0200d/%0200d/%080d.txt", i, i, i)
 			skill.Document.Assets = append(skill.Document.Assets, alias)
 		}
 		skill, err = catalogue.Save(ctx, actor.ID, space.ID, "skill", skill.ID, skill.Revision, skill.Document)
@@ -98,8 +98,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 			t.Fatal(err)
 		}
 	}
-	skillVersion, err := catalogue.Publish(ctx, actor.ID, space.ID, "skill", skill.ID, "v1", skill.Revision, false)
-	if err != nil {
+	if _, err = catalogue.Publish(ctx, actor.ID, space.ID, "skill", skill.ID, "v1", skill.Revision, false); err != nil {
 		t.Fatal(err)
 	}
 	agent, err := catalogue.Create(ctx, actor.ID, space.ID, "agent", "tools-agent")
@@ -224,11 +223,16 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		var args map[string]any
 		switch step {
 		case 0:
-			if !strings.Contains(systemPrompt, "<skill_resources>\n- assets/rules.txt") {
-				return nil, fmt.Errorf("skill resources missing from system prompt")
+			if !strings.Contains(systemPrompt, "<available_skills>") ||
+				!strings.Contains(systemPrompt, "$MASS_SKILLS_DIR/rules/SKILL.md") ||
+				!strings.Contains(systemPrompt, "$MASS_SKILLS_DIR/rules/assets/rules.txt") {
+				return nil, fmt.Errorf("available_skills metadata missing from system prompt")
 			}
-			name = "read_skill_resource"
-			args = map[string]any{"skill_binding_id": skillVersion.ID, "path": "assets/rules.txt"}
+			if strings.Contains(systemPrompt, "Read the multiplier from assets/rules.txt.") {
+				return nil, fmt.Errorf("skill body should not be eagerly injected into system prompt")
+			}
+			name = "read_file"
+			args = map[string]any{"path": "$MASS_SKILLS_DIR/rules/assets/rules.txt"}
 		case 1:
 			name = "read_attachment"
 			marker := "[MASS accepted attachments; use read_attachment by ID: "
@@ -434,7 +438,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if _, err = sources.ReadAttachment(ctx, first.Snapshot, resource.SourceInput{AttachmentID: unaccepted.ID, Format: "text"}); err == nil {
 		t.Fatal("unaccepted attachment readable")
 	}
-	if _, err = sources.ReadSkill(ctx, first.Snapshot, resource.SourceInput{Binding: uuid.NewString(), Path: "assets/rules.txt"}); err == nil {
+	if _, err = files.Read(ctx, first.Snapshot, resource.ReadFileInput{Path: "$MASS_SKILLS_DIR/unbound/assets/rules.txt"}); err == nil {
 		t.Fatal("unbound skill readable")
 	}
 	otherSession, err := runtime.Service.Create(ctx, actor.ID, space.ID, sessionapp.CreateInput{Key: uuid.NewString(), AgentID: agent.ID})

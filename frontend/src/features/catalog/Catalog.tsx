@@ -21,7 +21,7 @@ const agentLimits = {
 type Limit = keyof typeof agentLimits
 const limitFields = Object.keys(agentLimits) as Limit[]
 const validLimit = (key: Limit, value: string) => Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= agentLimits[key].max
-const tools = ['run_command', 'read_file', 'write_file', 'edit_file', 'read_skill_resource', 'read_attachment', 'update_plan', 'publish_artifact']
+const tools = ['run_command', 'read_file', 'write_file', 'edit_file', 'read_attachment', 'update_plan', 'publish_artifact']
 const errorText = (e: unknown) => e instanceof Error ? e.message : '操作未完成'
 const displayVersion = (v: Version) => v.debug ? `调试快照 ${v.id.slice(0, 8)}` : v.label
 const definitionNamePattern = String.raw`[a-z][a-z0-9_\-]{0,63}`

@@ -147,7 +147,7 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	must(err)
 	agent, err := catalogue.Create(ctx, owner.ID, source.ID, "agent", "shared-agent")
 	must(err)
-	conf := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Tools: []string{"read_skill_resource", "write_file", "update_plan"}, Skills: []catalog.SkillRef{}}
+	conf := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Tools: []string{"read_file", "write_file", "update_plan"}, Skills: []catalog.SkillRef{}}
 	conf.Context = catalog.ContextConfig{MaxInputTokens: 20000, MaxTokens: 1024, Compression: "summary"}
 	conf.Limits.MaxSteps, conf.Limits.TimeoutSeconds = 6, 30
 	publish := func(label string) catalog.Version {
@@ -176,7 +176,6 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	newAgentConfig.Model = ""
 	newAgentJSON, err := json.MarshalIndent(newAgentConfig, "", "  ")
 	must(err)
-	var draftBinding atomic.Value
 	fake := &einoadapter.ModelTransport{Fake: &einoadapter.FakeChatModel{Respond: func(_ context.Context, messages []*schema.Message) ([]*schema.Message, error) {
 		var toolMessages []string
 		latestUser, latestTools := "", 0
@@ -206,7 +205,7 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 		tool, args := "", ""
 		switch {
 		case readDraft && len(toolMessages) == 0:
-			tool, args = "read_skill_resource", fmt.Sprintf(`{"skill_binding_id":%q,"path":"guide.txt"}`, draftBinding.Load())
+			tool, args = "read_file", `{"path":"$MASS_SKILLS_DIR/source-skill/guide.txt"}`
 		case readDraft:
 			if !strings.Contains(toolMessages[0], "draft-only resource") {
 				return nil, fmt.Errorf("pinned Skill resource not returned: %s", toolMessages[0])
@@ -237,7 +236,7 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 		case iteration && len(toolMessages) == 3:
 			tool, args = "update_plan", `{"steps":[{"id":"review","title":"Review changes","status":"completed"}]}`
 		case !iteration && len(toolMessages) == 0:
-			tool, args = "read_skill_resource", fmt.Sprintf(`{"skill_binding_id":%q,"path":"guide.txt"}`, skillVersion.ID)
+			tool, args = "read_file", `{"path":"$MASS_SKILLS_DIR/source-skill/guide.txt"}`
 		case !iteration && len(toolMessages) == 1:
 			if !strings.Contains(toolMessages[0], "bound published resource") {
 				return nil, fmt.Errorf("bound Skill resource not returned: %s", toolMessages[0])
@@ -681,7 +680,6 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 	if string(rawResource) != "draft-only resource" {
 		t.Fatalf("reopened draft session read %q", rawResource)
 	}
-	draftBinding.Store(pinnedContent)
 	must(json.Unmarshal(request("POST", source.ID+"/sessions/"+pinnedDraft.ID+"/runs", ownerCookie, map[string]string{
 		"idempotency_key": uuid.NewString(), "text": "Read the pinned draft",
 	}, 202).Body.Bytes(), &accepted))

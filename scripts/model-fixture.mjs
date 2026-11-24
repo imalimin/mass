@@ -40,12 +40,13 @@ export async function startModelFixture() {
       const failed = results.find(r => r.status !== 'completed'); if (failed) throw new Error(`D05 tool failed: ${JSON.stringify(failed)}`)
       const data = i => results[i]?.data ?? {}
       const systemMsg = messages.find(m => m.role === 'system')?.content ?? ''
-      if (!systemMsg.includes('<skill_resources>\n- rules.txt')) throw new Error('missing <skill_resources> in system prompt')
-      const binding = systemMsg.match(/<skill id="([^"]+)"/)?.[1]
+      if (!systemMsg.includes('<available_skills>') || !systemMsg.includes('$MASS_SKILLS_DIR/rules/SKILL.md') || !systemMsg.includes('$MASS_SKILLS_DIR/rules/rules.txt')) {
+        throw new Error('missing <available_skills> metadata in system prompt')
+      }
       const attachments = JSON.parse(task.split('[MASS accepted attachments; use read_attachment by ID: ')[1].slice(0, -1))
       const steps = status => [{ id: 'report', title: 'Create summary', status }]
       const actions = [
-        () => ['read_skill_resource', { skill_binding_id: binding, path: 'rules.txt' }],
+        () => ['read_file', { path: '$MASS_SKILLS_DIR/rules/rules.txt' }],
         () => ['read_attachment', { attachment_id: attachments[0].id, format: 'json' }],
         () => ['write_file', { path: 'records.json', content: JSON.stringify(data(1).value) }],
         () => ['read_file', { path: 'records.json' }],

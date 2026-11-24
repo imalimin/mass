@@ -181,7 +181,18 @@ func (s *Service) Create(ctx context.Context, actor, space string, in CreateInpu
 		for _, a := range skillBundle.Document.Assets {
 			resources = append(resources, run.SkillResource{Path: a.Path, ObjectID: a.ObjectID, SHA256: a.SHA256, Size: a.Size, MediaType: a.MediaType, Package: a.Package})
 		}
-		d.Skills = append(d.Skills, run.Skill{Resources: resources, ID: binding.SkillID, VersionID: binding.VersionID, Version: binding.Version, SHA256: binding.SHA256, Markdown: skillBundle.Document.Markdown})
+		objectID := skillBundle.PackageObjectID
+		d.Skills = append(d.Skills, run.Skill{
+			Resources:   resources,
+			ID:          binding.SkillID,
+			Name:        skillBundle.Name,
+			Description: catalog.ExtractSkillDescription(skillBundle.Document.Markdown),
+			ObjectID:    objectID,
+			VersionID:   binding.VersionID,
+			Version:     binding.Version,
+			SHA256:      binding.SHA256,
+			Markdown:    skillBundle.Document.Markdown,
+		})
 	}
 	for _, name := range c.Tools {
 		d.Tools = append(d.Tools, run.ToolSpec{Name: name, Version: "1"})

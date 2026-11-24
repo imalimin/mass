@@ -128,15 +128,16 @@ type Binding struct {
 	SHA256    string `json:"sha256"`
 }
 type Bundle struct {
-	FormatVersion int             `json:"format_version"`
-	DefinitionID  string          `json:"definition_id"`
-	Kind          string          `json:"kind"`
-	Name          string          `json:"name"`
-	Revision      int64           `json:"revision"`
-	Document      Document        `json:"document"`
-	Config        *Config         `json:"config"`
-	Model         *identity.Model `json:"model"`
-	Bindings      []Binding       `json:"bindings"`
+	FormatVersion   int             `json:"format_version"`
+	DefinitionID    string          `json:"definition_id"`
+	Kind            string          `json:"kind"`
+	Name            string          `json:"name"`
+	Revision        int64           `json:"revision"`
+	Document        Document        `json:"document"`
+	Config          *Config         `json:"config"`
+	Model           *identity.Model `json:"model"`
+	Bindings        []Binding       `json:"bindings"`
+	PackageObjectID string          `json:"-"`
 }
 type Version struct {
 	ID           string    `json:"id"`

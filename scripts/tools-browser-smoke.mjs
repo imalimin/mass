@@ -22,7 +22,7 @@ try {
   await page.getByRole('button', { name: '创建 Skill', exact: true }).click()
   const createSkill = page.getByRole('dialog', { name: '创建 Skill' })
   await createSkill.getByLabel('名称', { exact: true }).fill('rules')
-  await createSkill.getByRole('button', { name: '创建', exact: true }).click(); await edit('SKILL.md', '# Rules\nRead the multiplier from rules.txt.'); await save()
+  await createSkill.getByRole('button', { name: '创建', exact: true }).click(); await edit('SKILL.md', '---\nname: rules\ndescription: Multiplier rules.\n---\n# Rules\nRead the multiplier from rules.txt.'); await save()
   await page.getByText('添加资源', { exact: true }).click()
   await page.getByLabel('资源文件（最多 8 MiB）').setInputFiles({ name: 'rules.txt', mimeType: 'text/plain', buffer: Buffer.from('2') })
   await expect(page.getByLabel('资源路径')).toHaveValue('rules.txt')
@@ -32,7 +32,7 @@ try {
   await createAgent.getByLabel('名称', { exact: true }).fill('tools-assistant')
   await createAgent.getByRole('button', { name: '创建', exact: true }).click(); await edit('AGENTS.md', '# Tools assistant\nProcess the accepted attachment with the selected tools.')
   await page.getByLabel('绑定模型').selectOption({ label: '工具模型' }); await page.getByLabel('Skill 版本：rules', { exact: true }).selectOption('v1')
-  const checks = page.locator('.tool-options input'); assert.equal(await checks.count(), 8); for (const check of await checks.all()) await check.check()
+  const checks = page.locator('.tool-options input'); assert.equal(await checks.count(), 7); for (const check of await checks.all()) await check.check()
   await page.getByLabel('输入 Token 上限').fill('100000'); const agentVersion = await publish()
   await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByRole('link', { name: '打开 tools-assistant 的会话', exact: true }).click()
   await page.getByLabel('Agent 版本').selectOption(agentVersion.id)
@@ -47,7 +47,7 @@ try {
   await expect(page.getByRole('complementary', { name: '当前运行计划' })).toContainText('修订 2'); await expect(page.getByRole('complementary', { name: '当前运行计划' })).toContainText('已完成 · Create summary')
   assert.ok(await page.evaluate(() => window.__massToolInterrupted), 'tool parameter stream was not interrupted')
   await page.getByText(/^工具调用 · /).click()
-  const names = await page.locator('.tool-activity > details > summary').allTextContents(); assert.equal(new Set(names.map(n => n.split(' · ')[0])).size, 8)
+  const names = await page.locator('.tool-activity > details > summary').allTextContents(); assert.equal(new Set(names.map(n => n.split(' · ')[0])).size, 7)
   const artifactLink = page.locator('.run-output a').filter({ hasText: 'summary.json' }).first(); const artifact = await context.request.get(new URL(await artifactLink.getAttribute('href'), server.url).href); assert.equal(artifact.status(), 200); assert.equal(await artifact.text(), '{"total":10,"label":"final"}')
   const attachmentLink = page.locator('.chat-history a').filter({ hasText: 'records.json' }).first(); await attachmentLink.waitFor(); const attachment = await context.request.get(new URL(await attachmentLink.getAttribute('href'), server.url).href); assert.equal(attachment.status(), 200); assert.equal(await attachment.text(), '[{"amount":2},{"amount":3}]')
   const base = `${server.url}/api/v1/spaces/${run.space_id}/runs/${run.id}`
@@ -78,6 +78,6 @@ try {
     assert.equal(commands[0].result.data.stderr, 'problem')
     console.log('Host command browser flow passed: Agent opt-in, failure details, workspace artifact and session JSONL.')
   }
-  assert.deepEqual(errors, []); console.log('D05 browser passed: all 8 core tools through actual Eino/HTTP, accepted attachment and fixed Skill, shell command IO, plan, immutable artifact after deletion, replay without execution and mobile layout.')
+  assert.deepEqual(errors, []); console.log('D05 browser passed: all 7 core tools through actual Eino/HTTP, accepted attachment and fixed Skill, shell command IO, plan, immutable artifact after deletion, replay without execution and mobile layout.')
 } catch (e) { await mkdir('.cache', { recursive: true }); await page?.screenshot({ path: '.cache/d05-failure.png', fullPage: true }); throw e }
 finally { await browser?.close(); await server.stop() }

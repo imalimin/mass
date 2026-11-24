@@ -18,11 +18,19 @@ type CommandOutput struct {
 	Truncated bool   `json:"-"`
 }
 
+type CommandOptions struct {
+	Env       []string
+	SkillDirs map[string]string
+}
+
 type CommandService struct {
-	Workspaces     Workspaces
-	Execute        func(context.Context, string, string, []string, int) (CommandOutput, error)
-	ExecuteWithEnv func(context.Context, string, string, []string, []string, int) (CommandOutput, error)
-	Env            func(run.Snapshot) ([]string, func(), error)
+	Workspaces         Workspaces
+	Content            *ContentStore
+	Skills             *SkillCache
+	Execute            func(context.Context, string, string, []string, int) (CommandOutput, error)
+	ExecuteWithEnv     func(context.Context, string, string, []string, []string, int) (CommandOutput, error)
+	ExecuteWithOptions func(context.Context, string, string, []string, CommandOptions, int) (CommandOutput, error)
+	Env                func(run.Snapshot) ([]string, func(), error)
 }
 
 func (c *CommandService) Run(ctx context.Context, s run.Snapshot, name string, args []string) (run.ToolResult, error) {
@@ -42,14 +50,27 @@ func (c *CommandService) Run(ctx context.Context, s run.Snapshot, name string, a
 			defer cleanup()
 		}
 	}
+	var skillDirs map[string]string
+	if c.Skills != nil && len(s.Definition.Skills) > 0 {
+		var err error
+		skillDirs, err = c.Skills.Mounts(commandCtx, c.Content, s)
+		if err != nil {
+			result := dataResult(CommandOutput{Detail: err.Error()}, "none")
+			result.Status, result.Error = "failed", "command_failed"
+			return result, context.Cause(ctx)
+		}
+	}
 	var out CommandOutput
 	started := time.Now()
 	maxLog := min(s.Definition.ToolPolicy.MaxLogBytes, 64<<10)
 	err := c.Workspaces.With(commandCtx, s.SpaceID, s.SessionID, func(dir WorkspaceDir) error {
 		var err error
-		if c.ExecuteWithEnv != nil {
+		switch {
+		case c.ExecuteWithOptions != nil:
+			out, err = c.ExecuteWithOptions(commandCtx, dir.Root().Name(), name, args, CommandOptions{Env: extraEnv, SkillDirs: skillDirs}, maxLog)
+		case c.ExecuteWithEnv != nil:
 			out, err = c.ExecuteWithEnv(commandCtx, dir.Root().Name(), name, args, extraEnv, maxLog)
-		} else {
+		default:
 			out, err = c.Execute(commandCtx, dir.Root().Name(), name, args, maxLog)
 		}
 		return err

@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/imalimin/mass/internal/resource"
 )
 
 func TestCommandSeatbelt(t *testing.T) {
@@ -175,6 +177,45 @@ process.stdout.write(JSON.stringify({ ok: true }));'`, outside)
 			if got := success(t, "sh", "-c", nodeCmd); got != `{"ok":true}` {
 				t.Fatalf("node output = %q", got)
 			}
+		}
+	})
+	t.Run("bound skill read only", func(t *testing.T) {
+		// Place cache under the workspace parent (root) to verify Seatbelt allows
+		// only the bound skill directory after denying filepath.Dir(workspace).
+		skillDir := filepath.Join(root, ".skill-cache", "bound-sha")
+		unboundDir := filepath.Join(root, ".skill-cache", "unbound-sha")
+		if err := os.MkdirAll(filepath.Join(skillDir, "scripts"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(unboundDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# Rules\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, "scripts", "calc.sh"), []byte("#!/bin/sh\necho calc-ok\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(unboundDir, "secret.txt"), []byte("top-secret"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		opts := resource.CommandOptions{SkillDirs: map[string]string{"rules": skillDir}}
+		out, err := ExecuteWithOptions(ctx, workspace, "sh", []string{"-c", `cat "$MASS_SKILLS_DIR/rules/SKILL.md" && "$MASS_SKILLS_DIR/rules/scripts/calc.sh"`}, opts, 8192)
+		if err != nil {
+			t.Fatalf("reading/executing bound skill failed: %v, stderr=%s", err, out.Stderr)
+		}
+		if out.Stdout != "# Rules\ncalc-ok\n" {
+			t.Fatalf("unexpected bound skill output: %q", out.Stdout)
+		}
+		// Writing to a mounted skill file must be denied by Seatbelt.
+		out, err = ExecuteWithOptions(ctx, workspace, "sh", []string{"-c", `echo tampered > "$MASS_SKILLS_DIR/rules/SKILL.md"`}, opts, 2048)
+		if err == nil || out.ExitCode == nil || *out.ExitCode == 0 {
+			t.Fatalf("write to bound skill succeeded: %+v", out)
+		}
+		// Sibling unbound skill cache directories must stay denied.
+		out, err = ExecuteWithOptions(ctx, workspace, "cat", []string{filepath.Join(unboundDir, "secret.txt")}, opts, 2048)
+		if err == nil || out.ExitCode == nil || *out.ExitCode == 0 {
+			t.Fatalf("read of unbound skill cache succeeded: %+v", out)
 		}
 	})
 }

@@ -1,6 +1,7 @@
 package resource_test
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -86,9 +87,54 @@ func fileFixture(t *testing.T) (*resource.FileService, run.Snapshot, string) {
 	}
 	t.Cleanup(func() { w.Close() })
 	content := &resource.ContentStore{Repo: objects{}, Blobs: fakes.NewBlobs(), Prefix: "test/files/", MaxBytes: 8 << 20}
-	f := &resource.FileService{Workspaces: w, Content: content, MaxBytes: 1 << 20, Limits: limits, Check: func(context.Context, run.Snapshot) error { return nil }}
+	skills := &resource.SkillCache{Root: filepath.Join(root, ".skill-cache")}
+	f := &resource.FileService{Workspaces: w, Content: content, Skills: skills, MaxBytes: 1 << 20, Limits: limits, Check: func(context.Context, run.Snapshot) error { return nil }}
 	s := run.Snapshot{ID: uuid.NewString(), ActorID: uuid.NewString(), SpaceID: storage.NewShortID(), SessionID: storage.NewShortID()}
 	return f, s, filepath.Join(root, s.SpaceID+"_"+s.SessionID)
+}
+func putSkillPackage(t *testing.T, ctx context.Context, content *resource.ContentStore, s run.Snapshot, markdown string, files map[string]string) (storage.Object, []run.SkillResource) {
+	t.Helper()
+	var buf bytes.Buffer
+	z := zip.NewWriter(&buf)
+	assets := make([]run.SkillResource, 0, len(files))
+	for rel, body := range files {
+		w, err := z.Create(rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+		assets = append(assets, run.SkillResource{Path: rel, SHA256: digest(body), Size: int64(len(body)), MediaType: "text/plain"})
+	}
+	w, err := z.Create(resource.SkillDocumentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(markdown)); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := json.Marshal(map[string]any{
+		"document": map[string]any{"assets": assets},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = z.Create(resource.SkillManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := z.Close(); err != nil {
+		t.Fatal(err)
+	}
+	obj, err := content.Put(ctx, s.ActorID, s.SpaceID, uuid.NewString(), resource.SkillPackageKind, "application/zip", bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return obj, assets
 }
 func toolData(t *testing.T, r run.ToolResult) map[string]any {
 	t.Helper()
@@ -213,26 +259,63 @@ func TestBoundedReadAndSkillSources(t *testing.T) {
 		}
 	}
 
-	// Bound Skill resource reading and permission checks.
-	skillObj, err := f.Content.Put(ctx, s.ActorID, s.SpaceID, uuid.NewString(), "test", "text/plain", bytes.NewReader([]byte("rule=42")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	skillVersionID := uuid.NewString()
+	// Bound Skill unpacking, read_file via $MASS_SKILLS_DIR, read-only guards, and permission checks.
+	skillDoc := "---\nname: rules\ndescription: Apply rules.\n---\nUse assets/rules.txt."
+	skillObj, skillResources := putSkillPackage(t, ctx, f.Content, s, skillDoc, map[string]string{
+		"assets/rules.txt": "rule=42",
+		"scripts/run.sh":   "#!/bin/sh\necho ok\n",
+	})
 	s.Definition.Skills = []run.Skill{{
-		ID:        uuid.NewString(),
-		VersionID: skillVersionID,
-		Version:   "v1",
-		SHA256:    skillObj.SHA256,
-		Resources: []run.SkillResource{{Path: "assets/rules.txt", ObjectID: skillObj.ID, SHA256: skillObj.SHA256, Size: skillObj.Size, MediaType: "text/plain"}},
+		ID:          uuid.NewString(),
+		VersionID:   uuid.NewString(),
+		Name:        "rules",
+		Version:     "v1",
+		Description: "Apply rules.",
+		ObjectID:    skillObj.ID,
+		SHA256:      skillObj.SHA256,
+		Resources:   skillResources,
 	}}
+	docRes, err := f.Read(ctx, s, resource.ReadFileInput{Path: "$MASS_SKILLS_DIR/rules/SKILL.md"})
+	if err != nil || toolData(t, docRes)["content"] != skillDoc {
+		t.Fatalf("read_file SKILL.md failed: %v, %s", err, docRes.Data)
+	}
+	skillRes, err := f.Read(ctx, s, resource.ReadFileInput{Path: "${MASS_SKILLS_DIR}/rules/assets/rules.txt"})
+	if err != nil || toolData(t, skillRes)["content"] != "rule=42" {
+		t.Fatalf("read_file skill asset failed: %v, %s", err, skillRes.Data)
+	}
+	mounts, err := f.Skills.Mounts(ctx, f.Content, s)
+	if err != nil || mounts["rules"] == "" {
+		t.Fatalf("SkillCache.Mounts failed: %v, %+v", err, mounts)
+	}
+	if info, statErr := os.Stat(filepath.Join(mounts["rules"], "scripts", "run.sh")); statErr != nil || info.Mode()&0100 == 0 {
+		t.Fatalf("expected script in skill cache to be executable: %v, %v", info, statErr)
+	}
+	if _, err = f.Read(ctx, s, resource.ReadFileInput{Path: "$MASS_SKILLS_DIR/unbound/SKILL.md"}); err == nil {
+		t.Fatal("unbound skill read accepted")
+	} else {
+		var failure *run.ToolError
+		if !errors.As(err, &failure) || failure.Code != "skill_not_bound" || failure.Effect != "none" {
+			t.Fatalf("expected skill_not_bound, got %v", err)
+		}
+	}
+	for _, mutErr := range []error{
+		func() error {
+			_, e := f.Write(ctx, s, resource.WriteFileInput{Path: "$MASS_SKILLS_DIR/rules/SKILL.md", Content: "tampered"})
+			return e
+		}(),
+		func() error {
+			_, e := f.Edit(ctx, s, resource.EditInput{Path: "$MASS_SKILLS_DIR/rules/SKILL.md", Edits: []resource.Edit{{Old: "rules", New: "bad"}}})
+			return e
+		}(),
+	} {
+		var failure *run.ToolError
+		if !errors.As(mutErr, &failure) || failure.Code != "skill_read_only" || failure.Effect != "none" {
+			t.Fatalf("expected skill_read_only, got %v", mutErr)
+		}
+	}
+
 	mj := &memoryJournal{}
 	j := &journal.Journal{Repo: mj}
-	sources := &resource.Sources{Files: f, Journal: j}
-	skillRes, err := sources.ReadSkill(ctx, s, resource.SourceInput{Binding: skillVersionID, Path: "assets/rules.txt"})
-	if err != nil || toolData(t, skillRes)["content"] != "rule=42" {
-		t.Fatalf("ReadSkill failed: %v, %s", err, skillRes.Data)
-	}
 
 	// Plan updates auto-increment revision, auto-assign step IDs, and allow title edits.
 	p1, err := resource.PreparePlan(ctx, j, s, []run.PlanStep{{Title: "Draft summary", Status: "in_progress"}})
@@ -250,7 +333,7 @@ func TestBoundedReadAndSkillSources(t *testing.T) {
 	}
 
 	f.Check = func(context.Context, run.Snapshot) error { return run.ErrPermission }
-	if _, err = sources.ReadSkill(ctx, s, resource.SourceInput{Binding: skillVersionID, Path: "assets/rules.txt"}); !errors.Is(err, run.ErrPermission) {
+	if _, err = f.Read(ctx, s, resource.ReadFileInput{Path: "$MASS_SKILLS_DIR/rules/assets/rules.txt"}); !errors.Is(err, run.ErrPermission) {
 		t.Fatal("revoked skill read accepted", err)
 	}
 }
