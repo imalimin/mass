@@ -145,11 +145,27 @@ button.send-button:disabled { background: var(--hover); }
 .agent-id-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; color: var(--muted); }
 .definition-version-column { width: 15%; }
 .definition-date-column { width: 140px; }
+.skill-time-column { width: 170px; }
 .workspace-list-table .definition-date { white-space: nowrap; }
 .agent-action-column { width: clamp(46px, 8vw, 112px); }
 .agent-table :is(th, td):nth-child(n+5) { padding-inline: 2px; text-align: center; }
+.skill-table :is(th, td):nth-child(4) { padding-inline: 2px; text-align: center; }
 .agent-action { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 9px; vertical-align: middle; }
 .agent-table :is(a.agent-action, button.agent-action:enabled):is(:hover, :focus-visible) { background: var(--accent-soft); color: var(--accent-text); }
+:is(.agent-table, .skill-table) button.skill-menu-trigger:enabled:is(:hover, :focus-visible, [aria-expanded="true"]) { background: var(--accent-soft); color: var(--accent-text); }
+.skill-action-menu { position: fixed; z-index: 40; min-width: 124px; padding: 5px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-raised); box-shadow: 0 10px 30px #0005; display: grid; gap: 2px; }
+.skill-action-menu .skill-menu-item { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; padding: 8px 10px; border-radius: 7px; background: transparent; color: var(--text); font-size: 13px; text-align: left; }
+.skill-action-menu .skill-menu-item:enabled:is(:hover, :focus-visible) { background: var(--hover); filter: none; }
+.skill-action-menu .skill-menu-item.danger { color: var(--danger); }
+.skill-action-menu .skill-menu-item.danger:enabled:is(:hover, :focus-visible) { background: var(--error-bg); color: var(--danger); }
+.skill-delete-dialog { display: grid; gap: 14px; }
+.skill-delete-dialog p { margin: 0; font-size: 13.5px; line-height: 1.65; }
+.skill-delete-warning { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-radius: 10px; background: var(--error-bg); color: var(--danger); font-size: 13px; line-height: 1.6; }
+.skill-delete-warning .icon { flex-shrink: 0; margin-top: 2px; }
+.skill-usage-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-height: 200px; overflow: auto; }
+.skill-usage-list li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-raised); font-size: 13px; }
+.skill-usage-list li span { color: var(--muted); font-size: 12px; }
+button.danger { background: #b42318; color: #fff; }
 .workspace-form-dialog { width: min(520px, calc(100vw - 36px)); }
 .workspace-form-dialog h2 { margin-bottom: 22px; }
 @media (max-width: 700px) {

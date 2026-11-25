@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"io"
 	"mime"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -291,4 +293,122 @@ func newDefinition(kind, name string) Definition {
 		return Definition{ID: storage.NewShortID(), Kind: kind, Name: name, Visibility: VisibilitySpace}
 	}
 	return Definition{ID: uuid.NewString(), Kind: kind, Name: name}
+}
+
+// SkillUsage reports every Agent in the space whose draft or published/snapshot
+// versions currently reference the given Skill.
+func (s *Service) SkillUsage(ctx context.Context, actor, space, skillID string) ([]SkillUsage, error) {
+	if _, err := s.Repo.CatalogDraft(ctx, actor, space, "skill", skillID); err != nil {
+		return nil, err
+	}
+	byAgent := map[string]*SkillUsage{}
+	seenVersion := map[string]map[string]bool{}
+	ensure := func(agentID, name string) *SkillUsage {
+		u := byAgent[agentID]
+		if u == nil {
+			u = &SkillUsage{AgentID: agentID, Name: name, Versions: []string{}}
+			byAgent[agentID] = u
+			seenVersion[agentID] = map[string]bool{}
+		}
+		if u.Name == "" && name != "" {
+			u.Name = name
+		}
+		return u
+	}
+
+	// 1. Check every Agent draft in the space.
+	for after := ""; ; {
+		agents, err := s.Repo.CatalogList(ctx, actor, space, "agent", identity.Query{After: after, Limit: 200})
+		if err != nil {
+			return nil, err
+		}
+		for _, agent := range agents {
+			draft, err := s.Repo.CatalogDraft(ctx, actor, space, "agent", agent.ID)
+			if err != nil {
+				return nil, err
+			}
+			var cfg struct {
+				Skills []SkillRef `json:"skills"`
+			}
+			if strings.TrimSpace(draft.Document.ConfigYAML) != "" && json.Unmarshal([]byte(draft.Document.ConfigYAML), &cfg) == nil {
+				for _, ref := range cfg.Skills {
+					if ref.ID == skillID {
+						ensure(agent.ID, agent.Name).InDraft = true
+						break
+					}
+				}
+			}
+		}
+		if len(agents) < 200 {
+			break
+		}
+		after = agents[len(agents)-1].ID
+	}
+
+	// 2. Check every published Skill version's referencing Agent versions/snapshots.
+	for afterVer := ""; ; {
+		versions, err := s.Repo.CatalogVersions(ctx, actor, space, "skill", skillID, false, identity.Query{After: afterVer, Limit: 200})
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range versions {
+			for afterRef := ""; ; {
+				refs, err := s.Repo.CatalogReferences(ctx, actor, space, "skill", skillID, v.ID, identity.Query{After: afterRef, Limit: 200})
+				if err != nil {
+					return nil, err
+				}
+				for _, ref := range refs {
+					u := ensure(ref.DefinitionID, ref.Name)
+					label := ref.Label
+					if ref.Debug || label == "" {
+						short := ref.ID
+						if len(short) > 8 {
+							short = short[:8]
+						}
+						label = "调试快照 " + short
+					}
+					if !seenVersion[ref.DefinitionID][label] {
+						seenVersion[ref.DefinitionID][label] = true
+						u.Versions = append(u.Versions, label)
+					}
+				}
+				if len(refs) < 200 {
+					break
+				}
+				afterRef = refs[len(refs)-1].ID
+			}
+		}
+		if len(versions) < 200 {
+			break
+		}
+		afterVer = versions[len(versions)-1].ID
+	}
+
+	result := make([]SkillUsage, 0, len(byAgent))
+	for _, u := range byAgent {
+		slices.Sort(u.Versions)
+		result = append(result, *u)
+	}
+	slices.SortFunc(result, func(a, b SkillUsage) int {
+		if cmp := strings.Compare(a.Name, b.Name); cmp != 0 {
+			return cmp
+		}
+		return strings.Compare(a.AgentID, b.AgentID)
+	})
+	return result, nil
+}
+
+// Delete permanently removes an Agent or Skill definition from the space catalog.
+func (s *Service) Delete(ctx context.Context, actor, space, kind, id string) error {
+	return s.Repo.CatalogDelete(ctx, actor, space, kind, id)
+}
+
+// DeleteSkill permanently removes a Skill definition from the space catalog.
+func (s *Service) DeleteSkill(ctx context.Context, actor, space, skillID string) error {
+	return s.Delete(ctx, actor, space, "skill", skillID)
+}
+
+// DeleteAgent permanently removes an Agent definition from the space catalog.
+func (s *Service) DeleteAgent(ctx context.Context, actor, space, agentID string) error {
+	return s.Delete(ctx, actor, space, "agent", agentID)
 }

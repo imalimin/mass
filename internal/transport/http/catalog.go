@@ -124,7 +124,22 @@ func registerCatalog(register func(string, bool, endpoint), registerMedia func(s
 			writeJSON(w, 200, v)
 			return nil
 		})
+		register("DELETE "+base+"/{id}", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+			if e := svc.Delete(r.Context(), u.ID, r.PathValue("space_id"), kind, r.PathValue("id")); e != nil {
+				return e
+			}
+			w.WriteHeader(204)
+			return nil
+		})
 		if kind == "skill" {
+			register("GET "+base+"/{id}/usage", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+				items, e := svc.SkillUsage(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("id"))
+				if e != nil {
+					return e
+				}
+				writeJSON(w, 200, map[string]any{"items": items})
+				return nil
+			})
 			register("POST "+base+"/{id}/resources", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
 				var b struct {
 					ExpectedRevision int64  `json:"expected_revision"`

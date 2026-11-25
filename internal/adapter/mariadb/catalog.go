@@ -445,3 +445,43 @@ func (s *Store) CatalogState(ctx context.Context, actor, space, kind, id, versio
 		return audit(ctx, tx, actor, space, "definition."+action, id)
 	})
 }
+
+func (s *Store) CatalogDelete(ctx context.Context, actor, space, kind, id string) error {
+	if kind != "skill" && kind != "agent" {
+		return catalog.ErrConfig
+	}
+	return s.scoped(ctx, actor, space, false, func(tx *sql.Tx) error {
+		if _, err := catalogDefinition(ctx, tx, space, kind, id); err != nil {
+			return err
+		}
+		var stmts []string
+		if kind == "skill" {
+			stmts = []string{
+				"DELETE FROM definition_dependencies WHERE space_id=? AND skill_id=?",
+				"DELETE FROM skill_versions WHERE space_id=? AND definition_id=?",
+				"DELETE FROM skill_drafts WHERE space_id=? AND definition_id=?",
+				"DELETE FROM definitions WHERE space_id=? AND kind='skill' AND id=?",
+			}
+		} else {
+			stmts = []string{
+				"UPDATE definitions SET default_version_id=NULL WHERE space_id=? AND kind='agent' AND id=?",
+				"DELETE FROM definition_dependencies WHERE space_id=? AND version_id IN (SELECT id FROM definition_versions WHERE space_id=? AND definition_id=?)",
+				"DELETE FROM definition_versions WHERE space_id=? AND definition_id=?",
+				"DELETE FROM definition_drafts WHERE space_id=? AND definition_id=?",
+				"DELETE FROM definitions WHERE space_id=? AND kind='agent' AND id=?",
+			}
+		}
+		for _, stmt := range stmts {
+			var err error
+			if strings.Count(stmt, "?") == 3 {
+				_, err = tx.ExecContext(ctx, stmt, space, space, id)
+			} else {
+				_, err = tx.ExecContext(ctx, stmt, space, id)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return audit(ctx, tx, actor, space, "definition.deleted", id)
+	})
+}

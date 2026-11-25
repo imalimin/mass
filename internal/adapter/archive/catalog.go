@@ -203,7 +203,7 @@ func catalogPage[T any](items []T, limit int, id func(T) string) []T {
 
 func (c *Catalog) draft(ctx context.Context, d *definition) (catalog.Draft, error) {
 	result := catalog.Draft{Definition: d.Definition, Revision: d.Revision, ContentID: d.Draft.ID}
-	if d.Kind == "agent" {
+	if d.Kind == "agent" && d.Draft.Key != "" {
 		err := readJSON(ctx, c.Blobs, d.Draft.Key, &result.Document)
 		return result, err
 	}
@@ -476,7 +476,14 @@ func (c *Catalog) references(ctx context.Context, index catalogIndex, skillVersi
 			continue
 		}
 		for _, v := range d.Versions {
-			var b catalog.Bundle
+			if v.Object.Key == "" {
+				continue
+			}
+			// Decode only bindings so historical Agent bundles with retired
+			// config fields (such as reserved_output_tokens) never fail scans.
+			var b struct {
+				Bindings []catalog.Binding `json:"bindings"`
+			}
 			if err := readJSON(ctx, c.Blobs, v.Object.Key, &b); err != nil {
 				return nil, err
 			}
@@ -555,4 +562,20 @@ func (c *Catalog) CatalogState(ctx context.Context, actor, space, kind, id, vers
 		}
 	}
 	return c.save(ctx, actor, space, "definition."+action, id, index)
+}
+
+func (c *Catalog) CatalogDelete(ctx context.Context, actor, space, kind, id string) error {
+	if kind != "skill" && kind != "agent" {
+		return catalog.ErrConfig
+	}
+	defer c.lock(space)()
+	index, err := c.authorized(ctx, actor, space)
+	if err != nil {
+		return err
+	}
+	if _, err := findDefinition(index, kind, id); err != nil {
+		return err
+	}
+	delete(index, id)
+	return c.save(ctx, actor, space, "definition.deleted", id, index)
 }

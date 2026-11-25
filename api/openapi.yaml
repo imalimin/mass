@@ -898,6 +898,32 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/DefinitionNameInput'
+  /api/v1/spaces/{space_id}/agents/{id}:
+    delete:
+      operationId: deleteAgent
+      description: Permanently deletes an Agent definition from the space catalog.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+      responses:
+        '204':
+          description: Agent deleted.
+        default:
+          description: Rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/agents/{id}/copy:
     post:
       operationId: catalog3
@@ -2848,6 +2874,64 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/skills/{id}:
+    delete:
+      operationId: deleteSkill
+      description: Permanently deletes a Skill definition from the space catalog.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Skill deleted.
+        default:
+          description: Rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/spaces/{space_id}/skills/{id}/usage:
+    get:
+      operationId: getSkillUsage
+      description: Lists Agents in the space whose draft or published/snapshot versions reference this Skill.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ShortResourceID'
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Referencing Agents.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillUsageList'
+        default:
+          description: Rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/spaces/{space_id}/skills/{id}/archive:
     put:
       operationId: catalog30
@@ -4691,6 +4775,35 @@ components:
           type: string
         debug:
           type: boolean
+    SkillUsage:
+      type: object
+      additionalProperties: false
+      required:
+        - agent_id
+        - name
+        - in_draft
+        - versions
+      properties:
+        agent_id:
+          $ref: '#/components/schemas/ShortResourceID'
+        name:
+          type: string
+        in_draft:
+          type: boolean
+        versions:
+          type: array
+          items:
+            type: string
+    SkillUsageList:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SkillUsage'
     DefinitionDiff:
       type: object
       additionalProperties: false

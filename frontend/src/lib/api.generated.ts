@@ -308,6 +308,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/spaces/{space_id}/agents/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Permanently deletes an Agent definition from the space catalog. */
+        delete: operations["deleteAgent"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/spaces/{space_id}/agents/{id}/copy": {
         parameters: {
             query?: never;
@@ -653,6 +670,40 @@ export interface paths {
             cookie?: never;
         };
         get: operations["catalog29"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/skills/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Permanently deletes a Skill definition from the space catalog. */
+        delete: operations["deleteSkill"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{space_id}/skills/{id}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Lists Agents in the space whose draft or published/snapshot versions reference this Skill. */
+        get: operations["getSkillUsage"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1398,6 +1449,15 @@ export interface components {
             name: string;
             label: string;
             debug: boolean;
+        };
+        SkillUsage: {
+            agent_id: components["schemas"]["ShortResourceID"];
+            name: string;
+            in_draft: boolean;
+            versions: string[];
+        };
+        SkillUsageList: {
+            items: components["schemas"]["SkillUsage"][];
         };
         DefinitionDiff: {
             from: components["schemas"]["DefinitionVersion"];
@@ -3168,6 +3228,36 @@ export interface operations {
             };
             /** @description Rejected or unavailable. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Agent deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Rejected or unavailable. */
+            default: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5498,6 +5588,68 @@ export interface operations {
             };
             /** @description Rejected or unavailable. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteSkill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Skill deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Rejected or unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getSkillUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Referencing Agents. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillUsageList"];
+                };
+            };
+            /** @description Rejected or unavailable. */
+            default: {
                 headers: {
                     [name: string]: unknown;
                 };

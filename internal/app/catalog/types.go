@@ -157,6 +157,12 @@ type Reference struct {
 	Label        string `json:"label"`
 	Debug        bool   `json:"debug"`
 }
+type SkillUsage struct {
+	AgentID  string   `json:"agent_id"`
+	Name     string   `json:"name"`
+	InDraft  bool     `json:"in_draft"`
+	Versions []string `json:"versions"`
+}
 type Repository interface {
 	CatalogCreate(context.Context, string, string, Draft) error
 	CatalogList(context.Context, string, string, string, identity.Query) ([]Definition, error)
@@ -168,4 +174,5 @@ type Repository interface {
 	CatalogVersion(context.Context, string, string, string, string, string) (Version, error)
 	CatalogReferences(context.Context, string, string, string, string, string, identity.Query) ([]Reference, error)
 	CatalogState(context.Context, string, string, string, string, string, string, bool) error
+	CatalogDelete(context.Context, string, string, string, string) error
 }

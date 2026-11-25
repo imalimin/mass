@@ -4,6 +4,7 @@ import { FormDialog } from '../../components/FormDialog'
 import { Icon } from '../../components/Icon'
 import { WorkspaceListTable, WorkspaceListToolbar } from '../../components/WorkspaceList'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -27,6 +28,13 @@ const displayVersion = (v: Version) => v.debug ? `调试快照 ${v.id.slice(0, 8
 const definitionNamePattern = String.raw`[a-z][a-z0-9_\-]{0,63}`
 const definitionNameHint = '以小写英文字母开头，最多 64 个字符，可使用小写英文字母、数字、连字符（-）和下划线（_）。'
 const definitionDate = new Intl.DateTimeFormat('sv-SE')
+const skillHourParts = new Intl.DateTimeFormat('sv-SE', {
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23',
+})
+const formatSkillUpdatedHour = (value: string) => {
+  const parts = Object.fromEntries(skillHourParts.formatToParts(new Date(value)).map(p => [p.type, p.value]))
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:00`
+}
 const parseConfig = (value: string) => {
   if (!value.trim()) return undefined
   try {
@@ -39,6 +47,8 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
   const [name, setName] = useState('')
   const [creating, setCreating] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ skill: Schema['Definition']; usage: Schema['SkillUsage'][] } | null>(null)
+  const [deleteAgent, setDeleteAgent] = useState<Schema['Definition'] | null>(null)
   const copyTimer = useRef<number | null>(null)
   const importInput = useRef<HTMLInputElement>(null)
   useEffect(() => () => {
@@ -115,12 +125,16 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
     mutationFn: (file: File) => request<Draft>(`${base}/import?${new URLSearchParams({ filename: file.name })}`, 'POST', new Blob([file], { type: 'application/zip' })),
     onSuccess: d => { select(d.id); refresh() },
   })
+  const checkSkillUsage = useMutation({
+    mutationFn: (skill: Schema['Definition']) => request<Schema['SkillUsageList']>(`${base}/${skill.id}/usage`, 'GET'),
+    onSuccess: (res, skill) => setDeleteTarget({ skill, usage: res.items }),
+  })
   const iterationNotice = <>
     {kind === 'agent' && availability.data && !availability.data.available && <p className="muted">创作 Agent 暂不可用，无法开始创意迭代。</p>}
     {(iterate.error || availability.error) && <p role="alert">{(iterate.error || availability.error)?.message}</p>}
   </>
   const isAgent = kind === 'agent', kindLabel = isAgent ? 'Agent' : 'Skill'
-  const columns = isAgent ? ['名称', 'ID', '最新版本', '更新日期', '迭代', '对话'] : ['名称', '最新版本', '更新日期']
+  const columns = isAgent ? ['名称', 'ID', '最新版本', '更新日期', '迭代', '对话', '操作'] : ['名称', '最新版本', '更新时间', '操作']
   if (!selected) return <section aria-label={`${kindLabel}s`}>
     <WorkspaceListToolbar space={space} name={`${kindLabel}s`}>
       {!isAgent && <button type="button" className="secondary" disabled={importSkill.isPending || create.isPending}
@@ -133,12 +147,12 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
       if (file) importSkill.mutate(file)
     }} />}
     {iterationNotice}
-    {[query.error, importSkill.error].filter(Boolean).map((error, i) => <p role="alert" key={i}>{errorText(error)}</p>)}
+    {[query.error, importSkill.error, checkSkillUsage.error].filter(Boolean).map((error, i) => <p role="alert" key={i}>{errorText(error)}</p>)}
     {query.isPending && <p role="status">正在读取定义…</p>}
     {query.data?.length === 0 && <p className="muted">还没有 {kindLabel}，创建第一个定义开始使用。</p>}
-    {!!query.data?.length && <WorkspaceListTable label={`${kindLabel} 列表`} columns={columns} className={isAgent ? 'agent-table' : undefined}
-      columnGroup={<colgroup><col />{isAgent && <col className="agent-id-column" />}<col className="definition-version-column" /><col className="definition-date-column" />
-        {isAgent && <col className="agent-action-column" span={2} />}</colgroup>}>
+    {!!query.data?.length && <WorkspaceListTable label={`${kindLabel} 列表`} columns={columns} className={isAgent ? 'agent-table' : 'skill-table'}
+      columnGroup={<colgroup><col />{isAgent && <col className="agent-id-column" />}<col className="definition-version-column" /><col className={isAgent ? 'definition-date-column' : 'skill-time-column'} />
+        {isAgent ? <col className="agent-action-column" span={3} /> : <col className="agent-action-column" />}</colgroup>}>
       {query.data.map(d => <tr key={d.id}>
           <td><Link className="workspace-list-name" to={`${base}/${d.id}`}>{d.name}{d.archived ? '（已归档）' : ''}</Link></td>
           {isAgent && <td>
@@ -152,16 +166,25 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
             </div>
           </td>}
           <td>{d.latest_version || (d.default_version_id ? '—' : '未发布')}</td>
-          <td>{d.updated_at ? <time className="definition-date" dateTime={d.updated_at}>{definitionDate.format(new Date(d.updated_at))}</time> : '—'}</td>
-          {isAgent && <><td>{iterationButton(d.id, d.name)}</td>
+          <td>{d.updated_at ? <time className="definition-date" dateTime={d.updated_at}>{isAgent ? definitionDate.format(new Date(d.updated_at)) : formatSkillUpdatedHour(d.updated_at)}</time> : '—'}</td>
+          {isAgent ? <><td>{iterationButton(d.id, d.name)}</td>
             <td><Link className="agent-action" to={agentSessionsPath(space.id, d.id)} aria-label={`打开 ${d.name} 的会话`} title="打开会话">
               <Icon name="chat" size={18} />
-            </Link></td></>}
+            </Link></td>
+            <td><DefinitionRowMenu item={d} onDelete={() => setDeleteAgent(d)} /></td></> : <td>
+            <DefinitionRowMenu item={d} disabled={checkSkillUsage.isPending}
+              busy={checkSkillUsage.isPending && checkSkillUsage.variables?.id === d.id}
+              onDelete={() => { checkSkillUsage.reset(); checkSkillUsage.mutate(d) }} />
+          </td>}
         </tr>)}
     </WorkspaceListTable>}
     {creating && <CreateDefinitionDialog kind={kindLabel} name={name} setName={value => { setName(value); if (create.isError) create.reset() }}
       pending={create.isPending} error={create.error}
       submit={() => create.mutate()} close={() => { setCreating(false); setName(''); create.reset() }} />}
+    {deleteTarget && <DeleteSkillDialog base={base} skill={deleteTarget.skill} usage={deleteTarget.usage}
+      onClose={() => setDeleteTarget(null)} onDeleted={() => { setDeleteTarget(null); refresh() }} />}
+    {deleteAgent && <DeleteAgentDialog base={base} agent={deleteAgent}
+      onClose={() => setDeleteAgent(null)} onDeleted={() => { setDeleteAgent(null); refresh() }} />}
   </section>
   return <section className="panel catalog">
     {iterationNotice}
@@ -186,6 +209,149 @@ function CreateDefinitionDialog({ kind, name, setName, pending, error, submit, c
         <button type="submit" disabled={pending || !name}><Icon name="plus" />{pending ? '正在创建…' : '创建'}</button>
       </div>
     </form>
+  }</FormDialog>
+}
+function DefinitionRowMenu({ item, disabled = false, busy = false, onDelete }: {
+  item: Schema['Definition']; disabled?: boolean; busy?: boolean; onDelete: () => void
+}) {
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const open = pos !== null
+
+  useEffect(() => {
+    if (!open) return
+    const close = () => setPos(null)
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null
+      if (target && (menuRef.current?.contains(target) || triggerRef.current?.contains(target))) return
+      close()
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        close()
+        triggerRef.current?.focus({ preventScroll: true })
+      }
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [open])
+
+  const toggle = () => {
+    if (open) {
+      setPos(null)
+      return
+    }
+    const rect = triggerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const menuHeight = 52
+    const below = rect.bottom + 6 + menuHeight <= window.innerHeight
+    setPos({
+      top: below ? rect.bottom + 6 : Math.max(8, rect.top - menuHeight - 6),
+      right: Math.max(8, window.innerWidth - rect.right),
+    })
+  }
+
+  return <>
+    <button ref={triggerRef} type="button" className="icon-button agent-action skill-menu-trigger"
+      disabled={disabled} aria-haspopup="menu" aria-expanded={open}
+      aria-label={`操作 ${item.name}`} title="操作" aria-busy={busy}
+      onClick={toggle}>
+      <Icon name={busy ? 'refresh' : 'more'} size={18} />
+    </button>
+    {open && createPortal(
+      <div ref={menuRef} className="skill-action-menu" role="menu" aria-label={`${item.name} 操作`}
+        style={{ top: pos.top, right: pos.right }}>
+        <button type="button" role="menuitem" className="skill-menu-item danger"
+          onClick={() => { setPos(null); onDelete() }}>
+          <Icon name="trash" size={15} />删除
+        </button>
+      </div>,
+      document.body,
+    )}
+  </>
+}
+function DeleteAgentDialog({ base, agent, onClose, onDeleted }: {
+  base: string; agent: Schema['Definition']; onClose: () => void; onDeleted: () => void
+}) {
+  const remove = useMutation({
+    mutationFn: () => request<void>(`${base}/${agent.id}`, 'DELETE'),
+    onSuccess: onDeleted,
+  })
+  return <FormDialog title={`删除「${agent.name}」`} pending={remove.isPending} close={onClose}>{dismiss =>
+    <div className="skill-delete-dialog">
+      <div className="skill-delete-warning">
+        <Icon name="alert" size={16} />
+        <span>删除后无法恢复，确定要删除 Agent「{agent.name}」吗？</span>
+      </div>
+      {remove.error && <p role="alert">{errorText(remove.error)}</p>}
+      <div className="dialog-actions">
+        <button type="button" className="secondary" disabled={remove.isPending} onClick={dismiss}><Icon name="close" />取消</button>
+        <button type="button" className="danger" disabled={remove.isPending} onClick={() => remove.mutate()}>
+          <Icon name="trash" size={15} />{remove.isPending ? '正在删除…' : '确认删除'}
+        </button>
+      </div>
+    </div>
+  }</FormDialog>
+}
+function DeleteSkillDialog({ base, skill, usage, onClose, onDeleted }: {
+  base: string; skill: Schema['Definition']; usage: Schema['SkillUsage'][]; onClose: () => void; onDeleted: () => void
+}) {
+  const [step, setStep] = useState<'confirm' | 'second'>('confirm')
+  const remove = useMutation({
+    mutationFn: () => request<void>(`${base}/${skill.id}`, 'DELETE'),
+    onSuccess: onDeleted,
+  })
+  const inUse = usage.length > 0
+  const title = step === 'second' ? `再次确认删除「${skill.name}」` : `删除「${skill.name}」`
+  return <FormDialog title={title} pending={remove.isPending} close={onClose}>{dismiss =>
+    <div className="skill-delete-dialog">
+      {!inUse && <>
+        <p className="muted">当前没有 Agent 正在使用该 Skill。</p>
+        <div className="skill-delete-warning">
+          <Icon name="alert" size={16} />
+          <span>删除后无法恢复，确定要删除 Skill「{skill.name}」吗？</span>
+        </div>
+      </>}
+      {inUse && step === 'confirm' && <>
+        <div className="skill-delete-warning">
+          <Icon name="alert" size={16} />
+          <span>检测到以下 {usage.length} 个 Agent 正在使用该 Skill，删除可能影响这些 Agent 的配置或运行，且删除后无法恢复：</span>
+        </div>
+        <ul className="skill-usage-list">
+          {usage.map(agent => {
+            const scopes = [...(agent.in_draft ? ['草稿'] : []), ...agent.versions]
+            return <li key={agent.agent_id}>
+              <strong>{agent.name}</strong>
+              <span>{scopes.join(' · ')}</span>
+            </li>
+          })}
+        </ul>
+      </>}
+      {inUse && step === 'second' && <div className="skill-delete-warning">
+        <Icon name="alert" size={16} />
+        <span>仍有 {usage.length} 个 Agent 正在使用 Skill「{skill.name}」。此操作不可撤销，删除后无法恢复，确定要永久删除吗？</span>
+      </div>}
+      {remove.error && <p role="alert">{errorText(remove.error)}</p>}
+      <div className="dialog-actions">
+        {step === 'second'
+          ? <button type="button" className="secondary" disabled={remove.isPending} onClick={() => setStep('confirm')}>返回</button>
+          : <button type="button" className="secondary" disabled={remove.isPending} onClick={dismiss}><Icon name="close" />取消</button>}
+        {inUse && step === 'confirm'
+          ? <button type="button" className="danger" onClick={() => setStep('second')}>继续删除</button>
+          : <button type="button" className="danger" disabled={remove.isPending} onClick={() => remove.mutate()}>
+            <Icon name="trash" size={15} />{remove.isPending ? '正在删除…' : inUse ? '确认永久删除' : '确认删除'}
+          </button>}
+      </div>
+    </div>
   }</FormDialog>
 }
 function DefinitionEditor(props: { space: string; kind: Kind; id: string; onCopied: (id: string) => void; refresh: () => void }) {
