@@ -30,12 +30,12 @@ type handler struct {
 	err   error
 }
 
-func (h *handler) Execute(context.Context, run.Snapshot, run.Call, map[string]any) (run.ToolResult, *run.Artifact, error) {
+func (h *handler) Execute(context.Context, run.Snapshot, run.Call, map[string]any) (run.ToolResult, error) {
 	h.calls++
 	if h.err != nil {
-		return run.ToolResult{}, nil, h.err
+		return run.ToolResult{}, h.err
 	}
-	return run.ToolResult{Status: "completed", Data: json.RawMessage(`{}`), SideEffect: "none", Complete: true, SourceRefs: []storage.Ref{}}, nil, nil
+	return run.ToolResult{Status: "completed", Data: json.RawMessage(`{}`), SideEffect: "none", Complete: true, SourceRefs: []storage.Ref{}}, nil
 }
 
 type control struct{}

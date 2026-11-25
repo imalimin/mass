@@ -22,7 +22,7 @@ type Resolver interface {
 	Describe([]run.ToolSpec) ([]run.ToolSpec, error)
 }
 type Handler interface {
-	Execute(context.Context, run.Snapshot, run.Call, map[string]any) (run.ToolResult, *run.Artifact, error)
+	Execute(context.Context, run.Snapshot, run.Call, map[string]any) (run.ToolResult, error)
 }
 type Control interface {
 	Check(context.Context) error
@@ -76,7 +76,6 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 		return err
 	}
 	var result run.ToolResult
-	var artifact *run.Artifact
 	var actionErr error
 	var elapsed *int64
 	argumentErr := json.Unmarshal([]byte(call.Arguments), &args)
@@ -98,7 +97,7 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 		diagnostic.Record(ctx, "info", "tool.execution_started", "tool=%s call_id=%s", call.Name, call.ID)
 		at := time.Now()
 		d.Trace.Tool(s.ID, call.ID, "running", nil, nil)
-		result, artifact, actionErr = d.Handler.Execute(ctx, s, call, args.(map[string]any))
+		result, actionErr = d.Handler.Execute(ctx, s, call, args.(map[string]any))
 		ms := time.Since(at).Milliseconds()
 		elapsed = &ms
 	}
@@ -152,12 +151,6 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 	var facts []journal.Proposed
 	if result.Plan != nil {
 		event := journal.New(s.ActorID, "plan.updated", s.ID, *result.Plan)
-		event.OperationID = call.ID
-		event.CausationID = call.ResponseEventID
-		facts = append(facts, event)
-	}
-	if artifact != nil {
-		event := journal.New(s.ActorID, "artifact.published", s.ID, artifact, storage.Ref{Role: "artifact", ObjectID: artifact.ObjectID, SHA256: artifact.SHA256})
 		event.OperationID = call.ID
 		event.CausationID = call.ResponseEventID
 		facts = append(facts, event)

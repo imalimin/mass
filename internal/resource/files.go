@@ -9,7 +9,6 @@ import (
 	"io"
 	"io/fs"
 	"mime"
-	"net/http"
 	"os"
 	"path"
 	"reflect"
@@ -41,12 +40,6 @@ type WriteFileInput struct {
 	Content        string `json:"content"`
 	MediaType      string `json:"media_type,omitempty"`
 	ExpectedSHA256 string `json:"expected_sha256,omitempty"`
-}
-type PublishInput struct {
-	Path           string `json:"path"`
-	ExpectedSHA256 string `json:"expected_sha256,omitempty"`
-	DisplayName    string `json:"display_name,omitempty"`
-	MediaType      string `json:"media_type,omitempty"`
 }
 
 var errWorkspaceSymlink = run.ToolFailure("workspace_symlink", "none")
@@ -360,56 +353,6 @@ func (f *FileService) write(ctx context.Context, s run.Snapshot, dir WorkspaceDi
 	raw, _ := json.Marshal(map[string]any{"path": in.Path, "sha256": hashBytes([]byte(in.Content)), "size": len(in.Content)})
 	*result = run.ToolResult{Status: "completed", Data: raw, SideEffect: "committed", Complete: true, SourceRefs: []storage.Ref{}}
 	return nil
-}
-
-func detectArtifactMediaType(filePath string, file *os.File) string {
-	if byExt := mime.TypeByExtension(strings.ToLower(path.Ext(filePath))); validMediaType(byExt) {
-		return byExt
-	}
-	var head [512]byte
-	n, _ := io.ReadFull(file, head[:])
-	_, _ = file.Seek(0, io.SeekStart)
-	if n > 0 {
-		if detected := http.DetectContentType(head[:n]); validMediaType(detected) {
-			return detected
-		}
-	}
-	return "application/octet-stream"
-}
-
-func (f *FileService) Publish(ctx context.Context, s run.Snapshot, callID string, in PublishInput) (artifact run.Artifact, result run.ToolResult, err error) {
-	displayName := in.DisplayName
-	if displayName == "" && filePath(in.Path) {
-		displayName = path.Base(in.Path)
-	}
-	if !filePath(in.Path) || in.ExpectedSHA256 == "missing" || len(displayName) == 0 || len(displayName) > 200 || strings.ContainsAny(displayName, "\r\n\x00/\\") || (in.MediaType != "" && !validMediaType(in.MediaType)) {
-		return artifact, result, storage.ErrInvalid
-	}
-	err = f.Workspaces.With(ctx, s.SpaceID, s.SessionID, func(dir WorkspaceDir) error {
-		if err := f.Check(ctx, s); err != nil {
-			return err
-		}
-		file, _, err := openWorkspaceFile(dir, in.Path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		mediaType := in.MediaType
-		if mediaType == "" {
-			mediaType = detectArtifactMediaType(in.Path, file)
-		}
-		id := uuid.NewString()
-		o, err := f.Content.putAt(ctx, s.ActorID, s.SpaceID, id, "artifact", "application/octet-stream", f.Content.objectKey(s.SpaceID, id), file, in.ExpectedSHA256)
-		if err != nil {
-			return err
-		}
-		artifact = run.Artifact{ID: uuid.NewString(), SpaceID: s.SpaceID, SessionID: s.SessionID, RunID: s.ID, CallID: callID, ObjectID: o.ID, SHA256: o.SHA256, Name: displayName, MediaType: mediaType, Path: in.Path}
-		artifact.URL = "/api/v1/spaces/" + s.SpaceID + "/artifacts/" + artifact.ID + "/download"
-		data, _ := json.Marshal(artifact)
-		result = run.ToolResult{Status: "completed", Data: data, SideEffect: "committed", Complete: true, SourceRefs: []storage.Ref{{Role: "artifact", ObjectID: o.ID, SHA256: o.SHA256}}}
-		return nil
-	})
-	return
 }
 
 func hasMultipleLinks(info fs.FileInfo) bool {

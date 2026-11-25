@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"path"
 	"slices"
 	"strconv"
 	"time"
@@ -222,6 +223,39 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 			return err
 		}
 		writeJSON(w, 200, view)
+		return nil
+	})
+	register("GET "+base+"/sessions/{session_id}/workspace/files/download", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		space, session := r.PathValue("space_id"), r.PathValue("session_id")
+		viewSession, err := svc.Repo.RuntimeSession(r.Context(), u.ID, space, session)
+		if err != nil {
+			return err
+		}
+		if err := svc.PrepareIteration(r.Context(), u.ID, viewSession); err != nil {
+			return err
+		}
+		rel := r.URL.Query().Get("path")
+		file, info, err := runtime.Workspaces.OpenFile(r.Context(), u.ID, viewSession, rel, runtime.Snapshots)
+		if errors.Is(err, storage.ErrBlobNotFound) {
+			return identity.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		check := func(ctx context.Context) error {
+			if _, err := options.Service.Me(ctx, token(r)); err != nil {
+				return err
+			}
+			return options.Service.CheckAccess(ctx, u.ID, space)
+		}
+		if err = check(r.Context()); err != nil {
+			return err
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(rel)}))
+		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+		_ = copyAuthorized(r.Context(), w, file, check)
 		return nil
 	})
 	registerBearer("POST "+base+"/sessions/{session_id}/runs", func(w http.ResponseWriter, r *http.Request, u identity.User) error {

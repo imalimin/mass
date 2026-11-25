@@ -56,10 +56,6 @@ func (c *ContentStore) CatalogObjectKey(space, kind, definition, filename string
 }
 
 func (c *ContentStore) PutAt(ctx context.Context, actor, space, id, kind, media, key string, source io.Reader) (storage.Object, error) {
-	return c.putAt(ctx, actor, space, id, kind, media, key, source, "")
-}
-
-func (c *ContentStore) putAt(ctx context.Context, actor, space, id, kind, media, key string, source io.Reader, expectedArtifactSHA256 string) (storage.Object, error) {
 	bounded := storage.UsesContentObjectLimit(kind)
 	if !storage.ValidShortID(space) || !storage.ValidID(id) || !kindPattern.MatchString(kind) || (bounded && c.MaxBytes < 1) {
 		return storage.Object{}, storage.ErrInvalid
@@ -98,9 +94,6 @@ func (c *ContentStore) putAt(ctx context.Context, actor, space, id, kind, media,
 		return storage.Object{}, storage.ErrInvalid
 	}
 	digest := hex.EncodeToString(hash.Sum(nil))
-	if expectedArtifactSHA256 != "" && expectedArtifactSHA256 != digest {
-		return storage.Object{}, storage.ErrConflict
-	}
 	object := storage.Object{SpaceID: space, ID: id, Kind: kind, MediaType: media, Size: n, SHA256: digest, Key: key, URI: c.Blobs.URI(key), State: "uploading"}
 	object, err = c.Repo.BeginObject(ctx, actor, object)
 	if err != nil {

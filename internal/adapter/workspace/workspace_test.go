@@ -82,6 +82,43 @@ func TestBrowseWorkspace(t *testing.T) {
 			}
 		})
 	}
+	// OpenFile streams arbitrary regular files (including binary and large files) and rejects symlinks/directories/traversal.
+	for _, tc := range []struct {
+		path string
+		want []byte
+	}{
+		{path: "AGENTS.md", want: []byte("# 指令\n")},
+		{path: "skills/data.bin", want: []byte{0xff, 0}},
+		{path: "skills/large.md", want: bytes.Repeat([]byte("a"), (256<<10)+1)},
+	} {
+		file, info, err := workspaces.OpenFile(ctx, "", scope, tc.path, nil)
+		if err != nil {
+			t.Fatalf("OpenFile(%q) failed: %v", tc.path, err)
+		}
+		raw, readErr := io.ReadAll(file)
+		file.Close()
+		if readErr != nil || info.Size() != int64(len(tc.want)) || !bytes.Equal(raw, tc.want) {
+			t.Fatalf("OpenFile(%q) mismatch: size=%d err=%v", tc.path, info.Size(), readErr)
+		}
+	}
+	for _, bad := range []struct {
+		path      string
+		wantError error
+	}{
+		{path: "", wantError: storage.ErrInvalid},
+		{path: ".", wantError: storage.ErrInvalid},
+		{path: "../outside", wantError: storage.ErrInvalid},
+		{path: "skills", wantError: storage.ErrWorkspace},
+		{path: "alias.md", wantError: storage.ErrWorkspace},
+		{path: "skills/missing.md", wantError: storage.ErrBlobNotFound},
+	} {
+		if file, _, err := workspaces.OpenFile(ctx, "", scope, bad.path, nil); !errors.Is(err, bad.wantError) {
+			if file != nil {
+				file.Close()
+			}
+			t.Fatalf("OpenFile(%q) = %v, want %v", bad.path, err, bad.wantError)
+		}
+	}
 }
 
 func TestWithMissingWorkspace(t *testing.T) {

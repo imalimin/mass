@@ -18,6 +18,7 @@ var legacyTools = map[string]bool{
 	"delete_file":          true,
 	"list_skill_resources": true,
 	"read_skill_resource":  true,
+	"publish_artifact":     true,
 	"run_code":             true,
 	"run_code_js":          true,
 	"run_code_go":          true,
@@ -37,7 +38,6 @@ func object(properties map[string]any, required ...string) map[string]any {
 func Specs() []run.ToolSpec {
 	path := map[string]any{"type": "string", "minLength": 1, "maxLength": 1024}
 	sha := map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"}
-	media := map[string]any{"type": "string", "minLength": 1, "maxLength": 128}
 	ranges := map[string]any{"oneOf": []any{
 		object(map[string]any{"offset": integer(0, 1<<30), "length": integer(1, 65536)}, "offset", "length"),
 		object(map[string]any{"start_line": integer(1, 10000000), "end_line": integer(1, 10000000)}, "start_line", "end_line"),
@@ -92,12 +92,6 @@ func Specs() []run.ToolSpec {
 			}, "title", "status"),
 		},
 	}, "steps")
-	add("publish_artifact", "Publish an immutable copy of a workspace file as a downloadable artifact. Optional display_name and media_type default to the file basename and detected MIME type.", map[string]any{
-		"path":            path,
-		"expected_sha256": sha,
-		"display_name":    map[string]any{"type": "string", "minLength": 1, "maxLength": 200},
-		"media_type":      media,
-	}, "path")
 	return specs
 }
 

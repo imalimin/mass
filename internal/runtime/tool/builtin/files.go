@@ -15,7 +15,6 @@ type Files interface {
 	Read(context.Context, run.Snapshot, resource.ReadFileInput) (run.ToolResult, error)
 	Write(context.Context, run.Snapshot, resource.WriteFileInput) (run.ToolResult, error)
 	Edit(context.Context, run.Snapshot, resource.EditInput) (run.ToolResult, error)
-	Publish(context.Context, run.Snapshot, string, resource.PublishInput) (run.Artifact, run.ToolResult, error)
 }
 
 type Handler struct {
@@ -25,7 +24,7 @@ type Handler struct {
 	Journal *journal.Journal
 }
 
-func (h *Handler) Execute(ctx context.Context, s run.Snapshot, call run.Call, args map[string]any) (result run.ToolResult, artifact *run.Artifact, err error) {
+func (h *Handler) Execute(ctx context.Context, s run.Snapshot, call run.Call, args map[string]any) (result run.ToolResult, err error) {
 	text := func(key string) string { value, _ := args[key].(string); return value }
 	number := func(key string) int { value, _ := args[key].(float64); return int(value) }
 	var span *run.Range
@@ -53,7 +52,7 @@ func (h *Handler) Execute(ctx context.Context, s run.Snapshot, call run.Call, ar
 		cmd := text("command")
 		if rawArgs, hasArgs := args["args"]; hasArgs && rawArgs != nil {
 			if strings.Contains(cmd, "/") {
-				return result, nil, storage.ErrInvalid
+				return result, storage.ErrInvalid
 			}
 			values := rawArgs.([]any)
 			argv := make([]string, len(values))
@@ -85,12 +84,6 @@ func (h *Handler) Execute(ctx context.Context, s run.Snapshot, call run.Call, ar
 			steps = append(steps, run.PlanStep{ID: id, Title: step["title"].(string), Status: step["status"].(string)})
 		}
 		result, err = resource.PreparePlan(ctx, h.Journal, s, steps)
-	case "publish_artifact":
-		var a run.Artifact
-		a, result, err = h.Files.Publish(ctx, s, call.ID, resource.PublishInput{Path: text("path"), ExpectedSHA256: text("expected_sha256"), DisplayName: text("display_name"), MediaType: text("media_type")})
-		if err == nil {
-			artifact = &a
-		}
 	default:
 		err = run.ErrTool
 	}

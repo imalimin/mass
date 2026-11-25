@@ -266,12 +266,6 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 			name = run.CommandTool
 			args = map[string]any{"command": "mkdir -p reports && mv summary.json reports/summary.json && curl -fsS -X POST -d 5 " + strconv.Quote(server.URL)}
 		case 8:
-			name = "publish_artifact"
-			args = map[string]any{"path": "reports/summary.json"}
-		case 9:
-			name = run.CommandTool
-			args = map[string]any{"command": "rm -f reports/summary.json"}
-		case 10:
 			name = "update_plan"
 			args = map[string]any{"steps": []any{map[string]any{"id": "report", "title": "Create summary", "status": "completed"}}}
 		default:
@@ -370,15 +364,6 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if err != nil || plan.Revision != 2 || plan.Steps[0].Status != "completed" {
 		t.Fatal("plan", plan, err)
 	}
-	artifacts, err := db.Store.RuntimeArtifacts(ctx, actor.ID, space.ID, first.ID)
-	if err != nil || len(artifacts) != 1 {
-		t.Fatal(err, len(artifacts))
-	}
-	artifact := artifacts[0]
-	payload, err := resource.ReadBytes(ctx, content, actor.ID, space.ID, artifact.ObjectID, 1<<20)
-	if err != nil || string(payload) != `{"total":10,"label":"final"}` {
-		t.Fatal("immutable artifact", string(payload), err)
-	}
 	snap, err := db.Store.Snapshot(ctx, actor.ID, space.ID, first.WorkspaceSnapshotID)
 	if err != nil {
 		t.Fatal(err)
@@ -387,8 +372,8 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if err = resource.ReadJSON(ctx, content, actor.ID, space.ID, snap.ManifestRef, 4<<20, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(manifest.State), `"revision":2`) || !strings.Contains(string(manifest.State), artifact.ID) {
-		t.Fatal("snapshot missing plan or artifact", string(manifest.State))
+	if !strings.Contains(string(manifest.State), `"revision":2`) {
+		t.Fatal("snapshot missing plan", string(manifest.State))
 	}
 	var ioRecords int
 	err = db.Admin.DB.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('session_facts','tool_executions')").Scan(&ioRecords)
@@ -411,6 +396,16 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 			t.Fatal(w.Code, w.Body.String())
 		}
 		validate("GET", path, w)
+	}
+	{
+		dlPath := "/spaces/" + space.ID + "/sessions/" + session.ID + "/workspace/files/download?path=reports/summary.json"
+		r := httptest.NewRequest("GET", "http://mass.test/api/v1"+dlPath, nil)
+		r.Header.Set("Cookie", "mass_session="+token)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != 200 || w.Body.String() != `{"total":10,"label":"final"}` {
+			t.Fatalf("workspace download failed: %d %q", w.Code, w.Body.String())
+		}
 	}
 	corrected, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{
 		Key: uuid.NewString(), Text: "correct invalid tool arguments",
@@ -569,7 +564,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		t.Fatal(err)
 	}
 
-	t.Log("D05: all 8 core tools, shell command, skill/attachment, plan, artifact and in-memory tool results passed")
+	t.Log("D05: all 6 core tools, shell command, skill/attachment, plan, workspace download and in-memory tool results passed")
 }
 
 func toolReply(name string, args any) []*schema.Message {

@@ -46,7 +46,7 @@ func TestRunCommandShellDefaultAndExplicitArgs(t *testing.T) {
 	snap := run.Snapshot{Definition: run.Definition{ToolPolicy: run.ToolPolicy{TimeoutMS: 5000, MaxLogBytes: 4096}}}
 
 	// 1. Default mode executes via sh -c.
-	res, _, err := h.Execute(context.Background(), snap, run.Call{ID: "c1", Name: run.CommandTool}, map[string]any{
+	res, err := h.Execute(context.Background(), snap, run.Call{ID: "c1", Name: run.CommandTool}, map[string]any{
 		"command": "echo hi | tr a-z A-Z",
 	})
 	if err != nil || res.Status != "completed" || gotName != "sh" || !slices.Equal(gotArgs, []string{"-c", "echo hi | tr a-z A-Z"}) {
@@ -54,7 +54,7 @@ func TestRunCommandShellDefaultAndExplicitArgs(t *testing.T) {
 	}
 
 	// 2. Explicit args mode invokes executable directly from PATH.
-	res, _, err = h.Execute(context.Background(), snap, run.Call{ID: "c2", Name: run.CommandTool}, map[string]any{
+	res, err = h.Execute(context.Background(), snap, run.Call{ID: "c2", Name: run.CommandTool}, map[string]any{
 		"command": "my-cli",
 		"args":    []any{"--version"},
 	})
@@ -63,7 +63,7 @@ func TestRunCommandShellDefaultAndExplicitArgs(t *testing.T) {
 	}
 
 	// 3. Explicit args mode rejects slash paths.
-	if _, _, err = h.Execute(context.Background(), snap, run.Call{ID: "c3", Name: run.CommandTool}, map[string]any{
+	if _, err = h.Execute(context.Background(), snap, run.Call{ID: "c3", Name: run.CommandTool}, map[string]any{
 		"command": "./outside",
 		"args":    []any{},
 	}); !errors.Is(err, storage.ErrInvalid) {

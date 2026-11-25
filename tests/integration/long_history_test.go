@@ -35,7 +35,7 @@ func longHistoryAgent(t *testing.T, r *faultRig, space string) (string, string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := catalog.Config{SchemaVersion: 1, Name: d.Name, Model: m.ID, Skills: []catalog.SkillRef{}, Tools: []string{"write_file", "read_file", "publish_artifact"}}
+	cfg := catalog.Config{SchemaVersion: 1, Name: d.Name, Model: m.ID, Skills: []catalog.SkillRef{}, Tools: []string{"write_file", "read_file"}}
 	cfg.Context.MaxInputTokens = 24000
 	cfg.Context.MaxTokens = 512
 	cfg.Context.Compression = "summary"
@@ -97,7 +97,7 @@ func TestLongHistoryContinuesAndRecovers(t *testing.T) {
 	}
 	r.terminalOnce(v)
 	cp, err := r.runtime.UI.CatchUp(ctx, r.actor, r.space, v.ID)
-	if err != nil || !cp.Closed || len(cp.State.Artifacts) != 1 {
+	if err != nil || !cp.Closed || v.WorkspaceSnapshotID == "" {
 		t.Fatal("long UI", err)
 	}
 	facts, ranges, through, err := projector.ReadHistory(ctx, &journal.Journal{Repo: r.db.Store}, v.Snapshot)

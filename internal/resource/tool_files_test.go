@@ -8,10 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -145,44 +143,6 @@ func toolData(t *testing.T, r run.ToolResult) map[string]any {
 	return data
 }
 func digest(v string) string { sum := sha256.Sum256([]byte(v)); return hex.EncodeToString(sum[:]) }
-
-func TestPublishArtifactDefaultsAndOptionalDigest(t *testing.T) {
-	ctx := context.Background()
-	f, s, root := fileFixture(t)
-	f.Content.MaxBytes = 4
-	f.ReadBudget = func(int64) error { return run.ErrOverflow }
-	const contents = `{"ok":true,"note":"artifact larger than the content limit"}`
-	if err := os.Mkdir(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "export.json"), []byte(contents), 0600); err != nil {
-		t.Fatal(err)
-	}
-	stale := resource.PublishInput{Path: "export.json", ExpectedSHA256: digest("another version")}
-	if _, _, err := f.Publish(ctx, s, uuid.NewString(), stale); !errors.Is(err, storage.ErrConflict) {
-		t.Fatalf("expected stale digest to be rejected, got %v", err)
-	}
-	if len(f.Content.Repo.(objects)) != 0 || len(f.Content.Blobs.(*fakes.Blobs).Data) != 0 {
-		t.Fatal("digest mismatch reached object storage")
-	}
-	// Default display_name, media_type, and omitted expected_sha256.
-	artifact, result, err := f.Publish(ctx, s, uuid.NewString(), resource.PublishInput{Path: "export.json"})
-	if err != nil || result.Status != "completed" {
-		t.Fatalf("publish with defaults failed: %v, %+v", err, result)
-	}
-	if artifact.Name != "export.json" || !strings.HasPrefix(artifact.MediaType, "application/json") || artifact.SHA256 != digest(contents) {
-		t.Fatalf("unexpected artifact metadata: %+v", artifact)
-	}
-	object, file, err := f.Content.Read(ctx, s.ActorID, s.SpaceID, artifact.ObjectID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer file.Close()
-	raw, err := io.ReadAll(file)
-	if err != nil || string(raw) != contents || object.SHA256 != digest(contents) {
-		t.Fatalf("published bytes or digest differ: %v", err)
-	}
-}
 
 func TestFileEditingAndMutationBoundaries(t *testing.T) {
 	f, s, root := fileFixture(t)

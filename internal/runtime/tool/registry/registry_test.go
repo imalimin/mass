@@ -11,8 +11,8 @@ import (
 
 func TestAllToolSchemasAndLegacyCompatibility(t *testing.T) {
 	specs := Specs()
-	if len(specs) != 7 {
-		t.Fatalf("expected 7 core tools, got %d", len(specs))
+	if len(specs) != 6 {
+		t.Fatalf("expected 6 core tools, got %d", len(specs))
 	}
 	validSamples := map[string][]map[string]any{
 		run.CommandTool: {
@@ -38,10 +38,6 @@ func TestAllToolSchemasAndLegacyCompatibility(t *testing.T) {
 		"update_plan": {
 			{"steps": []any{map[string]any{"title": "Inspect workspace", "status": "in_progress"}}},
 			{"steps": []any{map[string]any{"id": "step-a", "title": "Inspect workspace", "status": "completed"}}},
-		},
-		"publish_artifact": {
-			{"path": "report.json"},
-			{"path": "report.json", "display_name": "report.json", "media_type": "application/json"},
 		},
 	}
 	seen := map[string]bool{}
@@ -91,6 +87,7 @@ func TestAllToolSchemasAndLegacyCompatibility(t *testing.T) {
 		{Name: "delete_file", Version: "1"},
 		{Name: "list_skill_resources", Version: "1"},
 		{Name: "read_skill_resource", Version: "1"},
+		{Name: "publish_artifact", Version: "1"},
 		{Name: "run_code", Version: "1"},
 		{Name: "run_code_js", Version: "1"},
 		{Name: "run_code_go", Version: "1"},

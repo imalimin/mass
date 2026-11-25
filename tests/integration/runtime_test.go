@@ -134,12 +134,9 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 				args = `{"path":"notes.txt","content":"hello workspace","expected_sha256":"missing"}`
 			case 1:
 				name = "read_file"
-				args = `{"path":"notes.txt"}`
-			case 2:
-				name = "publish_artifact"
 				args = fmt.Sprintf(`{"path":"notes.txt","expected_sha256":%q}`, sha)
 			default:
-				out.Content = "completed and published notes.txt"
+				out.Content = "completed and verified notes.txt"
 				out.ResponseMeta.FinishReason = "stop"
 			}
 		}
@@ -209,7 +206,7 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := catalog.Config{SchemaVersion: 1, Name: draft.Name, Model: model.ID, Tools: []string{"read_file", "write_file", "publish_artifact"}, Skills: []catalog.SkillRef{}}
+	config := catalog.Config{SchemaVersion: 1, Name: draft.Name, Model: model.ID, Tools: []string{"read_file", "write_file"}, Skills: []catalog.SkillRef{}}
 	if real {
 		config.Tools = []string{}
 	}
@@ -343,13 +340,14 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		t.Log("real model: one Eino text attempt completed, usage retained, workspace snapshot committed")
 		return
 	}
-	artifacts, err := db.Store.RuntimeArtifacts(ctx, actor.ID, space.ID, first.ID)
-	if err != nil || len(artifacts) != 1 {
-		t.Fatal("artifact missing", err)
+	f, _, err := runtime.Workspaces.OpenFile(ctx, actor.ID, session, "notes.txt", snapshots)
+	if err != nil {
+		t.Fatal("workspace file missing", err)
 	}
-	data, err := resource.ReadBytes(ctx, content, actor.ID, space.ID, artifacts[0].ObjectID, 1<<20)
+	data, err := io.ReadAll(f)
+	f.Close()
 	if err != nil || string(data) != "hello workspace" {
-		t.Fatal("artifact bytes", err)
+		t.Fatal("workspace file bytes", err)
 	}
 	if err = os.RemoveAll(filepath.Join(root, space.ID+"_"+session.ID)); err != nil {
 		t.Fatal(err)

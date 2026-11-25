@@ -223,7 +223,7 @@ func TestTOSRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Skills: []catalog.SkillRef{{ID: skill.ID, Version: "v1"}}, Tools: []string{"write_file", "read_file", "publish_artifact"}}
+	definition := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Skills: []catalog.SkillRef{{ID: skill.ID, Version: "v1"}}, Tools: []string{"write_file", "read_file"}}
 	definition.Context.MaxInputTokens = 24000
 	definition.Context.MaxTokens = 512
 	definition.Context.Compression = "summary"
@@ -277,9 +277,8 @@ func TestTOSRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifacts, err := source.Store.RuntimeArtifacts(ctx, actor.ID, space.ID, first.ID)
-	if err != nil || len(artifacts) != 1 {
-		t.Fatal("source artifact missing", err)
+	if first.WorkspaceSnapshotID == "" {
+		t.Fatal("source workspace snapshot missing")
 	}
 	if err = closeRuntime(ctx); err != nil {
 		t.Fatal(err)
@@ -503,8 +502,8 @@ func TestTOSRecovery(t *testing.T) {
 	base := "/api/v1/spaces/" + space.ID
 	request("GET", base+"/agents/"+agent.ID+"/versions/"+version.ID, nil)
 	request("GET", base+"/skills/"+skill.ID+"/versions/"+skillVersion.ID, nil)
-	if string(request("GET", base+"/artifacts/"+artifacts[0].ID+"/download", nil)) != "retained D09" {
-		t.Fatal("restored artifact bytes changed")
+	if string(request("GET", base+"/sessions/"+session.ID+"/workspace/files/download?path=retained.txt", nil)) != "retained D09" {
+		t.Fatal("restored workspace file download bytes changed")
 	}
 	request("GET", base+"/runs/"+first.ID+"/trace", nil)
 	request("GET", base+"/runs/"+first.ID+"/ui-snapshot", nil)

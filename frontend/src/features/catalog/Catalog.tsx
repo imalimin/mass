@@ -21,7 +21,7 @@ const agentLimits = {
 type Limit = keyof typeof agentLimits
 const limitFields = Object.keys(agentLimits) as Limit[]
 const validLimit = (key: Limit, value: string) => Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= agentLimits[key].max
-const tools = ['run_command', 'read_file', 'write_file', 'edit_file', 'read_attachment', 'update_plan', 'publish_artifact']
+const tools = ['run_command', 'read_file', 'write_file', 'edit_file', 'read_attachment', 'update_plan']
 const errorText = (e: unknown) => e instanceof Error ? e.message : '操作未完成'
 const displayVersion = (v: Version) => v.debug ? `调试快照 ${v.id.slice(0, 8)}` : v.label
 const definitionNamePattern = String.raw`[a-z][a-z0-9_\-]{0,63}`
@@ -426,7 +426,7 @@ function ConfigBuilder({ space, name, config, disabled, onDirtyChange, onAction 
   const state: Selection = {
     model: existing?.model ?? '',
     skills: Object.fromEntries(Array.isArray(existing?.skills) ? existing.skills.filter(skill => skill?.id).map(skill => [skill.id, skill.version]) : []),
-    tools: existing ? (Array.isArray(existing.tools) ? existing.tools.filter(tool => tools.includes(tool)) : []) : ['read_file', 'write_file', 'publish_artifact'],
+    tools: existing ? (Array.isArray(existing.tools) ? existing.tools.filter(tool => tools.includes(tool)) : []) : ['read_file', 'write_file'],
     input: existing?.context?.max_input_tokens ?? 24000,
     ...configEdits,
     limits: {

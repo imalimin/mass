@@ -58,8 +58,6 @@ export async function startModelFixture() {
         },
         () => ['edit_file', { path: 'summary.json', edits: [{ old_text: 'draft', new_text: 'final' }] }],
         () => ['run_command', { command: `mkdir -p reports && mv summary.json reports/summary.json && curl -fsS -X POST -d 10 http://127.0.0.1:${server.address().port}/tools-input` }],
-        () => ['publish_artifact', { path: 'reports/summary.json' }],
-        () => ['run_command', { command: 'rm -f reports/summary.json' }],
         () => ['update_plan', { steps: steps('completed') }],
       ]
       if (actions[count]) [name, args] = actions[count]()
@@ -69,7 +67,6 @@ export async function startModelFixture() {
       const actions = [
         ['run_command', { command: 'printf problem >&2; exit 7' }],
         ['run_command', { command: 'sh', args: ['-c', 'printf "%s" "$1" > command.txt', 'mass', 'hello workspace'] }],
-        ['publish_artifact', { path: 'command.txt', expected_sha256: sha, display_name: 'command.txt', media_type: 'text/plain' }],
       ]
       if (count === 1 && (results[0].data.exit_code !== 7 || results[0].data.stderr !== 'problem')) throw new Error('missing command failure details')
       if (actions[count]) [name, args] = actions[count]
@@ -87,8 +84,7 @@ export async function startModelFixture() {
     }
     else if (/second|读取已有/.test(task)) { if (!count) { name = 'read_file'; args = { path: 'notes.txt' } } }
     else if (count === 0) { name = 'write_file'; args = { path: 'notes.txt', content: 'hello workspace' } }
-    else if (count === 1) { name = 'read_file'; args = { path: 'notes.txt' } }
-    else if (count === 2) { name = 'publish_artifact'; args = { path: 'notes.txt', expected_sha256: sha, display_name: 'notes.txt', media_type: 'text/plain' } }
+    else if (count === 1) { name = 'read_file'; args = { path: 'notes.txt', expected_sha256: sha } }
     if (name) {
       const progress = task === 'write, read and publish' ? ['准备工作区。\n先写入文件。', '检查刚写入的文件。'][count] : undefined
       if (progress) frame({ role: 'assistant', content: progress })

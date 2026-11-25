@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"os"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -153,6 +154,46 @@ func (w *RunWorkspaces) Browse(ctx context.Context, actor string, session run.Se
 		return view, storage.ErrWorkspace
 	}
 	return view, nil
+}
+
+// OpenFile opens a regular file in the session workspace for read-only
+// streaming download without holding the workspace lock across network I/O.
+func (w *RunWorkspaces) OpenFile(ctx context.Context, actor string, session run.Session, rel string, snapshots *SnapshotStore) (*os.File, fs.FileInfo, error) {
+	if !filePath(rel) {
+		return nil, nil, storage.ErrInvalid
+	}
+	if session.LatestSnapshotID != "" {
+		if err := w.restoreMissing(ctx, actor, session, snapshots); err != nil {
+			if errors.Is(err, storage.ErrBlobNotFound) {
+				return nil, nil, storage.ErrIntegrity
+			}
+			return nil, nil, err
+		}
+	}
+	reader, ok := w.Workspaces.(existingWorkspaces)
+	if !ok {
+		return nil, nil, storage.ErrWorkspace
+	}
+	var file *os.File
+	var info fs.FileInfo
+	err := reader.WithExisting(ctx, session.SpaceID, session.ID, func(dir WorkspaceDir) error {
+		var openErr error
+		file, info, openErr = openWorkspaceFile(dir, rel)
+		return openErr
+	})
+	if err != nil {
+		if file != nil {
+			file.Close()
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil, storage.ErrBlobNotFound
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, storage.ErrInvalid) {
+			return nil, nil, err
+		}
+		return nil, nil, storage.ErrWorkspace
+	}
+	return file, info, nil
 }
 
 func readWorkspacePreview(dir WorkspaceDir, path string, view *WorkspaceEntryView) error {

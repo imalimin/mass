@@ -7,6 +7,9 @@ type WorkspaceScope = { space: string; sessionID: string }
 
 const SafeMarkdown = lazy(() => import('../debug/SafeMarkdown'))
 
+const workspaceDownloadURL = ({ space, sessionID }: WorkspaceScope, path: string) =>
+  `/api/v1/spaces/${encodeURIComponent(space)}/sessions/${encodeURIComponent(sessionID)}/workspace/files/download?${new URLSearchParams({ path })}`
+
 function useEntry({ space, sessionID }: WorkspaceScope, path: string, enabled: boolean) {
   return useQuery({
     queryKey: ['private', space, sessionID, 'workspace-files', path],
@@ -30,13 +33,19 @@ function WorkspaceDirectory({ scope, path, visible, expanded, toggle, selected, 
     const childPath = path === '.' ? entry.name : `${path}/${entry.name}`
     const open = expanded.has(childPath)
     return <li key={childPath}>
-      <button type="button" title={entry.name} aria-expanded={entry.directory ? open : undefined}
-        aria-current={selected === childPath ? 'true' : undefined}
-        onClick={event => entry.directory ? toggle(childPath) : select(childPath, event.currentTarget)}>
-        {entry.directory && <Icon name="chevron" size={13} className="directory-chevron" />}
-        <Icon name={entry.directory ? 'folder' : 'file'} size={16} />
-        <span>{entry.name}</span>
-      </button>
+      <div className="workspace-entry-row">
+        <button type="button" title={entry.name} aria-expanded={entry.directory ? open : undefined}
+          aria-current={selected === childPath ? 'true' : undefined}
+          onClick={event => entry.directory ? toggle(childPath) : select(childPath, event.currentTarget)}>
+          {entry.directory && <Icon name="chevron" size={13} className="directory-chevron" />}
+          <Icon name={entry.directory ? 'folder' : 'file'} size={16} />
+          <span>{entry.name}</span>
+        </button>
+        {!entry.directory && <a className="icon-button workspace-download" href={workspaceDownloadURL(scope, childPath)} download
+          aria-label={`下载 ${entry.name}`} title={`下载 ${entry.name}`}>
+          <Icon name="download" size={14} />
+        </a>}
+      </div>
       {entry.directory && open && <WorkspaceDirectory scope={scope} path={childPath} visible={visible} expanded={expanded}
         toggle={toggle} selected={selected} select={select} />}
     </li>
@@ -48,6 +57,8 @@ function WorkspacePreview({ scope, path, hidden, close }: { scope: WorkspaceScop
   const [showSource, setShowSource] = useState(false)
   const closeButton = useRef<HTMLButtonElement>(null)
   useEffect(() => { closeButton.current?.focus({ preventScroll: true }) }, [])
+  const downloadURL = workspaceDownloadURL(scope, path)
+  const canDownload = !query.isError && !query.isPending && !query.data?.directory
   let markdown = false
   let body: ReactNode
   if (query.isError) {
@@ -57,7 +68,12 @@ function WorkspacePreview({ scope, path, hidden, close }: { scope: WorkspaceScop
   } else if (query.data.directory) {
     body = <p role="status">该路径已变为目录。</p>
   } else if (query.data.status) {
-    body = <p role="status">{query.data.status === 'too_large' ? '文件超过预览大小限制。' : '仅支持预览 UTF-8 文本。'}</p>
+    body = <div className="workspace-unpreviewable">
+      <p role="status">{query.data.status === 'too_large' ? '文件超过在线预览大小限制，可直接下载查看。' : '此文件为二进制格式，暂不支持在线预览，可直接下载。'}</p>
+      <a className="workspace-download-link" href={downloadURL} download aria-label={`下载 ${path}`}>
+        <Icon name="download" size={14} />下载文件
+      </a>
+    </div>
   } else {
     markdown = /\.md$/i.test(path)
     const text = query.data.text
@@ -71,6 +87,9 @@ function WorkspacePreview({ scope, path, hidden, close }: { scope: WorkspaceScop
     <header>
       <strong title={path}><Icon name="file" />{path}</strong>
       <div className="workspace-preview-actions">
+        {canDownload && <a className="workspace-download-link" href={downloadURL} download aria-label={`下载 ${path}`} title={`下载 ${path}`}>
+          <Icon name="download" size={14} />下载
+        </a>}
         {markdown && <button type="button" className="secondary" onClick={() => setShowSource(value => !value)}>
           <Icon name={showSource ? 'file' : 'code'} />{showSource ? '渲染展示' : '查看原文'}
         </button>}

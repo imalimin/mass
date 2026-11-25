@@ -123,8 +123,8 @@ func (m *faultModel) Stream(ctx context.Context, snapshot run.Snapshot, p run.Pr
 			args = `{"path":"retained.txt","content":"retained D09"}`
 		}
 		if count == 1 {
-			name = "publish_artifact"
-			raw, _ := json.Marshal(map[string]string{"path": "retained.txt", "expected_sha256": hex.EncodeToString(sum[:]), "display_name": "retained.txt", "media_type": "text/plain"})
+			name = "read_file"
+			raw, _ := json.Marshal(map[string]string{"path": "retained.txt", "expected_sha256": hex.EncodeToString(sum[:])})
 			args = string(raw)
 		}
 		if name != "" {
@@ -198,7 +198,7 @@ func newFaultRigWithTimeout(t *testing.T, timeoutSeconds int) *faultRig {
 		t.Fatal(err)
 	}
 	r.agent = agent.ID
-	cfg := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Tools: []string{"write_file", "read_file", "publish_artifact", run.CommandTool}, Skills: []catalog.SkillRef{}}
+	cfg := catalog.Config{SchemaVersion: 1, Name: agent.Name, Model: model.ID, Tools: []string{"write_file", "read_file", run.CommandTool}, Skills: []catalog.SkillRef{}}
 	cfg.Context.MaxInputTokens = 24000
 	cfg.Context.MaxTokens = 512
 	cfg.Context.Compression = "summary"
@@ -620,9 +620,8 @@ func TestFaultHistoryRetentionAndCorruptContent(t *testing.T) {
 	if err != nil || !cp.Closed {
 		t.Fatal(err)
 	}
-	artifacts, err := r.db.Store.RuntimeArtifacts(ctx, r.actor, r.space, v.ID)
-	if err != nil || len(artifacts) != 1 {
-		t.Fatal(err)
+	if v.WorkspaceSnapshotID == "" {
+		t.Fatal("workspace snapshot missing")
 	}
 	_, token, _, err := r.auth.Login(ctx, "alice", "correct-password-alice")
 	if err != nil {
@@ -670,10 +669,6 @@ func TestFaultHistoryRetentionAndCorruptContent(t *testing.T) {
 	if err != nil || !closed || len(frames) == 0 {
 		t.Fatal("AGUI expired", err)
 	}
-	raw, err := resource.ReadBytes(ctx, r.content, r.actor, r.space, artifacts[0].ObjectID, 1<<20)
-	if err != nil || string(raw) != "retained D09" {
-		t.Fatal("artifact expired", err)
-	}
 	snapshot, err := r.db.Store.Snapshot(ctx, r.actor, r.space, v.WorkspaceSnapshotID)
 	if err != nil {
 		t.Fatal("snapshot expired", err)
@@ -706,7 +701,7 @@ func TestFaultHistoryRetentionAndCorruptContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.db.Store.DB.SetMaxOpenConns(16)
-	object, err := r.db.Store.Object(ctx, r.actor, r.space, artifacts[0].ObjectID, true)
+	object, err := r.db.Store.Object(ctx, r.actor, r.space, snapshot.ObjectID, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -715,7 +710,7 @@ func TestFaultHistoryRetentionAndCorruptContent(t *testing.T) {
 		if f != nil {
 			f.Close()
 		}
-		t.Fatal("corrupt artifact was readable", err)
+		t.Fatal("corrupt snapshot archive was readable", err)
 	}
 	// A second missing-object failure must also be explicit, not an empty result.
 	delete(r.blobs.Data, object.Key) // all runtime workers have already exited

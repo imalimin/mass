@@ -1038,6 +1038,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/spaces/{space_id}/sessions/{session_id}/workspace/files/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Downloads a regular file from the session workspace as an attachment. Restores the latest committed Run snapshot locally if the session directory is missing. */
+        get: operations["downloadWorkspaceFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/spaces/{space_id}/sessions/{session_id}/workspace/restore": {
         parameters: {
             query?: never;
@@ -6483,6 +6500,41 @@ export interface operations {
                 };
             };
             /** @description Request rejected or path unavailable. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    downloadWorkspaceFile: {
+        parameters: {
+            query: {
+                /** @description Workspace-relative file path to download. */
+                path: string;
+            };
+            header?: never;
+            path: {
+                space_id: components["schemas"]["ShortResourceID"];
+                session_id: components["schemas"]["ShortResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Raw file download. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Request rejected or file unavailable. */
             default: {
                 headers: {
                     [name: string]: unknown;
