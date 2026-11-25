@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -211,13 +212,6 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		if strings.Contains(task, "command cancel") {
 			return toolReply(run.CommandTool, map[string]any{"command": "printf kept > cancelled.txt && sleep 60"}), nil
 		}
-		data := func(index int) map[string]any {
-			var v map[string]any
-			if index < len(results) {
-				json.Unmarshal(results[index].Data, &v)
-			}
-			return v
-		}
 		step := len(results)
 		var name string
 		var args map[string]any
@@ -231,11 +225,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 			if strings.Contains(systemPrompt, "Read the multiplier from assets/rules.txt.") {
 				return nil, fmt.Errorf("skill body should not be eagerly injected into system prompt")
 			}
-			name = "read_file"
-			args = map[string]any{"path": "$MASS_SKILLS_DIR/rules/assets/rules.txt"}
-		case 1:
-			name = "read_attachment"
-			marker := "[MASS accepted attachments; use read_attachment by ID: "
+			marker := "[MASS accepted attachments: "
 			pos := strings.Index(task, marker)
 			if pos < 0 {
 				return nil, fmt.Errorf("attachment inventory absent")
@@ -245,27 +235,27 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 			if len(list) != 1 {
 				return nil, fmt.Errorf("attachment binding missing")
 			}
-			args = map[string]any{"attachment_id": list[0].ID, "format": "json"}
-		case 2:
+			name = "read_file"
+			args = map[string]any{"path": "$MASS_SKILLS_DIR/rules/assets/rules.txt"}
+		case 1:
 			name = "write_file"
-			raw, _ := json.Marshal(data(1)["value"])
-			args = map[string]any{"path": "records.json", "content": string(raw)}
-		case 3:
+			args = map[string]any{"path": "records.json", "content": `[{"amount":2},{"amount":3}]`}
+		case 2:
 			name = "read_file"
 			args = map[string]any{"path": "records.json"}
-		case 4:
+		case 3:
 			name = "update_plan"
 			args = map[string]any{"steps": []any{map[string]any{"id": "report", "title": "Create summary", "status": "in_progress"}}}
-		case 5:
+		case 4:
 			name = "write_file"
 			args = map[string]any{"path": "summary.json", "content": `{"total":10,"label":"draft"}`}
-		case 6:
+		case 5:
 			name = "edit_file"
 			args = map[string]any{"path": "summary.json", "edits": []any{map[string]any{"old_text": "draft", "new_text": "final"}}}
-		case 7:
+		case 6:
 			name = run.CommandTool
 			args = map[string]any{"command": "mkdir -p reports && mv summary.json reports/summary.json && curl -fsS -X POST -d 5 " + strconv.Quote(server.URL)}
-		case 8:
+		case 7:
 			name = "update_plan"
 			args = map[string]any{"steps": []any{map[string]any{"id": "report", "title": "Create summary", "status": "completed"}}}
 		default:
@@ -398,13 +388,13 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		validate("GET", path, w)
 	}
 	{
-		dlPath := "/spaces/" + space.ID + "/sessions/" + session.ID + "/workspace/files/download?path=reports/summary.json"
+		dlPath := "/spaces/" + space.ID + "/sessions/" + session.ID + "/workspace/download"
 		r := httptest.NewRequest("GET", "http://mass.test/api/v1"+dlPath, nil)
 		r.Header.Set("Cookie", "mass_session="+token)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, r)
-		if w.Code != 200 || w.Body.String() != `{"total":10,"label":"final"}` {
-			t.Fatalf("workspace download failed: %d %q", w.Code, w.Body.String())
+		if w.Code != 200 || readZipEntry(t, w.Body.Bytes(), "reports/summary.json") != `{"total":10,"label":"final"}` {
+			t.Fatalf("workspace download failed: %d", w.Code)
 		}
 	}
 	corrected, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{
@@ -423,16 +413,8 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		!bytes.Contains(rejectedStep.Tools[0].Result, []byte("invalid_tool_input")) {
 		t.Fatal("trace did not record the rejected tool call")
 	}
-	// Raw upload does not make an attachment available to a running tool.
+	// Unbound skills are rejected and cross-session attachments cannot be submitted.
 	files := &resource.FileService{Workspaces: manager, Content: content, MaxBytes: 1 << 20, Limits: limits, Check: func(ctx context.Context, s run.Snapshot) error { return auth.CheckAccess(ctx, s.ActorID, s.SpaceID) }}
-	sources := &resource.Sources{Files: files, Journal: j}
-	unaccepted, err := runtime.Service.UploadAttachment(ctx, actor.ID, space.ID, session.ID, "unaccepted.txt", "text/plain", strings.NewReader("not accepted"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = sources.ReadAttachment(ctx, first.Snapshot, resource.SourceInput{AttachmentID: unaccepted.ID, Format: "text"}); err == nil {
-		t.Fatal("unaccepted attachment readable")
-	}
 	if _, err = files.Read(ctx, first.Snapshot, resource.ReadFileInput{Path: "$MASS_SKILLS_DIR/unbound/assets/rules.txt"}); err == nil {
 		t.Fatal("unbound skill readable")
 	}
@@ -443,17 +425,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if _, err = runtime.Service.Submit(ctx, actor.ID, space.ID, otherSession.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "attachment fixtures", Attachments: []string{attachment.ID}}); err == nil {
 		t.Fatal("cross-session attachment accepted")
 	}
-	wrong := first.Snapshot
-	wrong.SessionID = otherSession.ID
-	wrong.UserEventID = uuid.NewString()
-	if _, err = sources.ReadAttachment(ctx, wrong, resource.SourceInput{AttachmentID: attachment.ID, Format: "json"}); err == nil {
-		t.Fatal("cross-session attachment read")
-	}
 	csvFile, err := runtime.Service.UploadAttachment(ctx, actor.ID, space.ID, session.ID, "rows.csv", "text/csv", strings.NewReader("name,amount\na,2\nb,3\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	badJSON, err := runtime.Service.UploadAttachment(ctx, actor.ID, space.ID, session.ID, "invalid.json", "application/json", strings.NewReader(`[{"valid":true},broken]`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,25 +433,12 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bound, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "attachment fixtures", Attachments: []string{csvFile.ID, badJSON.ID, binary.ID}})
+	bound, err := runtime.Service.Submit(ctx, actor.ID, space.ID, session.ID, sessionapp.SubmitInput{Key: uuid.NewString(), Text: "attachment fixtures", Attachments: []string{csvFile.ID, binary.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	bound = wait(bound.ID)
-	page, err := sources.ReadAttachment(ctx, bound.Snapshot, resource.SourceInput{AttachmentID: csvFile.ID, Format: "csv", RecordLimit: 1})
-	if err != nil || page.Complete {
-		t.Fatal("structured pagination", err)
-	}
-	var pageData map[string]any
-	json.Unmarshal(page.Data, &pageData)
-	if pageData["next_record_offset"] != float64(1) || pageData["parser_complete"] != true {
-		t.Fatal(string(page.Data))
-	}
-	if _, err = sources.ReadAttachment(ctx, bound.Snapshot, resource.SourceInput{AttachmentID: badJSON.ID, Format: "json"}); err == nil {
-		t.Fatal("invalid full JSON accepted")
-	}
-	if _, err = sources.ReadAttachment(ctx, bound.Snapshot, resource.SourceInput{AttachmentID: binary.ID, Format: "text"}); err == nil {
-		t.Fatal("binary attachment treated as text")
+	if bound = wait(bound.ID); bound.Status != "succeeded" {
+		t.Fatal("attachment submission failed", bound.Error)
 	}
 	uploadPath := "/spaces/" + space.ID + "/sessions/" + session.ID + "/attachments"
 	uploadBody, _ := json.Marshal(map[string]any{"name": "api.txt", "media_type": "text/plain", "content_base64": base64.StdEncoding.EncodeToString([]byte("API attachment"))})
@@ -564,7 +523,7 @@ func exerciseTools(t *testing.T, blobs storage.BlobStore, prefix string) {
 		t.Fatal(err)
 	}
 
-	t.Log("D05: all 6 core tools, shell command, skill/attachment, plan, workspace download and in-memory tool results passed")
+	t.Log("D05: all 5 core tools, shell command, skill/attachment entry, plan, workspace download and in-memory tool results passed")
 }
 
 func toolReply(name string, args any) []*schema.Message {
@@ -573,6 +532,30 @@ func toolReply(name string, args any) []*schema.Message {
 }
 func textReply(text string) []*schema.Message {
 	return []*schema.Message{{Role: schema.Assistant, Content: text, ResponseMeta: &schema.ResponseMeta{FinishReason: "stop", Usage: &schema.TokenUsage{PromptTokens: 100, CompletionTokens: 10}}}}
+}
+func readZipEntry(t *testing.T, archive []byte, name string) string {
+	t.Helper()
+	zr, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatalf("invalid zip archive: %v", err)
+	}
+	for _, entry := range zr.File {
+		if entry.Name != name {
+			continue
+		}
+		rc, err := entry.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	t.Fatalf("zip entry %q not found", name)
+	return ""
 }
 
 func awaitToolTrace(t *testing.T, ctx context.Context, archive *trace.Archive, store *mariadb.Store, v run.View) trace.Page {

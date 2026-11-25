@@ -269,7 +269,7 @@ func (p *Projector) Build(ctx context.Context, s run.Snapshot, events []journal.
 			text := string(raw)
 			if len(d.Attachments) > 0 {
 				list, _ := json.Marshal(d.Attachments)
-				text += "\n[MASS accepted attachments; use read_attachment by ID: " + string(list) + "]"
+				text += "\n[MASS accepted attachments: " + string(list) + "]"
 			}
 			messages := []run.Message{}
 			if e.EventID == s.UserEventID && len(spec.MissingLocalFiles) > 0 {

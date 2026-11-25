@@ -243,22 +243,6 @@ button.conversation-copy-id { width: 30px; height: 32px; flex: none; }
 .workspace-pane-body { overflow: auto; padding: 8px 12px 14px; font-size: 12.5px; }
 .workspace-tree .workspace-pane-body ul { list-style: none; padding-left: 14px; margin: 0; }
 .workspace-tree .workspace-pane-body > ul { padding: 0; }
-.workspace-entry-row { display: flex; align-items: center; gap: 2px; }
-.workspace-entry-row > button { flex: 1; min-width: 0; }
-.workspace-download {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  color: var(--muted);
-  text-decoration: none;
-  opacity: 0.65;
-}
-.workspace-entry-row:hover .workspace-download,
-.workspace-download:focus-visible { opacity: 1; color: var(--text); background: var(--hover); }
 .workspace-tree li button {
   display: flex;
   width: 100%;

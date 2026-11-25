@@ -3,8 +3,6 @@ package integration
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -116,8 +114,6 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 			}
 		}
 		out := &schema.Message{Role: schema.Assistant, ResponseMeta: &schema.ResponseMeta{FinishReason: "tool_calls", Usage: &schema.TokenUsage{PromptTokens: 100, CompletionTokens: 10}}}
-		sum := sha256.Sum256([]byte("hello workspace"))
-		sha := hex.EncodeToString(sum[:])
 		name, args := "", ""
 		if strings.Contains(latest, "second") {
 			if tools == 0 {
@@ -131,10 +127,10 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 			switch tools {
 			case 0:
 				name = "write_file"
-				args = `{"path":"notes.txt","content":"hello workspace","expected_sha256":"missing"}`
+				args = `{"path":"notes.txt","content":"hello workspace"}`
 			case 1:
 				name = "read_file"
-				args = fmt.Sprintf(`{"path":"notes.txt","expected_sha256":%q}`, sha)
+				args = `{"path":"notes.txt"}`
 			default:
 				out.Content = "completed and verified notes.txt"
 				out.ResponseMeta.FinishReason = "stop"
@@ -340,14 +336,14 @@ func exerciseRuntime(t *testing.T, blobs storage.BlobStore, prefix string, wire 
 		t.Log("real model: one Eino text attempt completed, usage retained, workspace snapshot committed")
 		return
 	}
-	f, _, err := runtime.Workspaces.OpenFile(ctx, actor.ID, session, "notes.txt", snapshots)
+	archive, err := runtime.Workspaces.Archive(ctx, actor.ID, session, snapshots)
 	if err != nil {
-		t.Fatal("workspace file missing", err)
+		t.Fatal("workspace archive failed", err)
 	}
-	data, err := io.ReadAll(f)
-	f.Close()
-	if err != nil || string(data) != "hello workspace" {
-		t.Fatal("workspace file bytes", err)
+	data, err := io.ReadAll(archive)
+	archive.Close()
+	if err != nil || readZipEntry(t, data, "notes.txt") != "hello workspace" {
+		t.Fatal("workspace archive bytes", err)
 	}
 	if err = os.RemoveAll(filepath.Join(root, space.ID+"_"+session.ID)); err != nil {
 		t.Fatal(err)

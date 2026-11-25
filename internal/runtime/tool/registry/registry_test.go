@@ -6,13 +6,13 @@ import (
 
 	jschema "github.com/eino-contrib/jsonschema"
 	"github.com/imalimin/mass/internal/domain/run"
-	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/imalimin/mass/internal/schemacache"
 )
 
 func TestAllToolSchemasAndLegacyCompatibility(t *testing.T) {
 	specs := Specs()
-	if len(specs) != 6 {
-		t.Fatalf("expected 6 core tools, got %d", len(specs))
+	if len(specs) != 5 {
+		t.Fatalf("expected 5 core tools, got %d", len(specs))
 	}
 	validSamples := map[string][]map[string]any{
 		run.CommandTool: {
@@ -26,14 +26,9 @@ func TestAllToolSchemasAndLegacyCompatibility(t *testing.T) {
 		},
 		"write_file": {
 			{"path": "notes.txt", "content": "hello"},
-			{"path": "notes.txt", "content": "hello", "expected_sha256": "missing"},
 		},
 		"edit_file": {
 			{"path": "notes.txt", "edits": []any{map[string]any{"old_text": "a", "new_text": "b"}}},
-		},
-		"read_attachment": {
-			{"attachment_id": "att-1"},
-			{"attachment_id": "att-1", "format": "json", "record_offset": 0, "record_limit": 50},
 		},
 		"update_plan": {
 			{"steps": []any{map[string]any{"title": "Inspect workspace", "status": "in_progress"}}},
@@ -50,15 +45,7 @@ func TestAllToolSchemasAndLegacyCompatibility(t *testing.T) {
 		if err := json.Unmarshal(spec.Schema, &wireSchema); err != nil {
 			t.Fatalf("%s failed eino jsonschema unmarshal: %v", spec.Name, err)
 		}
-		var doc any
-		if err := json.Unmarshal(spec.Schema, &doc); err != nil {
-			t.Fatal(err)
-		}
-		c := jsonschema.NewCompiler()
-		if err := c.AddResource("https://mass.local/schema", doc); err != nil {
-			t.Fatal(err)
-		}
-		compiled, err := c.Compile("https://mass.local/schema")
+		compiled, err := schemacache.Compile(spec.Schema)
 		if err != nil {
 			t.Fatal(spec.Name, err)
 		}
@@ -87,6 +74,7 @@ func TestAllToolSchemasAndLegacyCompatibility(t *testing.T) {
 		{Name: "delete_file", Version: "1"},
 		{Name: "list_skill_resources", Version: "1"},
 		{Name: "read_skill_resource", Version: "1"},
+		{Name: "read_attachment", Version: "1"},
 		{Name: "publish_artifact", Version: "1"},
 		{Name: "run_code", Version: "1"},
 		{Name: "run_code_js", Version: "1"},

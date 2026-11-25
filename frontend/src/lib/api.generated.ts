@@ -1038,15 +1038,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/spaces/{space_id}/sessions/{session_id}/workspace/files/download": {
+    "/api/v1/spaces/{space_id}/sessions/{session_id}/workspace/download": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** @description Downloads a regular file from the session workspace as an attachment. Restores the latest committed Run snapshot locally if the session directory is missing. */
-        get: operations["downloadWorkspaceFile"];
+        /** @description Downloads the entire session workspace as a ZIP archive. Restores the latest committed Run snapshot locally if the session directory is missing. */
+        get: operations["downloadWorkspace"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6510,12 +6510,9 @@ export interface operations {
             };
         };
     };
-    downloadWorkspaceFile: {
+    downloadWorkspace: {
         parameters: {
-            query: {
-                /** @description Workspace-relative file path to download. */
-                path: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 space_id: components["schemas"]["ShortResourceID"];
@@ -6525,16 +6522,16 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Raw file download. */
+            /** @description Session workspace ZIP archive. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/octet-stream": string;
+                    "application/zip": string;
                 };
             };
-            /** @description Request rejected or file unavailable. */
+            /** @description Request rejected or workspace unavailable. */
             default: {
                 headers: {
                     [name: string]: unknown;

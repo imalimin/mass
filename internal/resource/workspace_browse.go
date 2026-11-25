@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
@@ -156,44 +157,120 @@ func (w *RunWorkspaces) Browse(ctx context.Context, actor string, session run.Se
 	return view, nil
 }
 
-// OpenFile opens a regular file in the session workspace for read-only
+// WorkspaceArchive holds a temporary ZIP snapshot of a session workspace and
+// removes the temporary file when closed.
+type WorkspaceArchive struct {
+	*os.File
+	Size int64
+}
+
+func (a *WorkspaceArchive) Close() error {
+	name := a.File.Name()
+	err := a.File.Close()
+	return errors.Join(err, os.Remove(name))
+}
+
+// Archive packs the entire session workspace into a temporary ZIP archive for
 // streaming download without holding the workspace lock across network I/O.
-func (w *RunWorkspaces) OpenFile(ctx context.Context, actor string, session run.Session, rel string, snapshots *SnapshotStore) (*os.File, fs.FileInfo, error) {
-	if !filePath(rel) {
-		return nil, nil, storage.ErrInvalid
-	}
+func (w *RunWorkspaces) Archive(ctx context.Context, actor string, session run.Session, snapshots *SnapshotStore) (*WorkspaceArchive, error) {
 	if session.LatestSnapshotID != "" {
 		if err := w.restoreMissing(ctx, actor, session, snapshots); err != nil {
 			if errors.Is(err, storage.ErrBlobNotFound) {
-				return nil, nil, storage.ErrIntegrity
+				return nil, storage.ErrIntegrity
 			}
-			return nil, nil, err
+			return nil, err
 		}
 	}
 	reader, ok := w.Workspaces.(existingWorkspaces)
 	if !ok {
-		return nil, nil, storage.ErrWorkspace
+		return nil, storage.ErrWorkspace
 	}
-	var file *os.File
-	var info fs.FileInfo
-	err := reader.WithExisting(ctx, session.SpaceID, session.ID, func(dir WorkspaceDir) error {
-		var openErr error
-		file, info, openErr = openWorkspaceFile(dir, rel)
-		return openErr
-	})
+	tmp, err := os.CreateTemp("", "mass-workspace-download-*.zip")
 	if err != nil {
-		if file != nil {
-			file.Close()
-		}
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil, storage.ErrBlobNotFound
-		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, storage.ErrInvalid) {
-			return nil, nil, err
-		}
-		return nil, nil, storage.ErrWorkspace
+		return nil, err
 	}
-	return file, info, nil
+	out := &WorkspaceArchive{File: tmp}
+	done := false
+	defer func() {
+		if !done {
+			out.Close()
+		}
+	}()
+	zw := zip.NewWriter(tmp)
+	err = reader.WithExisting(ctx, session.SpaceID, session.ID, func(dir WorkspaceDir) error {
+		return fs.WalkDir(dir.Root().FS(), ".", func(name string, _ fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if name == "." {
+				return nil
+			}
+			info, err := dir.Root().Lstat(name)
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if !filePath(name) || info.Mode()&os.ModeSymlink != 0 || hasMultipleLinks(info) {
+				if info.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if info.IsDir() {
+				hdr := &zip.FileHeader{Name: name + "/", Method: zip.Store, Modified: info.ModTime()}
+				hdr.SetMode(info.Mode())
+				_, err := zw.CreateHeader(hdr)
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				return nil
+			}
+			f, err := dir.Root().Open(name)
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			opened, err := f.Stat()
+			if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+				return nil
+			}
+			hdr := &zip.FileHeader{Name: name, Method: zip.Deflate, Modified: info.ModTime()}
+			hdr.SetMode(opened.Mode().Perm())
+			entryWriter, err := zw.CreateHeader(hdr)
+			if err != nil {
+				return err
+			}
+			_, err = io.Copy(entryWriter, storage.ContextReader{Context: ctx, Reader: f})
+			return err
+		})
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, storage.ErrInvalid) {
+			return nil, err
+		}
+		return nil, storage.ErrWorkspace
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	info, err := tmp.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	out.Size = info.Size()
+	done = true
+	return out, nil
 }
 
 func readWorkspacePreview(dir WorkspaceDir, path string, view *WorkspaceEntryView) error {

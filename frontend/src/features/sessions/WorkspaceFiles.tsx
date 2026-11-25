@@ -7,8 +7,8 @@ type WorkspaceScope = { space: string; sessionID: string }
 
 const SafeMarkdown = lazy(() => import('../debug/SafeMarkdown'))
 
-const workspaceDownloadURL = ({ space, sessionID }: WorkspaceScope, path: string) =>
-  `/api/v1/spaces/${encodeURIComponent(space)}/sessions/${encodeURIComponent(sessionID)}/workspace/files/download?${new URLSearchParams({ path })}`
+const workspaceDownloadURL = ({ space, sessionID }: WorkspaceScope) =>
+  `/api/v1/spaces/${encodeURIComponent(space)}/sessions/${encodeURIComponent(sessionID)}/workspace/download`
 
 function useEntry({ space, sessionID }: WorkspaceScope, path: string, enabled: boolean) {
   return useQuery({
@@ -33,19 +33,13 @@ function WorkspaceDirectory({ scope, path, visible, expanded, toggle, selected, 
     const childPath = path === '.' ? entry.name : `${path}/${entry.name}`
     const open = expanded.has(childPath)
     return <li key={childPath}>
-      <div className="workspace-entry-row">
-        <button type="button" title={entry.name} aria-expanded={entry.directory ? open : undefined}
-          aria-current={selected === childPath ? 'true' : undefined}
-          onClick={event => entry.directory ? toggle(childPath) : select(childPath, event.currentTarget)}>
-          {entry.directory && <Icon name="chevron" size={13} className="directory-chevron" />}
-          <Icon name={entry.directory ? 'folder' : 'file'} size={16} />
-          <span>{entry.name}</span>
-        </button>
-        {!entry.directory && <a className="icon-button workspace-download" href={workspaceDownloadURL(scope, childPath)} download
-          aria-label={`下载 ${entry.name}`} title={`下载 ${entry.name}`}>
-          <Icon name="download" size={14} />
-        </a>}
-      </div>
+      <button type="button" title={entry.name} aria-expanded={entry.directory ? open : undefined}
+        aria-current={selected === childPath ? 'true' : undefined}
+        onClick={event => entry.directory ? toggle(childPath) : select(childPath, event.currentTarget)}>
+        {entry.directory && <Icon name="chevron" size={13} className="directory-chevron" />}
+        <Icon name={entry.directory ? 'folder' : 'file'} size={16} />
+        <span>{entry.name}</span>
+      </button>
       {entry.directory && open && <WorkspaceDirectory scope={scope} path={childPath} visible={visible} expanded={expanded}
         toggle={toggle} selected={selected} select={select} />}
     </li>
@@ -57,8 +51,7 @@ function WorkspacePreview({ scope, path, hidden, close }: { scope: WorkspaceScop
   const [showSource, setShowSource] = useState(false)
   const closeButton = useRef<HTMLButtonElement>(null)
   useEffect(() => { closeButton.current?.focus({ preventScroll: true }) }, [])
-  const downloadURL = workspaceDownloadURL(scope, path)
-  const canDownload = !query.isError && !query.isPending && !query.data?.directory
+  const downloadURL = workspaceDownloadURL(scope)
   let markdown = false
   let body: ReactNode
   if (query.isError) {
@@ -69,9 +62,9 @@ function WorkspacePreview({ scope, path, hidden, close }: { scope: WorkspaceScop
     body = <p role="status">该路径已变为目录。</p>
   } else if (query.data.status) {
     body = <div className="workspace-unpreviewable">
-      <p role="status">{query.data.status === 'too_large' ? '文件超过在线预览大小限制，可直接下载查看。' : '此文件为二进制格式，暂不支持在线预览，可直接下载。'}</p>
-      <a className="workspace-download-link" href={downloadURL} download aria-label={`下载 ${path}`}>
-        <Icon name="download" size={14} />下载文件
+      <p role="status">{query.data.status === 'too_large' ? '文件超过在线预览大小限制，可打包下载整个工作区查看。' : '此文件为二进制格式，暂不支持在线预览，可打包下载整个工作区查看。'}</p>
+      <a className="workspace-download-link" href={downloadURL} download aria-label="下载工作区">
+        <Icon name="download" size={14} />下载工作区 (.zip)
       </a>
     </div>
   } else {
@@ -87,9 +80,6 @@ function WorkspacePreview({ scope, path, hidden, close }: { scope: WorkspaceScop
     <header>
       <strong title={path}><Icon name="file" />{path}</strong>
       <div className="workspace-preview-actions">
-        {canDownload && <a className="workspace-download-link" href={downloadURL} download aria-label={`下载 ${path}`} title={`下载 ${path}`}>
-          <Icon name="download" size={14} />下载
-        </a>}
         {markdown && <button type="button" className="secondary" onClick={() => setShowSource(value => !value)}>
           <Icon name={showSource ? 'file' : 'code'} />{showSource ? '渲染展示' : '查看原文'}
         </button>}
@@ -138,7 +128,13 @@ function WorkspacePanes({ scope, id, open }: { scope: WorkspaceScope; id: string
       requestAnimationFrame(() => selectedTrigger.current?.focus({ preventScroll: true }))
     }} />}
     <aside className="workspace-tree" id={id} aria-label="工作目录" hidden={!open}>
-      <header><strong><Icon name="folder" size={20} />工作目录</strong></header>
+      <header>
+        <strong><Icon name="folder" size={20} />工作目录</strong>
+        {scope.sessionID && <a className="workspace-download-link" href={workspaceDownloadURL(scope)} download
+          aria-label="下载工作区" title="打包下载整个工作区 (.zip)">
+          <Icon name="download" size={14} />下载
+        </a>}
+      </header>
       <div className="workspace-pane-body">
         {scope.sessionID ? <WorkspaceDirectory scope={scope} path="." visible={open} expanded={expanded} toggle={toggle}
           selected={selected} select={(path, trigger) => { selectedTrigger.current = trigger; select(path) }} /> : <p className="muted">会话开始后可查看文件。</p>}

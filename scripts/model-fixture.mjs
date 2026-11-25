@@ -1,7 +1,7 @@
 // Test-only OpenAI-compatible SSE provider; production uses the configured endpoint.
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 export async function startModelFixture() {
   let calls = 0
   const requests = []
@@ -33,7 +33,6 @@ export async function startModelFixture() {
       const timer = setTimeout(() => { if (!res.destroyed) { frame({}, 'stop', usage); res.end('data: [DONE]\n\n') } }, 30000)
       res.on('close', () => clearTimeout(timer)); return
     }
-    const sha = createHash('sha256').update('hello workspace').digest('hex')
     let name, args
     if (task.startsWith('D05')) {
       const results = messages.slice(index + 1).filter(m => m.role === 'tool').map(m => JSON.parse(m.content))
@@ -43,16 +42,16 @@ export async function startModelFixture() {
       if (!systemMsg.includes('<available_skills>') || !systemMsg.includes('$MASS_SKILLS_DIR/rules/SKILL.md') || !systemMsg.includes('$MASS_SKILLS_DIR/rules/rules.txt')) {
         throw new Error('missing <available_skills> metadata in system prompt')
       }
-      const attachments = JSON.parse(task.split('[MASS accepted attachments; use read_attachment by ID: ')[1].slice(0, -1))
+      const attachments = JSON.parse(task.split('[MASS accepted attachments: ')[1].slice(0, -1))
+      if (attachments.length !== 1) throw new Error('missing accepted attachment entry')
       const steps = status => [{ id: 'report', title: 'Create summary', status }]
       const actions = [
         () => ['read_file', { path: '$MASS_SKILLS_DIR/rules/rules.txt' }],
-        () => ['read_attachment', { attachment_id: attachments[0].id, format: 'json' }],
-        () => ['write_file', { path: 'records.json', content: JSON.stringify(data(1).value) }],
+        () => ['write_file', { path: 'records.json', content: '[{"amount":2},{"amount":3}]' }],
         () => ['read_file', { path: 'records.json' }],
         () => ['update_plan', { steps: steps('in_progress') }],
         () => {
-          const rows = JSON.parse(data(3).content)
+          const rows = JSON.parse(data(2).content)
           const total = rows.reduce((sum, r) => sum + r.amount, 0) * Number(data(0).content)
           return ['write_file', { path: 'summary.json', content: JSON.stringify({ total, label: 'draft' }) }]
         },
@@ -84,7 +83,7 @@ export async function startModelFixture() {
     }
     else if (/second|读取已有/.test(task)) { if (!count) { name = 'read_file'; args = { path: 'notes.txt' } } }
     else if (count === 0) { name = 'write_file'; args = { path: 'notes.txt', content: 'hello workspace' } }
-    else if (count === 1) { name = 'read_file'; args = { path: 'notes.txt', expected_sha256: sha } }
+    else if (count === 1) { name = 'read_file'; args = { path: 'notes.txt' } }
     if (name) {
       const progress = task === 'write, read and publish' ? ['准备工作区。\n先写入文件。', '检查刚写入的文件。'][count] : undefined
       if (progress) frame({ role: 'assistant', content: progress })

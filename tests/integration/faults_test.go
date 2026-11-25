@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -116,7 +114,6 @@ func (m *faultModel) Stream(ctx context.Context, snapshot run.Snapshot, p run.Pr
 				count++
 			}
 		}
-		sum := sha256.Sum256([]byte("retained D09"))
 		name, args := "", ""
 		if count == 0 {
 			name = "write_file"
@@ -124,8 +121,7 @@ func (m *faultModel) Stream(ctx context.Context, snapshot run.Snapshot, p run.Pr
 		}
 		if count == 1 {
 			name = "read_file"
-			raw, _ := json.Marshal(map[string]string{"path": "retained.txt", "expected_sha256": hex.EncodeToString(sum[:])})
-			args = string(raw)
+			args = `{"path":"retained.txt"}`
 		}
 		if name != "" {
 			return run.Reply{Message: run.Message{Role: "assistant", ToolCalls: []run.Call{{ID: "reused-native-id", Name: name, Arguments: args}}}, FinishReason: "tool_calls"}, nil

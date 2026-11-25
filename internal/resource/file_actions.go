@@ -15,9 +15,8 @@ type Edit struct {
 	New string `json:"new_text"`
 }
 type EditInput struct {
-	Path           string `json:"path"`
-	ExpectedSHA256 string `json:"expected_sha256,omitempty"`
-	Edits          []Edit `json:"edits"`
+	Path  string `json:"path"`
+	Edits []Edit `json:"edits"`
 }
 
 func (f *FileService) Edit(ctx context.Context, s run.Snapshot, in EditInput) (result run.ToolResult, err error) {
@@ -37,10 +36,6 @@ func (f *FileService) Edit(ctx context.Context, s run.Snapshot, in EditInput) (r
 		}
 		if !utf8.Valid(raw) {
 			return storage.ErrInvalid
-		}
-		currentSHA := hashBytes(raw)
-		if in.ExpectedSHA256 != "" && currentSHA != in.ExpectedSHA256 {
-			return storage.ErrConflict
 		}
 		type interval struct {
 			start, end  int
@@ -71,7 +66,7 @@ func (f *FileService) Edit(ctx context.Context, s run.Snapshot, in EditInput) (r
 				return storage.ErrInvalid
 			}
 		}
-		return f.write(ctx, s, dir, WriteFileInput{Path: in.Path, ExpectedSHA256: currentSHA, Content: source}, &result)
+		return f.write(ctx, s, dir, WriteFileInput{Path: in.Path, Content: source}, &result)
 	})
 	return
 }

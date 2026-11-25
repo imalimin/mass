@@ -194,8 +194,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 				}, revoke, nil
 			},
 		}
-		sources := &resource.Sources{Files: fileService, Journal: runJournal}
-		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Sources: sources, Command: commands, Journal: runJournal}, Control: budget, Journal: runJournal, Trace: recorder}
+		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Command: commands, Journal: runJournal}, Control: budget, Journal: runJournal, Trace: recorder}
 		return &executor.Executor{Planner: contextPlanner, Model: gateway, Tools: tools, Control: budget}, nil
 	}
 	// The connection-scoped lock proves the old dispatcher is gone before recovery.

@@ -3814,10 +3814,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-  /api/v1/spaces/{space_id}/sessions/{session_id}/workspace/files/download:
+  /api/v1/spaces/{space_id}/sessions/{session_id}/workspace/download:
     get:
-      operationId: downloadWorkspaceFile
-      description: Downloads a regular file from the session workspace as an attachment. Restores the latest committed Run snapshot locally if the session directory is missing.
+      operationId: downloadWorkspace
+      description: Downloads the entire session workspace as a ZIP archive. Restores the latest committed Run snapshot locally if the session directory is missing.
       security:
         - SessionCookie: []
       parameters:
@@ -3831,22 +3831,16 @@ paths:
           required: true
           schema:
             $ref: '#/components/schemas/ShortResourceID'
-        - name: path
-          in: query
-          required: true
-          description: Workspace-relative file path to download.
-          schema:
-            type: string
       responses:
         '200':
-          description: Raw file download.
+          description: Session workspace ZIP archive.
           content:
-            application/octet-stream:
+            application/zip:
               schema:
                 type: string
                 format: binary
         default:
-          description: Request rejected or file unavailable.
+          description: Request rejected or workspace unavailable.
           content:
             application/json:
               schema:

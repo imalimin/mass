@@ -147,28 +147,24 @@ func digest(v string) string { sum := sha256.Sum256([]byte(v)); return hex.Encod
 func TestFileEditingAndMutationBoundaries(t *testing.T) {
 	f, s, root := fileFixture(t)
 	ctx := context.Background()
-	write := func(p, c, sha string) {
+	write := func(p, c string) {
 		t.Helper()
-		if _, err := f.Write(ctx, s, resource.WriteFileInput{Path: p, Content: c, ExpectedSHA256: sha}); err != nil {
+		if _, err := f.Write(ctx, s, resource.WriteFileInput{Path: p, Content: c}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// Write without expected_sha256 creates and overwrites cleanly.
-	write("notes.txt", "draft", "")
-	write("notes.txt", "first\r\nsecond\r\nfirst", "")
+	write("notes.txt", "draft")
+	write("notes.txt", "first\r\nsecond\r\nfirst")
 	if _, err := f.Edit(ctx, s, resource.EditInput{Path: "notes.txt", Edits: []resource.Edit{{Old: "first", New: "x"}}}); !errors.Is(err, storage.ErrConflict) {
 		t.Fatal("ambiguous edit accepted", err)
 	}
-	write("ambiguous.txt", "aaa", "missing")
+	write("ambiguous.txt", "aaa")
 	if _, err := f.Edit(ctx, s, resource.EditInput{Path: "ambiguous.txt", Edits: []resource.Edit{{Old: "aa", New: "x"}}}); !errors.Is(err, storage.ErrConflict) {
 		t.Fatal("overlapping occurrences treated as a unique match", err)
 	}
-	write("notes.txt", "abcdef\r\nend", digest("first\r\nsecond\r\nfirst"))
+	write("notes.txt", "abcdef\r\nend")
 	if _, err := f.Edit(ctx, s, resource.EditInput{Path: "notes.txt", Edits: []resource.Edit{{Old: "abc", New: "x"}, {Old: "bc", New: "y"}}}); !errors.Is(err, storage.ErrConflict) {
 		t.Fatal("overlapping edit accepted", err)
-	}
-	if _, err := f.Edit(ctx, s, resource.EditInput{Path: "notes.txt", ExpectedSHA256: digest("stale"), Edits: []resource.Edit{{Old: "abc", New: "ABC"}}}); !errors.Is(err, storage.ErrConflict) {
-		t.Fatal("stale expected_sha256 accepted", err)
 	}
 	result, err := f.Edit(ctx, s, resource.EditInput{Path: "notes.txt", Edits: []resource.Edit{{Old: "abc", New: "ABC"}, {Old: "end", New: "END"}}})
 	if err != nil || result.SideEffect != "committed" {
@@ -178,7 +174,7 @@ func TestFileEditingAndMutationBoundaries(t *testing.T) {
 	if string(raw) != "ABCdef\r\nEND" {
 		t.Fatal("newline or content changed", string(raw))
 	}
-	write("exists.txt", "kept", "missing")
+	write("exists.txt", "kept")
 	if err = os.Link(filepath.Join(root, "exists.txt"), filepath.Join(root, "hard.txt")); err != nil {
 		t.Fatal(err)
 	}

@@ -22,37 +22,34 @@ func TestWriteCASBoundariesAndQuotas(t *testing.T) {
 	service := &resource.FileService{Workspaces: manager, MaxBytes: 16, Limits: limits, Check: func(context.Context, run.Snapshot) error { return nil }}
 	snapshot := run.Snapshot{SpaceID: storage.NewShortID(), SessionID: storage.NewShortID()}
 	ctx := context.Background()
-	write := func(path, text, sha string) error {
-		_, err := service.Write(ctx, snapshot, resource.WriteFileInput{Path: path, Content: text, ExpectedSHA256: sha, MediaType: "text/plain"})
+	write := func(path, text string) error {
+		_, err := service.Write(ctx, snapshot, resource.WriteFileInput{Path: path, Content: text, MediaType: "text/plain"})
 		return err
 	}
-	if err := write("a.txt", "123456789012345", "missing"); err != nil {
+	if err := write("a.txt", "123456789012345"); err != nil {
 		t.Fatal(err)
 	}
-	if !errors.Is(write("a.txt", "changed", "missing"), storage.ErrConflict) {
-		t.Fatal("stale write accepted")
-	}
-	if !errors.Is(write("b.txt", "123456", "missing"), run.ErrOverflow) {
+	if !errors.Is(write("b.txt", "123456"), run.ErrOverflow) {
 		t.Fatal("workspace quota exceeded")
 	}
 	for _, p := range []string{"../escape", "/absolute", "a/../../escape", "bad\\name"} {
-		if write(p, "x", "missing") == nil {
+		if write(p, "x") == nil {
 			t.Fatal("unsafe path", p)
 		}
 	}
-	if err := write("dir/b.txt", "12345", "missing"); err != nil {
+	if err := write("dir/b.txt", "12345"); err != nil {
 		t.Fatal(err)
 	}
-	if err := write("extra.txt", "", "missing"); err != nil {
+	if err := write("extra.txt", ""); err != nil {
 		t.Fatal("empty file rejected at the byte limit", err)
 	}
 	if err := manager.With(ctx, snapshot.SpaceID, snapshot.SessionID, func(dir resource.WorkspaceDir) error { return dir.Root().Symlink(t.TempDir(), "link") }); err != nil {
 		t.Fatal(err)
 	}
-	if err := write("beside-link.txt", "", "missing"); err != nil {
+	if err := write("beside-link.txt", ""); err != nil {
 		t.Fatal("unrelated symlink blocked a workspace write", err)
 	}
-	if write("link/outside", "x", "missing") == nil {
+	if write("link/outside", "x") == nil {
 		t.Fatal("symlink accepted")
 	}
 	manager.With(ctx, snapshot.SpaceID, snapshot.SessionID, func(dir resource.WorkspaceDir) error {

@@ -19,14 +19,12 @@ type Files interface {
 
 type Handler struct {
 	Files   Files
-	Sources *resource.Sources
 	Command *resource.CommandService
 	Journal *journal.Journal
 }
 
 func (h *Handler) Execute(ctx context.Context, s run.Snapshot, call run.Call, args map[string]any) (result run.ToolResult, err error) {
 	text := func(key string) string { value, _ := args[key].(string); return value }
-	number := func(key string) int { value, _ := args[key].(float64); return int(value) }
 	var span *run.Range
 	if m, ok := args["range"].(map[string]any); ok {
 		span = &run.Range{}
@@ -64,18 +62,16 @@ func (h *Handler) Execute(ctx context.Context, s run.Snapshot, call run.Call, ar
 			result, err = h.Command.Run(ctx, s, "sh", []string{"-c", cmd})
 		}
 	case "read_file":
-		result, err = h.Files.Read(ctx, s, resource.ReadFileInput{Path: text("path"), ExpectedSHA256: text("expected_sha256"), Range: span})
+		result, err = h.Files.Read(ctx, s, resource.ReadFileInput{Path: text("path"), Range: span})
 	case "write_file":
-		result, err = h.Files.Write(ctx, s, resource.WriteFileInput{Path: text("path"), Content: text("content"), ExpectedSHA256: text("expected_sha256")})
+		result, err = h.Files.Write(ctx, s, resource.WriteFileInput{Path: text("path"), Content: text("content")})
 	case "edit_file":
 		edits := []resource.Edit{}
 		for _, raw := range args["edits"].([]any) {
 			e := raw.(map[string]any)
 			edits = append(edits, resource.Edit{Old: e["old_text"].(string), New: e["new_text"].(string)})
 		}
-		result, err = h.Files.Edit(ctx, s, resource.EditInput{Path: text("path"), ExpectedSHA256: text("expected_sha256"), Edits: edits})
-	case "read_attachment":
-		result, err = h.Sources.ReadAttachment(ctx, s, resource.SourceInput{AttachmentID: text("attachment_id"), Format: text("format"), Range: span, RecordOffset: number("record_offset"), RecordLimit: number("record_limit")})
+		result, err = h.Files.Edit(ctx, s, resource.EditInput{Path: text("path"), Edits: edits})
 	case "update_plan":
 		steps := []run.PlanStep{}
 		for _, raw := range args["steps"].([]any) {

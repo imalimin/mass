@@ -3,7 +3,6 @@ package integration
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -213,26 +212,26 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 		case latestUser == "Prepare next release":
 			switch latestTools {
 			case 0:
-				tool, args = "write_file", fmt.Sprintf(`{"path":"AGENTS.md","content":"Second release from the same session","expected_sha256":"%x"}`, sha256.Sum256([]byte("Follow the published instructions.")))
+				tool, args = "write_file", `{"path":"AGENTS.md","content":"Second release from the same session"}`
 			case 1:
-				tool, args = "write_file", fmt.Sprintf(`{"path":"skills/source-skill/guide.txt","content":"second improvement","expected_sha256":"%x"}`, sha256.Sum256([]byte("improved Skill")))
+				tool, args = "write_file", `{"path":"skills/source-skill/guide.txt","content":"second improvement"}`
 			case 2:
-				tool, args = "write_file", `{"path":"skills/extra-skill/addendum.txt","content":"new resource for the same Skill","expected_sha256":"missing"}`
+				tool, args = "write_file", `{"path":"skills/extra-skill/addendum.txt","content":"new resource for the same Skill"}`
 			}
 		case continueAfterArchive:
 		case createAgent && len(toolMessages) == 0:
-			tool, args = "write_file", `{"path":"AGENTS.md","content":"Created in Creativity","expected_sha256":"missing"}`
+			tool, args = "write_file", `{"path":"AGENTS.md","content":"Created in Creativity"}`
 		case createAgent && len(toolMessages) == 1:
-			tool, args = "write_file", fmt.Sprintf(`{"path":"agent.json","content":%q,"expected_sha256":"missing"}`, string(newAgentJSON))
+			tool, args = "write_file", fmt.Sprintf(`{"path":"agent.json","content":%q}`, string(newAgentJSON))
 		case createAgent && len(toolMessages) == 2:
-			tool, args = "write_file", `{"path":"proj.yaml","content":"unexpected: true","expected_sha256":"missing"}`
+			tool, args = "write_file", `{"path":"proj.yaml","content":"unexpected: true"}`
 		case createAgent:
 		case iteration && len(toolMessages) == 0:
-			tool, args = "write_file", `{"path":"result.txt","content":"iteration result","expected_sha256":"missing"}`
+			tool, args = "write_file", `{"path":"result.txt","content":"iteration result"}`
 		case iteration && len(toolMessages) == 1:
-			tool, args = "write_file", fmt.Sprintf(`{"path":"skills/source-skill/guide.txt","content":"improved Skill","expected_sha256":"%x"}`, sha256.Sum256([]byte("latest skill resource")))
+			tool, args = "write_file", `{"path":"skills/source-skill/guide.txt","content":"improved Skill"}`
 		case iteration && len(toolMessages) == 2:
-			tool, args = "write_file", `{"path":"skills/extra-skill/SKILL.md","content":"---\nname: extra-skill\ndescription: Extra fixture.\n---\nUse the extra skill.","expected_sha256":"missing"}`
+			tool, args = "write_file", `{"path":"skills/extra-skill/SKILL.md","content":"---\nname: extra-skill\ndescription: Extra fixture.\n---\nUse the extra skill."}`
 		case iteration && len(toolMessages) == 3:
 			tool, args = "update_plan", `{"steps":[{"id":"review","title":"Review changes","status":"completed"}]}`
 		case !iteration && len(toolMessages) == 0:
@@ -241,7 +240,7 @@ func TestPublicAgentCrossSpace(t *testing.T) {
 			if !strings.Contains(toolMessages[0], "bound published resource") {
 				return nil, fmt.Errorf("bound Skill resource not returned: %s", toolMessages[0])
 			}
-			tool, args = "write_file", `{"path":"result.txt","content":"created in target","expected_sha256":"missing"}`
+			tool, args = "write_file", `{"path":"result.txt","content":"created in target"}`
 		}
 		if tool != "" {
 			reply.Content, reply.ResponseMeta.FinishReason = "", "tool_calls"

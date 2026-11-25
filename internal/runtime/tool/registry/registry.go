@@ -18,6 +18,7 @@ var legacyTools = map[string]bool{
 	"delete_file":          true,
 	"list_skill_resources": true,
 	"read_skill_resource":  true,
+	"read_attachment":      true,
 	"publish_artifact":     true,
 	"run_code":             true,
 	"run_code_js":          true,
@@ -37,7 +38,6 @@ func object(properties map[string]any, required ...string) map[string]any {
 
 func Specs() []run.ToolSpec {
 	path := map[string]any{"type": "string", "minLength": 1, "maxLength": 1024}
-	sha := map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"}
 	ranges := map[string]any{"oneOf": []any{
 		object(map[string]any{"offset": integer(0, 1<<30), "length": integer(1, 65536)}, "offset", "length"),
 		object(map[string]any{"start_line": integer(1, 10000000), "end_line": integer(1, 10000000)}, "start_line", "end_line"),
@@ -52,18 +52,15 @@ func Specs() []run.ToolSpec {
 		"args":    map[string]any{"type": "array", "items": str()},
 	}, "command")
 	add("read_file", "Read a workspace file or read-only bound skill file ($MASS_SKILLS_DIR/<skill>/<path>), returning content and SHA-256 (bounded 64 KiB UTF-8 or base64 view). Optional byte or line range.", map[string]any{
-		"path":            path,
-		"expected_sha256": sha,
-		"range":           ranges,
+		"path":  path,
+		"range": ranges,
 	}, "path")
-	add("write_file", "Create or overwrite a UTF-8 workspace file (up to 1 MiB), creating parent directories automatically. Optional expected_sha256 ('missing' or current SHA-256).", map[string]any{
-		"path":            path,
-		"content":         map[string]any{"type": "string", "maxLength": 1048576},
-		"expected_sha256": map[string]any{"type": "string", "pattern": "^(missing|[a-f0-9]{64})$"},
+	add("write_file", "Create or overwrite a UTF-8 workspace file (up to 1 MiB), creating parent directories automatically.", map[string]any{
+		"path":    path,
+		"content": map[string]any{"type": "string", "maxLength": 1048576},
 	}, "path", "content")
-	add("edit_file", "Apply exact, unique, non-overlapping UTF-8 text replacements to an existing workspace file. Optional expected_sha256.", map[string]any{
-		"path":            path,
-		"expected_sha256": sha,
+	add("edit_file", "Apply exact, unique, non-overlapping UTF-8 text replacements to an existing workspace file.", map[string]any{
+		"path": path,
 		"edits": map[string]any{
 			"type":     "array",
 			"minItems": 1,
@@ -74,13 +71,6 @@ func Specs() []run.ToolSpec {
 			}, "old_text", "new_text"),
 		},
 	}, "path", "edits")
-	add("read_attachment", "Read an accepted session attachment by ID. Supports text (with optional byte/line range) or structured json/csv (with optional record_offset/record_limit).", map[string]any{
-		"attachment_id": str(),
-		"record_offset": integer(0, 10000),
-		"record_limit":  integer(1, 1000),
-		"format":        map[string]any{"type": "string", "enum": []string{"text", "json", "csv"}},
-		"range":         ranges,
-	}, "attachment_id")
 	add("update_plan", "Replace the current Run's progress plan shown in the UI. Pass the full ordered steps list (at most one step with status 'in_progress').", map[string]any{
 		"steps": map[string]any{
 			"type":     "array",

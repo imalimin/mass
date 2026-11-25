@@ -502,8 +502,8 @@ func TestTOSRecovery(t *testing.T) {
 	base := "/api/v1/spaces/" + space.ID
 	request("GET", base+"/agents/"+agent.ID+"/versions/"+version.ID, nil)
 	request("GET", base+"/skills/"+skill.ID+"/versions/"+skillVersion.ID, nil)
-	if string(request("GET", base+"/sessions/"+session.ID+"/workspace/files/download?path=retained.txt", nil)) != "retained D09" {
-		t.Fatal("restored workspace file download bytes changed")
+	if readZipEntry(t, request("GET", base+"/sessions/"+session.ID+"/workspace/download", nil), "retained.txt") != "retained D09" {
+		t.Fatal("restored workspace archive bytes changed")
 	}
 	request("GET", base+"/runs/"+first.ID+"/trace", nil)
 	request("GET", base+"/runs/"+first.ID+"/ui-snapshot", nil)

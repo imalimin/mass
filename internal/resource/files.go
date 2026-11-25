@@ -31,15 +31,13 @@ type FileService struct {
 	Check      func(context.Context, run.Snapshot) error
 }
 type ReadFileInput struct {
-	Path           string     `json:"path"`
-	ExpectedSHA256 string     `json:"expected_sha256,omitempty"`
-	Range          *run.Range `json:"range,omitempty"`
+	Path  string     `json:"path"`
+	Range *run.Range `json:"range,omitempty"`
 }
 type WriteFileInput struct {
-	Path           string `json:"path"`
-	Content        string `json:"content"`
-	MediaType      string `json:"media_type,omitempty"`
-	ExpectedSHA256 string `json:"expected_sha256,omitempty"`
+	Path      string `json:"path"`
+	Content   string `json:"content"`
+	MediaType string `json:"media_type,omitempty"`
 }
 
 var errWorkspaceSymlink = run.ToolFailure("workspace_symlink", "none")
@@ -233,10 +231,6 @@ func (f *FileService) readSkillFile(ctx context.Context, s run.Snapshot, in Read
 	if err != nil {
 		return run.ToolResult{}, err
 	}
-	sha := hashBytes(raw)
-	if in.ExpectedSHA256 != "" && in.ExpectedSHA256 != sha {
-		return run.ToolResult{}, storage.ErrConflict
-	}
 	view, err := rangeData(raw, in.Range)
 	if err != nil {
 		return run.ToolResult{}, err
@@ -260,10 +254,6 @@ func (f *FileService) Read(ctx context.Context, s run.Snapshot, in ReadFileInput
 		raw, err := f.read(ctx, dir, in.Path)
 		if err != nil {
 			return err
-		}
-		sha := hashBytes(raw)
-		if in.ExpectedSHA256 != "" && in.ExpectedSHA256 != sha {
-			return storage.ErrConflict
 		}
 		view, err := rangeData(raw, in.Range)
 		if err != nil {
@@ -291,24 +281,11 @@ func (f *FileService) write(ctx context.Context, s run.Snapshot, dir WorkspaceDi
 	if err := f.Check(ctx, s); err != nil {
 		return err
 	}
-	if in.ExpectedSHA256 != "" {
-		existing, readErr := f.read(ctx, dir, in.Path)
-		if errors.Is(readErr, fs.ErrNotExist) {
-			if in.ExpectedSHA256 != "missing" {
-				return storage.ErrConflict
-			}
-		} else if readErr != nil {
-			return readErr
-		} else if in.ExpectedSHA256 != hashBytes(existing) {
-			return storage.ErrConflict
-		}
-	} else {
-		if err := checkParents(dir.Root(), in.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		if info, err := dir.Root().Lstat(in.Path); err == nil && info.IsDir() {
-			return storage.ErrWorkspace
-		}
+	if err := checkParents(dir.Root(), in.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if info, err := dir.Root().Lstat(in.Path); err == nil && info.IsDir() {
+		return storage.ErrWorkspace
 	}
 	if err := f.checkWrite(ctx, dir.Root(), in.Path, int64(len(in.Content))); err != nil {
 		return err

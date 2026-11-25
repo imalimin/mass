@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -82,42 +83,69 @@ func TestBrowseWorkspace(t *testing.T) {
 			}
 		})
 	}
-	// OpenFile streams arbitrary regular files (including binary and large files) and rejects symlinks/directories/traversal.
-	for _, tc := range []struct {
-		path string
-		want []byte
-	}{
-		{path: "AGENTS.md", want: []byte("# 指令\n")},
-		{path: "skills/data.bin", want: []byte{0xff, 0}},
-		{path: "skills/large.md", want: bytes.Repeat([]byte("a"), (256<<10)+1)},
-	} {
-		file, info, err := workspaces.OpenFile(ctx, "", scope, tc.path, nil)
-		if err != nil {
-			t.Fatalf("OpenFile(%q) failed: %v", tc.path, err)
+	// Archive packs all regular workspace files (including binary and large files) into a ZIP
+	// while excluding symlinks, and cleans up the temporary archive file on Close.
+	archive, err := workspaces.Archive(ctx, "", scope, nil)
+	if err != nil {
+		t.Fatalf("Archive failed: %v", err)
+	}
+	tmpPath := archive.Name()
+	zipBytes, err := io.ReadAll(archive)
+	if closeErr := archive.Close(); err != nil || closeErr != nil {
+		t.Fatalf("Archive read/close failed: %v, %v", err, closeErr)
+	}
+	if int64(len(zipBytes)) != archive.Size {
+		t.Fatalf("Archive size mismatch: %d != %d", len(zipBytes), archive.Size)
+	}
+	if _, statErr := os.Stat(tmpPath); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("temporary archive file was not cleaned up: %v", statErr)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	if err != nil {
+		t.Fatalf("invalid workspace zip: %v", err)
+	}
+	got := map[string][]byte{}
+	for _, entry := range zr.File {
+		if entry.FileInfo().IsDir() {
+			continue
 		}
-		raw, readErr := io.ReadAll(file)
-		file.Close()
-		if readErr != nil || info.Size() != int64(len(tc.want)) || !bytes.Equal(raw, tc.want) {
-			t.Fatalf("OpenFile(%q) mismatch: size=%d err=%v", tc.path, info.Size(), readErr)
+		rc, err := entry.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got[entry.Name] = raw
+	}
+	for name, wantBytes := range map[string][]byte{
+		"AGENTS.md":       []byte("# 指令\n"),
+		"skills/empty.md": {},
+		"skills/data.bin": {0xff, 0},
+		"skills/large.md": bytes.Repeat([]byte("a"), (256<<10)+1),
+	} {
+		if !bytes.Equal(got[name], wantBytes) {
+			t.Fatalf("zip entry %q mismatch: got %d bytes, want %d bytes", name, len(got[name]), len(wantBytes))
 		}
 	}
-	for _, bad := range []struct {
-		path      string
-		wantError error
-	}{
-		{path: "", wantError: storage.ErrInvalid},
-		{path: ".", wantError: storage.ErrInvalid},
-		{path: "../outside", wantError: storage.ErrInvalid},
-		{path: "skills", wantError: storage.ErrWorkspace},
-		{path: "alias.md", wantError: storage.ErrWorkspace},
-		{path: "skills/missing.md", wantError: storage.ErrBlobNotFound},
-	} {
-		if file, _, err := workspaces.OpenFile(ctx, "", scope, bad.path, nil); !errors.Is(err, bad.wantError) {
-			if file != nil {
-				file.Close()
-			}
-			t.Fatalf("OpenFile(%q) = %v, want %v", bad.path, err, bad.wantError)
-		}
+	if _, leaked := got["alias.md"]; leaked {
+		t.Fatal("symlink alias.md was included in workspace zip")
+	}
+	// Missing/empty workspace still yields a valid empty ZIP archive.
+	emptyArchive, err := workspaces.Archive(ctx, "", run.Session{SpaceID: space, ID: storage.NewShortID()}, nil)
+	if err != nil {
+		t.Fatalf("Archive on empty workspace failed: %v", err)
+	}
+	emptyBytes, err := io.ReadAll(emptyArchive)
+	emptyArchive.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyZR, err := zip.NewReader(bytes.NewReader(emptyBytes), int64(len(emptyBytes)))
+	if err != nil || len(emptyZR.File) != 0 {
+		t.Fatalf("empty workspace zip invalid: len=%d err=%v", len(emptyZR.File), err)
 	}
 }
 

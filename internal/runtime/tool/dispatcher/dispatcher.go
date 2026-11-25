@@ -15,7 +15,7 @@ import (
 	"github.com/imalimin/mass/internal/journal"
 	"github.com/imalimin/mass/internal/resource"
 	"github.com/imalimin/mass/internal/resource/trace"
-	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/imalimin/mass/internal/schemacache"
 )
 
 type Resolver interface {
@@ -62,19 +62,11 @@ func (d *Dispatcher) DispatchAndRecord(ctx context.Context, s run.Snapshot, call
 		return err
 	}
 	stage = "validate_arguments"
-	var schemaDoc, args any
-	if json.Unmarshal(spec.Schema, &schemaDoc) != nil {
-		return run.ErrProtocol
-	}
-	compiler := jsonschema.NewCompiler()
-	compiler.AssertFormat()
-	if err = compiler.AddResource("https://mass.local/tool", schemaDoc); err != nil {
-		return err
-	}
-	compiled, err := compiler.Compile("https://mass.local/tool")
+	compiled, err := schemacache.Compile(spec.Schema)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", run.ErrProtocol, err)
 	}
+	var args any
 	var result run.ToolResult
 	var actionErr error
 	var elapsed *int64

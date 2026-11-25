@@ -2,7 +2,27 @@ import assert from 'node:assert/strict'
 import { mkdir, readdir, readlink, rm, symlink, truncate, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
+import { inflateRawSync } from 'node:zlib'
 import { startFixtureServer } from './fixture-server.mjs'
+const readZipEntry = (buf, target) => {
+  let eocd = -1
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break }
+  assert.notEqual(eocd, -1, 'missing zip EOCD')
+  let off = buf.readUInt32LE(eocd + 16), count = buf.readUInt16LE(eocd + 10)
+  for (let i = 0; i < count; i++) {
+    assert.equal(buf.readUInt32LE(off), 0x02014b50)
+    const method = buf.readUInt16LE(off + 10), compSize = buf.readUInt32LE(off + 20)
+    const nameLen = buf.readUInt16LE(off + 28), extraLen = buf.readUInt16LE(off + 30), commentLen = buf.readUInt16LE(off + 32)
+    const localOff = buf.readUInt32LE(off + 42), name = buf.subarray(off + 46, off + 46 + nameLen).toString('utf8')
+    if (name === target) {
+      const dataOff = localOff + 30 + buf.readUInt16LE(localOff + 26) + buf.readUInt16LE(localOff + 28)
+      const raw = buf.subarray(dataOff, dataOff + compSize)
+      return (method === 0 ? raw : inflateRawSync(raw)).toString('utf8')
+    }
+    off += 46 + nameLen + extraLen + commentLen
+  }
+  assert.fail(`zip entry ${target} not found`)
+}
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve('.cache/playwright')
 const require = createRequire(new URL('../frontend/package.json', import.meta.url)), { chromium, expect } = require('@playwright/test')
 const server = await startFixtureServer({ storage: true, model: true })
@@ -60,7 +80,7 @@ try {
     await checking.click()
   }
   await assertAssistantSteps()
-  const workspaceLink = page.getByRole('link', { name: '下载 notes.txt', exact: true }).first(); await workspaceLink.waitFor(); const downloaded = await context.request.get(new URL(await workspaceLink.getAttribute('href'), server.url).href); assert.equal(downloaded.status(), 200); assert.equal(await downloaded.text(), 'hello workspace')
+  const workspaceLink = page.getByRole('link', { name: '下载工作区', exact: true }).first(); await workspaceLink.waitFor(); const downloaded = await context.request.get(new URL(await workspaceLink.getAttribute('href'), server.url).href); assert.equal(downloaded.status(), 200); assert.equal(readZipEntry(await downloaded.body(), 'notes.txt'), 'hello workspace')
   const completed = await (await context.request.get(`${server.url}/api/v1/spaces/${first.space_id}/runs/${first.id}`)).json()
   assert.equal(completed.workspace_snapshot_committed, true)
   assert.equal('workspace_snapshot_id' in completed, false)

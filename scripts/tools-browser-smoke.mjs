@@ -2,7 +2,27 @@ import assert from 'node:assert/strict'
 import { mkdir } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
+import { inflateRawSync } from 'node:zlib'
 import { startFixtureServer } from './fixture-server.mjs'
+const readZipEntry = (buf, target) => {
+  let eocd = -1
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break }
+  assert.notEqual(eocd, -1, 'missing zip EOCD')
+  let off = buf.readUInt32LE(eocd + 16), count = buf.readUInt16LE(eocd + 10)
+  for (let i = 0; i < count; i++) {
+    assert.equal(buf.readUInt32LE(off), 0x02014b50)
+    const method = buf.readUInt16LE(off + 10), compSize = buf.readUInt32LE(off + 20)
+    const nameLen = buf.readUInt16LE(off + 28), extraLen = buf.readUInt16LE(off + 30), commentLen = buf.readUInt16LE(off + 32)
+    const localOff = buf.readUInt32LE(off + 42), name = buf.subarray(off + 46, off + 46 + nameLen).toString('utf8')
+    if (name === target) {
+      const dataOff = localOff + 30 + buf.readUInt16LE(localOff + 26) + buf.readUInt16LE(localOff + 28)
+      const raw = buf.subarray(dataOff, dataOff + compSize)
+      return (method === 0 ? raw : inflateRawSync(raw)).toString('utf8')
+    }
+    off += 46 + nameLen + extraLen + commentLen
+  }
+  assert.fail(`zip entry ${target} not found`)
+}
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve('.cache/playwright')
 const require = createRequire(new URL('../frontend/package.json', import.meta.url)), { chromium, expect } = require('@playwright/test')
 const server = await startFixtureServer({ storage: true, model: true, commandPath: '/usr/bin:/bin' })
@@ -32,7 +52,7 @@ try {
   await createAgent.getByLabel('名称', { exact: true }).fill('tools-assistant')
   await createAgent.getByRole('button', { name: '创建', exact: true }).click(); await edit('AGENTS.md', '# Tools assistant\nProcess the accepted attachment with the selected tools.')
   await page.getByLabel('绑定模型').selectOption({ label: '工具模型' }); await page.getByLabel('Skill 版本：rules', { exact: true }).selectOption('v1')
-  const checks = page.locator('.tool-options input'); assert.equal(await checks.count(), 6); for (const check of await checks.all()) await check.check()
+  const checks = page.locator('.tool-options input'); assert.equal(await checks.count(), 5); for (const check of await checks.all()) await check.check()
   await page.getByLabel('输入 Token 上限').fill('100000'); const agentVersion = await publish()
   await page.locator('.app-sidebar').getByRole('link', { name: 'Agents', exact: true }).click(); await page.getByRole('link', { name: '打开 tools-assistant 的会话', exact: true }).click()
   await page.getByLabel('Agent 版本').selectOption(agentVersion.id)
@@ -47,15 +67,15 @@ try {
   await expect(page.getByRole('complementary', { name: '当前运行计划' })).toContainText('修订 2'); await expect(page.getByRole('complementary', { name: '当前运行计划' })).toContainText('已完成 · Create summary')
   assert.ok(await page.evaluate(() => window.__massToolInterrupted), 'tool parameter stream was not interrupted')
   await page.getByText(/^工具调用 · /).click()
-  const names = await page.locator('.tool-activity > details > summary').allTextContents(); assert.equal(new Set(names.map(n => n.split(' · ')[0])).size, 6)
-  const summaryFile = await context.request.get(`${server.url}/api/v1/spaces/${run.space_id}/sessions/${run.session_id}/workspace/files/download?path=reports/summary.json`); assert.equal(summaryFile.status(), 200); assert.equal(await summaryFile.text(), '{"total":10,"label":"final"}')
+  const names = await page.locator('.tool-activity > details > summary').allTextContents(); assert.equal(new Set(names.map(n => n.split(' · ')[0])).size, 5)
+  const workspaceZip = await context.request.get(`${server.url}/api/v1/spaces/${run.space_id}/sessions/${run.session_id}/workspace/download`); assert.equal(workspaceZip.status(), 200); assert.equal(readZipEntry(await workspaceZip.body(), 'reports/summary.json'), '{"total":10,"label":"final"}')
   const attachmentLink = page.locator('.chat-history a').filter({ hasText: 'records.json' }).first(); await attachmentLink.waitFor(); const attachment = await context.request.get(new URL(await attachmentLink.getAttribute('href'), server.url).href); assert.equal(attachment.status(), 200); assert.equal(await attachment.text(), '[{"amount":2},{"amount":3}]')
   const base = `${server.url}/api/v1/spaces/${run.space_id}/runs/${run.id}`
   const plan = await context.request.get(`${base}/plan`); assert.equal((await plan.json()).revision, 2)
   let after = '0', ioCount = 0, inputResolved = false
   for (;;) { const response = await context.request.get(`${base}/trace?after_sequence=${after}&limit=100`); assert.equal(response.status(), 200); const trace = await response.json(); ioCount += trace.events.filter(e => e.event_type === 'tool.io.recorded').length; inputResolved ||= trace.events.some(e => e.event_type === 'tool.execution.input_resolved'); if (!trace.has_more) break; after = trace.next_after }
   assert.ok(!inputResolved && ioCount === 0, 'code IO was persisted')
-  const calls = server.modelCalls(); assert.equal(calls, 10); await page.reload(); await page.getByText('核心工具处理完成，汇总结果为 10。', { exact: true }).waitFor(); await expect(page.getByRole('complementary', { name: '当前运行计划' })).toContainText('修订 2'); assert.equal(server.modelCalls(), calls, 'replay executed tools/model')
+  const calls = server.modelCalls(); assert.equal(calls, 9); await page.reload(); await page.getByText('核心工具处理完成，汇总结果为 10。', { exact: true }).waitFor(); await expect(page.getByRole('complementary', { name: '当前运行计划' })).toContainText('修订 2'); assert.equal(server.modelCalls(), calls, 'replay executed tools/model')
   await page.getByRole('button', { name: '运行详情', exact: true }).click()
   await page.getByText('Trace 与上下文', { exact: true }).click(); await page.getByText('model.attempt.started', { exact: false }).first().waitFor()
   await page.keyboard.press('Escape')
@@ -69,7 +89,7 @@ try {
     await expect.poll(async () => (await (await context.request.get(commandRunURL)).json()).status).toMatch(/^(succeeded|failed|cancelled)$/)
     const completed = await (await context.request.get(commandRunURL)).json(); assert.equal(completed.status, 'succeeded', JSON.stringify(completed.failure_detail))
     await page.getByText('已运行宿主命令并发布 command.txt', { exact: true }).waitFor()
-    const file = await context.request.get(`${server.url}/api/v1/spaces/${run.space_id}/sessions/${run.session_id}/workspace/files/download?path=command.txt`); assert.equal(file.status(), 200); assert.equal(await file.text(), 'hello workspace')
+    const file = await context.request.get(`${server.url}/api/v1/spaces/${run.space_id}/sessions/${run.session_id}/workspace/download`); assert.equal(file.status(), 200); assert.equal(readZipEntry(await file.body(), 'command.txt'), 'hello workspace')
     const trace = await context.request.get(`${server.url}/api/v1/diagnostics?run_id=${commandRun.id}`)
     assert.equal(trace.status(), 200)
     const commands = (await trace.json()).items.flatMap(record => record.tools ?? []).filter(tool => tool.name === 'run_command')
@@ -77,6 +97,6 @@ try {
     assert.equal(commands[0].result.data.stderr, 'problem')
     console.log('Host command browser flow passed: Agent opt-in, failure details, workspace file download and session JSONL.')
   }
-  assert.deepEqual(errors, []); console.log('D05 browser passed: all 6 core tools through actual Eino/HTTP, accepted attachment and fixed Skill, shell command IO, plan, workspace file download, replay without execution and mobile layout.')
+  assert.deepEqual(errors, []); console.log('D05 browser passed: all 5 core tools through actual Eino/HTTP, accepted attachment entry and fixed Skill, shell command IO, plan, workspace download, replay without execution and mobile layout.')
 } catch (e) { await mkdir('.cache', { recursive: true }); await page?.screenshot({ path: '.cache/d05-failure.png', fullPage: true }); throw e }
 finally { await browser?.close(); await server.stop() }
