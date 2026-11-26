@@ -4,6 +4,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { agentSessionsPath } from '../../app/routes'
 import { Icon } from '../../components/Icon'
 import { list, newRequestKey, request, type Schema } from '../../lib/api'
+import { buildAssistantTurn, processSummaryLabel, type AssistantStep } from './assistantTurn'
 import { useRunStream } from './useRunStream'
 
 const Trace = lazy(() => import('../debug/Trace'))
@@ -136,6 +137,10 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
     void client.invalidateQueries({ queryKey: ['private', space, sessionID, 'session'] })
     void client.invalidateQueries({ queryKey: ['private', space, 'sessions', agent.id] })
   }, [client, space, sessionID, agent.id, liveTitle])
+  useEffect(() => {
+    if (!runID || !ended || !stream.state?.plan) return
+    client.setQueryData(['private', space, 'run', runID, 'plan'], stream.state.plan)
+  }, [client, space, runID, ended, stream.state?.plan])
   useEffect(() => {
     if (!runID) return
     void client.invalidateQueries({ queryKey: ['private', space, sessionID, 'messages'] })
@@ -349,13 +354,16 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
           <div className="empty-conversation"><Icon name="bot" size={42} /><h2>开始对话</h2>{!sessionID && agent.archived ? <p>此 Agent 已归档。</p>
             : !sessionID && versions.data?.length === 0 ? <p>请先发布 Agent 版本。</p> : null}</div>}
         {turns.map(({ key, runID, user, assistant }) => {
-          const previous = runID && runID !== latest?.id ? runsByID.get(runID) : undefined
+          const isLatest = !!runID && runID === latest?.id
+          const run = runID ? (isLatest ? currentRun : runsByID.get(runID)) : undefined
+          const previous = runID && !isLatest ? runsByID.get(runID) : undefined
           const draft = showAccepted && accepted.run.id === runID ? accepted : undefined
           return <div key={key}>
             {user && (user.content || !!user.attachments?.length) && <ChatMessage role="user" text={user.content} attachments={user.attachments} space={space}
               contentID={user.truncated ? user.content_id : undefined} />}
             {draft && <ChatMessage role="user" text={draft.text} attachments={draft.attachments} space={space} />}
-            <AssistantTurn space={space} messages={assistant} state={runID === latest?.id ? stream.state : null} />
+            <AssistantTurn space={space} messages={assistant} state={isLatest ? stream.state : null} run={run} isLatest={isLatest} />
+            {previous && <PastRunPlan space={space} runID={previous.id} />}
             {previous && <div className="past-run">
               {previous.status !== 'succeeded' && <span>{statuses[previous.status]}{previous.error && ` · ${previous.error}`}</span>}
               <button type="button" className="text-link" onClick={() => openRun(previous.id)}><Icon name="activity" size={15} />查看本轮运行</button>
@@ -482,70 +490,50 @@ function MessageText({ text, plain, live }: { text: string; plain?: boolean; liv
   return <Suspense fallback={<div className="chat-plain">{text}</div>}><SafeMarkdown text={text} showSource={false} /></Suspense>
 }
 
-function AssistantTurn({ space, messages, state }: { space: string; messages: Message[]; state: Schema['UIState'] | null }) {
-  const positions = new Map(messages.map((message, index) => [message.id, index]))
-  const liveTools = new Map(state?.tools.map(tool => [tool.id, tool]))
-  const toolsByMessage = new Map<string, Tool[]>()
-  for (const tool of liveTools.values()) {
-    if (!tool.parent_message_id) continue
-    const tools = toolsByMessage.get(tool.parent_message_id) ?? []
-    tools.push(tool)
-    toolsByMessage.set(tool.parent_message_id, tools)
-  }
-  const attached = new Set<string>()
-  const steps: { id: string; text: string; live?: Schema['UIMessage']; contentID?: string; tools: Tool[] }[] = []
-  const addStep = (message?: Message, live?: Schema['UIMessage']) => {
-    const id = live?.id ?? message?.id
-    if (!id) return
-    const saved = message?.content ?? ''
-    const text = live && live.text.length >= saved.length ? live.text : saved
-    const contentID = message?.truncated && text.length <= saved.length ? message.content_id : undefined
-    const tools = new Map(message?.tools?.map(tool => [tool.id, tool]))
-    for (const tool of toolsByMessage.get(id) ?? []) {
-      if (!tools.has(tool.id)) tools.set(tool.id, tool)
-    }
-    const calls = [...tools.values()].map(tool => {
-      attached.add(tool.id)
-      const active = liveTools.get(tool.id)
-      return active ? { ...active, arguments: active.arguments || tool.arguments, result: active.result || tool.result } : tool
-    })
-    if (!text && !contentID) {
-      if (!calls.length) return
-      const previous = steps.at(-1)
-      if (previous) {
-        previous.tools.push(...calls)
-        return
-      }
-    }
-    steps.push({ id, text, live, contentID, tools: calls })
-  }
+function AssistantStepView({ space, step }: { space: string; step: AssistantStep }) {
+  return <div className="assistant-step">
+    <MessageText text={step.text} live={step.live} />
+    {step.live?.incomplete && <small className="assistant-incomplete">输出未完成</small>}
+    {step.contentID && <a className="attached-file icon-link" href={`/api/v1/spaces/${space}/payloads/${step.contentID}`} download><Icon name="download" size={16} />下载完整内容</a>}
+    <ToolActivity tools={step.tools} />
+  </div>
+}
 
-  // Merge by message ID before grouping textless tool steps. History may start mid-run.
-  let next = 0
-  for (const live of state?.messages ?? []) {
-    const position = positions.get(live.id)
-    if (position === undefined) addStep(undefined, live)
-    else {
-      while (next < position) addStep(messages[next++])
-      addStep(messages[next++], live)
-    }
-  }
-  while (next < messages.length) addStep(messages[next++])
-  const unattached = [...liveTools.values()].filter(tool => !attached.has(tool.id))
+function AssistantTurn({ space, messages, state, run, isLatest }: {
+  space: string; messages: Message[]; state: Schema['UIState'] | null; run?: Run; isLatest?: boolean
+}) {
+  const { steps, processSteps, finalStep, unattached, collapseProcess, reasoningCount, toolCount } = buildAssistantTurn(messages, state, run, isLatest)
   if (!steps.length && !unattached.length) return null
 
   return <article className="chat-turn assistant">
     <div className="assistant-label"><Icon name="bot" size={25} className="assistant-icon" /><strong>助手</strong></div>
     <div className="chat-turn-content assistant-steps">
-      {steps.map(step => <div key={step.id} className="assistant-step">
-        <MessageText text={step.text} live={step.live} />
-        {step.live?.incomplete && <small className="assistant-incomplete">输出未完成</small>}
-        {step.contentID && <a className="attached-file icon-link" href={`/api/v1/spaces/${space}/payloads/${step.contentID}`} download><Icon name="download" size={16} />下载完整内容</a>}
-        <ToolActivity tools={step.tools} />
-      </div>)}
-      <ToolActivity tools={unattached} />
+      {collapseProcess && finalStep ? <>
+        <details className="assistant-process">
+          <summary><Icon name="chevron" size={14} />{processSummaryLabel(reasoningCount, toolCount)}</summary>
+          <div className="assistant-process-body">
+            {processSteps.map(step => <AssistantStepView key={step.id} space={space} step={step} />)}
+            <ToolActivity tools={unattached} />
+          </div>
+        </details>
+        <AssistantStepView key={finalStep.id} space={space} step={finalStep} />
+      </> : <>
+        {steps.map(step => <AssistantStepView key={step.id} space={space} step={step} />)}
+        <ToolActivity tools={unattached} />
+      </>}
     </div>
   </article>
+}
+
+function PastRunPlan({ space, runID }: { space: string; runID: string }) {
+  const plan = useQuery({
+    queryKey: ['private', space, 'run', runID, 'plan'],
+    queryFn: ({ signal }) => request<Schema['RuntimePlan']>(`/spaces/${space}/runs/${runID}/plan`, 'GET', undefined, signal),
+    staleTime: Infinity,
+    retry: false,
+  })
+  if (!plan.data?.steps.length) return null
+  return <div className="run-output"><RunPlan plan={plan.data} /></div>
 }
 
 function ToolActivity({ tools }: { tools: Tool[] }) {

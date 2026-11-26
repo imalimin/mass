@@ -292,6 +292,35 @@ button.conversation-copy-id { width: 30px; height: 32px; flex: none; }
 .assistant-step { min-width: 0; }
 .assistant-step .safe-markdown p { white-space: pre-line; overflow-wrap: anywhere; }
 .assistant-incomplete { display: block; margin-top: 4px; color: var(--warning); }
+.assistant-process { min-width: 0; color: var(--muted); font-size: 12.5px; }
+.assistant-process > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px 5px 8px;
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.assistant-process > summary::-webkit-details-marker { display: none; }
+.assistant-process > summary:hover { background: var(--surface-raised); color: var(--text); }
+.assistant-process > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.assistant-process > summary > .icon { transition: transform .15s ease; }
+.assistant-process[open] > summary > .icon { transform: rotate(90deg); }
+.assistant-process-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 2px 0 2px 14px;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+}
 .tool-activity { margin-top: 5px; color: var(--muted); font-size: 12px; }
 .tool-activity > summary { display: flex; width: fit-content; align-items: center; gap: 6px; padding: 5px 0; list-style: none; cursor: pointer; }
 .tool-activity > summary::-webkit-details-marker { display: none; }
@@ -326,6 +355,7 @@ button.conversation-copy-id { width: 30px; height: 32px; flex: none; }
 .conversation-page .run-status[data-status="succeeded"] > .icon { color: var(--success); }
 .conversation-page .run-status[data-status="failed"] { color: var(--danger); }
 .past-run { margin: -12px 0 20px; color: var(--warning); }
+.run-output + .past-run { margin-top: 0; }
 .past-run button { background: none; padding: 4px 0; font-size: inherit; }
 .working-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--focus); animation: chat-pulse 1.5s ease-in-out infinite; }
 @keyframes chat-pulse { 50% { opacity: .35; } }
