@@ -47,7 +47,7 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
   const [name, setName] = useState('')
   const [creating, setCreating] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<{ skill: Schema['Definition']; usage: Schema['SkillUsage'][] } | null>(null)
+  const [deleteSkill, setDeleteSkill] = useState<Schema['Definition'] | null>(null)
   const [deleteAgent, setDeleteAgent] = useState<Schema['Definition'] | null>(null)
   const copyTimer = useRef<number | null>(null)
   const importInput = useRef<HTMLInputElement>(null)
@@ -114,7 +114,7 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
     return <button type="button" className={name ? 'icon-button agent-action' : 'secondary'}
       disabled={!availability.data?.available || iterate.isPending} aria-label={name ? `在创意中迭代 ${name}` : undefined}
       title={name ? label : undefined} aria-busy={pending} onClick={() => iterate.mutate(id)}>
-      <Icon name={pending ? 'refresh' : 'branch'} />{!name && label}
+      <Icon name={pending ? 'loader' : 'branch'} className={pending ? 'icon-spin' : undefined} />{!name && label}
     </button>
   }
   const query = useQuery({ queryKey: ['private', space.id, kind, 'list'], queryFn: ({ signal }) => list<Schema['Definition']>(base, signal), enabled: !selected, refetchInterval: q => q.state.error ? false : 5000 })
@@ -125,10 +125,6 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
     mutationFn: (file: File) => request<Draft>(`${base}/import?${new URLSearchParams({ filename: file.name })}`, 'POST', new Blob([file], { type: 'application/zip' })),
     onSuccess: d => { select(d.id); refresh() },
   })
-  const checkSkillUsage = useMutation({
-    mutationFn: (skill: Schema['Definition']) => request<Schema['SkillUsageList']>(`${base}/${skill.id}/usage`, 'GET'),
-    onSuccess: (res, skill) => setDeleteTarget({ skill, usage: res.items }),
-  })
   const iterationNotice = <>
     {kind === 'agent' && availability.data && !availability.data.available && <p className="muted">创作 Agent 暂不可用，无法开始创意迭代。</p>}
     {(iterate.error || availability.error) && <p role="alert">{(iterate.error || availability.error)?.message}</p>}
@@ -138,7 +134,7 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
   if (!selected) return <section aria-label={`${kindLabel}s`}>
     <WorkspaceListToolbar space={space} name={`${kindLabel}s`}>
       {!isAgent && <button type="button" className="secondary" disabled={importSkill.isPending || create.isPending}
-        onClick={() => importInput.current?.click()}><Icon name="upload" />{importSkill.isPending ? '正在导入…' : '导入 Skill ZIP'}</button>}
+        onClick={() => importInput.current?.click()}><Icon name={importSkill.isPending ? 'loader' : 'upload'} className={importSkill.isPending ? 'icon-spin' : undefined} />{importSkill.isPending ? '正在导入…' : '导入 Skill ZIP'}</button>}
       <button type="button" disabled={importSkill.isPending} onClick={() => setCreating(true)}><Icon name="plus" />创建 {kindLabel}</button>
     </WorkspaceListToolbar>
     {!isAgent && <input ref={importInput} type="file" accept=".zip" aria-label="Skill ZIP 文件" hidden onChange={event => {
@@ -147,7 +143,7 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
       if (file) importSkill.mutate(file)
     }} />}
     {iterationNotice}
-    {[query.error, importSkill.error, checkSkillUsage.error].filter(Boolean).map((error, i) => <p role="alert" key={i}>{errorText(error)}</p>)}
+    {[query.error, importSkill.error].filter(Boolean).map((error, i) => <p role="alert" key={i}>{errorText(error)}</p>)}
     {query.isPending && <p role="status">正在读取定义…</p>}
     {query.data?.length === 0 && <p className="muted">还没有 {kindLabel}，创建第一个定义开始使用。</p>}
     {!!query.data?.length && <WorkspaceListTable label={`${kindLabel} 列表`} columns={columns} className={isAgent ? 'agent-table' : 'skill-table'}
@@ -172,17 +168,15 @@ export function Catalog({ space, kind }: { space: Schema['Space']; kind: Kind })
               <Icon name="chat" size={18} />
             </Link></td>
             <td><DefinitionRowMenu item={d} onDelete={() => setDeleteAgent(d)} /></td></> : <td>
-            <DefinitionRowMenu item={d} disabled={checkSkillUsage.isPending}
-              busy={checkSkillUsage.isPending && checkSkillUsage.variables?.id === d.id}
-              onDelete={() => { checkSkillUsage.reset(); checkSkillUsage.mutate(d) }} />
+            <DefinitionRowMenu item={d} onDelete={() => setDeleteSkill(d)} />
           </td>}
         </tr>)}
     </WorkspaceListTable>}
     {creating && <CreateDefinitionDialog kind={kindLabel} name={name} setName={value => { setName(value); if (create.isError) create.reset() }}
       pending={create.isPending} error={create.error}
       submit={() => create.mutate()} close={() => { setCreating(false); setName(''); create.reset() }} />}
-    {deleteTarget && <DeleteSkillDialog base={base} skill={deleteTarget.skill} usage={deleteTarget.usage}
-      onClose={() => setDeleteTarget(null)} onDeleted={() => { setDeleteTarget(null); refresh() }} />}
+    {deleteSkill && <DeleteSkillDialog key={deleteSkill.id} space={space.id} base={base} skill={deleteSkill}
+      onClose={() => setDeleteSkill(null)} onDeleted={() => { setDeleteSkill(null); refresh() }} />}
     {deleteAgent && <DeleteAgentDialog base={base} agent={deleteAgent}
       onClose={() => setDeleteAgent(null)} onDeleted={() => { setDeleteAgent(null); refresh() }} />}
   </section>
@@ -206,13 +200,13 @@ function CreateDefinitionDialog({ kind, name, setName, pending, error, submit, c
       {errorMessage && <p role="alert">{errorMessage}</p>}
       <div className="dialog-actions">
         <button type="button" className="secondary" disabled={pending} onClick={dismiss}><Icon name="close" />取消</button>
-        <button type="submit" disabled={pending || !name}><Icon name="plus" />{pending ? '正在创建…' : '创建'}</button>
+        <button type="submit" disabled={pending || !name}><Icon name={pending ? 'loader' : 'plus'} className={pending ? 'icon-spin' : undefined} />{pending ? '正在创建…' : '创建'}</button>
       </div>
     </form>
   }</FormDialog>
 }
-function DefinitionRowMenu({ item, disabled = false, busy = false, onDelete }: {
-  item: Schema['Definition']; disabled?: boolean; busy?: boolean; onDelete: () => void
+function DefinitionRowMenu({ item, onDelete }: {
+  item: Schema['Definition']; onDelete: () => void
 }) {
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -262,10 +256,10 @@ function DefinitionRowMenu({ item, disabled = false, busy = false, onDelete }: {
 
   return <>
     <button ref={triggerRef} type="button" className="icon-button agent-action skill-menu-trigger"
-      disabled={disabled} aria-haspopup="menu" aria-expanded={open}
-      aria-label={`操作 ${item.name}`} title="操作" aria-busy={busy}
+      aria-haspopup="menu" aria-expanded={open}
+      aria-label={`操作 ${item.name}`} title="操作"
       onClick={toggle}>
-      <Icon name={busy ? 'refresh' : 'more'} size={18} />
+      <Icon name="more" size={18} />
     </button>
     {open && createPortal(
       <div ref={menuRef} className="skill-action-menu" role="menu" aria-label={`${item.name} 操作`}
@@ -296,32 +290,42 @@ function DeleteAgentDialog({ base, agent, onClose, onDeleted }: {
       <div className="dialog-actions">
         <button type="button" className="secondary" disabled={remove.isPending} onClick={dismiss}><Icon name="close" />取消</button>
         <button type="button" className="danger" disabled={remove.isPending} onClick={() => remove.mutate()}>
-          <Icon name="trash" size={15} />{remove.isPending ? '正在删除…' : '确认删除'}
+          <Icon name={remove.isPending ? 'loader' : 'trash'} size={15} className={remove.isPending ? 'icon-spin' : undefined} />{remove.isPending ? '正在删除…' : '确认删除'}
         </button>
       </div>
     </div>
   }</FormDialog>
 }
-function DeleteSkillDialog({ base, skill, usage, onClose, onDeleted }: {
-  base: string; skill: Schema['Definition']; usage: Schema['SkillUsage'][]; onClose: () => void; onDeleted: () => void
+function DeleteSkillDialog({ space, base, skill, onClose, onDeleted }: {
+  space: string; base: string; skill: Schema['Definition']; onClose: () => void; onDeleted: () => void
 }) {
   const [step, setStep] = useState<'confirm' | 'second'>('confirm')
+  const usageQuery = useQuery({
+    queryKey: ['private', space, 'skill', skill.id, 'usage'],
+    queryFn: ({ signal }) => request<Schema['SkillUsageList']>(`${base}/${skill.id}/usage`, 'GET', undefined, signal),
+    staleTime: 0,
+    gcTime: 0,
+  })
   const remove = useMutation({
     mutationFn: () => request<void>(`${base}/${skill.id}`, 'DELETE'),
     onSuccess: onDeleted,
   })
+  const checking = usageQuery.isPending || usageQuery.isFetching
+  const usage = usageQuery.data?.items ?? []
   const inUse = usage.length > 0
   const title = step === 'second' ? `再次确认删除「${skill.name}」` : `删除「${skill.name}」`
   return <FormDialog title={title} pending={remove.isPending} close={onClose}>{dismiss =>
     <div className="skill-delete-dialog">
-      {!inUse && <>
+      {checking && <p role="status" className="muted skill-delete-loading"><Icon name="loader" size={16} className="icon-spin" />正在检查是否有 Agent 正在使用该 Skill…</p>}
+      {!checking && usageQuery.isError && <p role="alert">{errorText(usageQuery.error)}</p>}
+      {!checking && usageQuery.isSuccess && !inUse && <>
         <p className="muted">当前没有 Agent 正在使用该 Skill。</p>
         <div className="skill-delete-warning">
           <Icon name="alert" size={16} />
           <span>删除后无法恢复，确定要删除 Skill「{skill.name}」吗？</span>
         </div>
       </>}
-      {inUse && step === 'confirm' && <>
+      {!checking && usageQuery.isSuccess && inUse && step === 'confirm' && <>
         <div className="skill-delete-warning">
           <Icon name="alert" size={16} />
           <span>检测到以下 {usage.length} 个 Agent 正在使用该 Skill，删除可能影响这些 Agent 的配置或运行，且删除后无法恢复：</span>
@@ -336,7 +340,7 @@ function DeleteSkillDialog({ base, skill, usage, onClose, onDeleted }: {
           })}
         </ul>
       </>}
-      {inUse && step === 'second' && <div className="skill-delete-warning">
+      {!checking && usageQuery.isSuccess && inUse && step === 'second' && <div className="skill-delete-warning">
         <Icon name="alert" size={16} />
         <span>仍有 {usage.length} 个 Agent 正在使用 Skill「{skill.name}」。此操作不可撤销，删除后无法恢复，确定要永久删除吗？</span>
       </div>}
@@ -345,11 +349,15 @@ function DeleteSkillDialog({ base, skill, usage, onClose, onDeleted }: {
         {step === 'second'
           ? <button type="button" className="secondary" disabled={remove.isPending} onClick={() => setStep('confirm')}>返回</button>
           : <button type="button" className="secondary" disabled={remove.isPending} onClick={dismiss}><Icon name="close" />取消</button>}
-        {inUse && step === 'confirm'
-          ? <button type="button" className="danger" onClick={() => setStep('second')}>继续删除</button>
-          : <button type="button" className="danger" disabled={remove.isPending} onClick={() => remove.mutate()}>
-            <Icon name="trash" size={15} />{remove.isPending ? '正在删除…' : inUse ? '确认永久删除' : '确认删除'}
-          </button>}
+        {checking
+          ? <button type="button" className="danger" disabled><Icon name="loader" size={15} className="icon-spin" />正在检查…</button>
+          : usageQuery.isError
+            ? <button type="button" className="secondary" onClick={() => { void usageQuery.refetch() }}><Icon name="refresh" size={15} />重试检查</button>
+            : inUse && step === 'confirm'
+              ? <button type="button" className="danger" onClick={() => setStep('second')}>继续删除</button>
+              : <button type="button" className="danger" disabled={remove.isPending} onClick={() => remove.mutate()}>
+                <Icon name={remove.isPending ? 'loader' : 'trash'} size={15} className={remove.isPending ? 'icon-spin' : undefined} />{remove.isPending ? '正在删除…' : inUse ? '确认永久删除' : '确认删除'}
+              </button>}
       </div>
     </div>
   }</FormDialog>

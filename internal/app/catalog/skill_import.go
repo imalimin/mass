@@ -43,6 +43,9 @@ func (s *Service) ImportSkill(ctx context.Context, actor, space, filename string
 	}
 	var document *zip.File
 	for _, entry := range z.File {
+		if isIgnoredSkillImportPath(entry.Name) {
+			continue
+		}
 		if strings.TrimPrefix(entry.Name, "./") == resource.SkillDocumentPath && entry.Mode().IsRegular() {
 			if document != nil {
 				return Draft{}, ErrConfig
@@ -56,7 +59,7 @@ func (s *Service) ImportSkill(ctx context.Context, actor, space, filename string
 	entries := map[string]*zip.File{}
 	var directories []string
 	for _, entry := range z.File {
-		if entry == document {
+		if entry == document || isIgnoredSkillImportPath(entry.Name) {
 			continue
 		}
 		name := strings.TrimPrefix(entry.Name, "./")
@@ -117,6 +120,19 @@ func (s *Service) ImportSkill(ctx context.Context, actor, space, filename string
 		return Draft{}, err
 	}
 	return d, s.Repo.CatalogCreate(ctx, actor, space, d)
+}
+
+func isIgnoredSkillImportPath(name string) bool {
+	trimmed := strings.TrimSuffix(strings.TrimPrefix(name, "./"), "/")
+	if trimmed == "" {
+		return false
+	}
+	for _, segment := range strings.Split(trimmed, "/") {
+		if segment == "__MACOSX" {
+			return true
+		}
+	}
+	return false
 }
 
 func importedSkillName(filename, id string) string {

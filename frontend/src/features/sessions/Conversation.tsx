@@ -438,7 +438,7 @@ export function Conversation({ space, agent, sessionID, onCreated, initialPrompt
               <Icon name="stop" size={16} />{stopRequested || cancel.isPending ? '正在停止' : '停止'}
             </button>
             : <button type="submit" className="send-button" aria-label="发送任务" title={submit.isPending ? '正在发送…' : '发送任务'}
-              aria-busy={submit.isPending} disabled={!canSend}><Icon name={submit.isPending ? 'refresh' : 'arrowUp'} size={21} /></button>}
+              aria-busy={submit.isPending} disabled={!canSend}><Icon name={submit.isPending ? 'loader' : 'arrowUp'} size={21} className={submit.isPending ? 'icon-spin' : undefined} /></button>}
         </div>
       </form>
       <p className="composer-hint">Enter 发送 · Shift + Enter 换行</p>

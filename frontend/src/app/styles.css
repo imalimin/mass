@@ -104,6 +104,11 @@ textarea{font:inherit;width:100%;min-width:0;padding:12px;border:1px solid var(-
 .account-settings :is(.account-action,.logout-action){justify-content:flex-start}.account-settings .account-action{width:100%;padding:10px;text-align:left;border:0;background:transparent;color:var(--text);font-size:12px}.account-settings .account-action:hover{background:#ffffff08}.account-action-divider{height:1px;background:var(--border);margin:8px 0}.create-space-dialog{width:min(440px,calc(100vw - 36px))}:is(.create-space-dialog,.workspace-form-dialog){max-height:calc(100dvh - 36px);margin:auto;padding:28px;background:var(--surface-raised);color:var(--text);border:0;border-radius:18px;box-shadow:0 20px 80px #0005;overflow:auto}:is(.create-space-dialog,.workspace-form-dialog)::backdrop{background:var(--scrim)}:is(.create-space-dialog,.workspace-form-dialog) h2{margin-top:0}.create-space-dialog input{margin-top:4px}.dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:28px}@media(max-width:700px){:is(.create-space-dialog,.workspace-form-dialog){padding:24px}}
 
 .icon { flex: none; vertical-align: middle; }
+.icon-spin { animation: icon-spin .85s linear infinite; transform-origin: center; }
+@keyframes icon-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .icon-spin { animation: none; }
+}
 .icon-link { display: inline-flex; align-items: center; gap: 8px; }
 :is(input, textarea)::placeholder { color: var(--subtle); opacity: 1; }
 button.icon-button {
@@ -160,6 +165,7 @@ button.send-button:disabled { background: var(--hover); }
 .skill-action-menu .skill-menu-item.danger:enabled:is(:hover, :focus-visible) { background: var(--error-bg); color: var(--danger); }
 .skill-delete-dialog { display: grid; gap: 14px; }
 .skill-delete-dialog p { margin: 0; font-size: 13.5px; line-height: 1.65; }
+.skill-delete-loading { display: inline-flex; align-items: center; gap: 8px; }
 .skill-delete-warning { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-radius: 10px; background: var(--error-bg); color: var(--danger); font-size: 13px; line-height: 1.6; }
 .skill-delete-warning .icon { flex-shrink: 0; margin-top: 2px; }
 .skill-usage-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-height: 200px; overflow: auto; }

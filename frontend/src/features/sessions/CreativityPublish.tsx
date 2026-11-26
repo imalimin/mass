@@ -83,7 +83,7 @@ export function CreativityPublish({ space, sessionID, busy, snapshot, mutationKe
   return <>
     <button ref={debugButton} type="button" className="secondary" disabled={busy || !snapshot || debug.isPending} onClick={() => tryDraft()}
       title={busy ? '请等待当前运行结束' : !snapshot ? '最近一轮 Run 提交工作区快照后才能调试' : undefined}>
-      <Icon name={debug.isPending ? 'refresh' : 'play'} />{debug.isPending ? '正在打开…' : '去试试'}
+      <Icon name={debug.isPending ? 'loader' : 'play'} className={debug.isPending ? 'icon-spin' : undefined} />{debug.isPending ? '正在打开…' : '去试试'}
     </button>
     <button ref={publishButton} type="button" disabled={busy || !snapshot || debug.isPending} onClick={() => select(snapshot)}
       title={busy ? '请等待当前运行结束' : !snapshot ? '最近一轮 Run 提交工作区快照后才能发布' : undefined}>
@@ -218,7 +218,7 @@ function PublishDialog({ space, sessionID, selected, available, close, mutationK
       {modelConflict && available && <button type="button" onClick={useLockedModel}><Icon name="check" />使用已确认的模型</button>}
       {preview.isError && !modelRequired && !modelConflict && available && <button type="button" onClick={() => { void preview.refetch() }}><Icon name="refresh" />重试加载</button>}
       {!confirm.isSuccess && !nameConflict && <button type="button" disabled={!preview.isSuccess || !available || confirm.isPending || modelConflict}
-        onClick={() => confirm.mutate(locked ? '' : modelID)}><Icon name={confirm.isPending || confirm.isError ? 'refresh' : 'check'} />
+        onClick={() => confirm.mutate(locked ? '' : modelID)}><Icon name={confirm.isPending ? 'loader' : confirm.isError ? 'refresh' : 'check'} className={confirm.isPending ? 'icon-spin' : undefined} />
         {confirm.isPending ? '正在发布…' : confirm.isError ? '重试发布' : '确认发布'}
       </button>}
     </div>

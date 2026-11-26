@@ -36,7 +36,7 @@ export function CreativityHome({ space }: { space: string }) {
         value={text} disabled={!availability.data?.available || create.isPending} onChange={event => setText(event.target.value)} />
       <button type="submit" className="send-button" aria-label={create.isPending ? '正在进入…' : '发送'} title="发送"
         disabled={!availability.data?.available || create.isPending || !text.trim()}>
-        <Icon name={create.isPending ? 'refresh' : 'arrowUp'} size={21} />
+        <Icon name={create.isPending ? 'loader' : 'arrowUp'} size={21} className={create.isPending ? 'icon-spin' : undefined} />
       </button>
     </form>
     {availability.isPending && <p role="status">正在检查创作 Agent…</p>}
