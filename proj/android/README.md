@@ -23,5 +23,5 @@ Runs the MASS Go server in-process inside the Android APK via JNI (`libmassbridg
 
 ## Configuration
 
-- Default OpenAPI Bearer token (`MassConfig.DEFAULT_OPENAPI_TOKEN`), default Space ID (`4lca4gankkuxip2p`), and default Agent ID (`uknyxsz3jqekreys`) are pre-configured and editable in Settings.
+- Default OpenAPI Bearer token (`MassConfig.DEFAULT_OPENAPI_TOKEN`), default Space ID (`4lca4gankkuxip2p`), and default Agent ID (`szqcoir3iaxi6ay4`) are pre-configured and editable in Settings.
 - Leave **Remote Base URL** blank to connect to the embedded local Go server (`http://127.0.0.1:15336`, Form A using remote MariaDB + TOS), or specify a remote MASS server URL directly.

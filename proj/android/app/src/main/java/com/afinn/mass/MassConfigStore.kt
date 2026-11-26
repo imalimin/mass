@@ -73,7 +73,7 @@ data class MassConfig(
         const val DEFAULT_PORT = 15336
         const val DEFAULT_OPENAPI_TOKEN = "em20AY9FDKesjPOgWPyLVzWrJah8Hy2cq_wvHdPJFHU"
         const val DEFAULT_SPACE_ID = "4lca4gankkuxip2p"
-        const val DEFAULT_AGENT_ID = "uknyxsz3jqekreys"
+        const val DEFAULT_AGENT_ID = "szqcoir3iaxi6ay4"
 
         fun generateMasterKey(): String {
             val bytes = ByteArray(32)
