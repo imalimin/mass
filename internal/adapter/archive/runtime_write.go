@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/imalimin/mass/internal/app/identity"
 	"github.com/imalimin/mass/internal/domain/run"
 	"github.com/imalimin/mass/internal/domain/storage"
@@ -99,73 +100,88 @@ func (r *Runtime) AcceptRuntimeRequest(ctx context.Context, actor, space, operat
 		if err := r.commit(ctx, s, "", created); err != nil {
 			return "", "", err
 		}
-		_, err = r.DB.DB.ExecContext(ctx, "INSERT INTO sessions(id,space_id,agent_id,actor_id,created_at,request_key,request_digest,hide,title) VALUES(?,?,?,?,?,?,?,?,?)",
-			batch.SessionID, space, d.DefinitionID, actor, e.OccurredAt, key, digest, d.Hide, nullableTitle(d.Title))
+		_, err = r.DB.DB.ExecContext(ctx, "INSERT INTO sessions(id,space_id,agent_id,actor_id,created_at,request_key,request_digest,hide,title,log_seq) VALUES(?,?,?,?,?,?,?,?,?,?)",
+			batch.SessionID, space, d.DefinitionID, actor, e.OccurredAt, key, digest, d.Hide, nullableTitle(d.Title), int64(len(s.records)))
 		if err != nil {
+			var me *mysql.MySQLError
+			if errors.As(err, &me) && me.Number == 1062 {
+				existingID, _, ok, findErr := r.FindRuntimeRequest(ctx, actor, space, operation, key, digest)
+				if ok || findErr != nil {
+					return existingID, "", findErr
+				}
+			}
 			return "", "", err
 		}
+		s.persisted = true
+		s.syncedSeq = int64(len(s.records))
 		r.sessions.Store(space+"/"+batch.SessionID, s)
 		return batch.SessionID, "", nil
 	}
 	if operation != "run" || len(batch.Events) != 2 || batch.Events[0].Type != "user.message.accepted" || batch.Events[1].Type != "run.created" {
 		return "", "", storage.ErrInvalid
 	}
-	s, err := r.memberSession(ctx, actor, space, batch.SessionID)
-	if err != nil {
-		return "", "", err
-	}
-	defer s.Unlock()
-	msgEvent, runEvent := batch.Events[0], batch.Events[1]
-	message := fromJSON[journal.UserMessageData](msgEvent.Data)
-	defer r.inline.Delete(space + "/" + message.ContentID)
-	for _, existing := range s.runs {
-		if existing.key == key && existing.view.ActorID == actor {
-			if existing.digest != digest {
-				return "", "", storage.ErrConflict
-			}
-			if err := r.ensureRun(ctx, s, existing.view.ID); err != nil {
-				return "", "", err
-			}
-			return batch.SessionID, existing.view.ID, nil
+	var acceptedSession, acceptedRun string
+	err := r.withSessionLock(ctx, batch.SessionID, func(ctx context.Context) error {
+		s, err := r.memberSession(ctx, actor, space, batch.SessionID)
+		if err != nil {
+			return err
 		}
-	}
-	if s.active != "" || s.maintenance {
-		return "", "", storage.ErrActive
-	}
-	d := fromJSON[journal.RunData](runEvent.Data)
-	if d.Snapshot == nil || !storage.ValidShortID(d.Snapshot.ID) {
-		return "", "", storage.ErrInvalid
-	}
-	if err := run.CheckWorkspaceSubmission(s.session.WorkspaceError, d.Snapshot.WorkspaceCleanup); err != nil {
-		return "", "", err
-	}
-	if d.Snapshot.BaseSnapshotID != s.session.LatestSnapshotID {
-		return "", "", storage.ErrConflict
-	}
-	body, err := r.inlineBytes(space, message.ContentID)
-	if err != nil {
-		return "", "", err
-	}
-	if message.Attachments == nil {
-		message.Attachments = []run.Attachment{}
-	}
-	v := d.Snapshot
-	entry := sessionlog.Accepted{Header: sessionlog.Header{Seq: int64(len(s.records)) + 1, Type: sessionlog.RunAccepted, Role: "user", RunID: v.ID},
-		ActorID: actor, EventID: runEvent.EventID, MessageID: message.ID, UserEventID: msgEvent.EventID,
-		AcceptedAt: v.CreatedAt, RequestKey: key, RequestDigest: digest, BaseSnapshotID: orNil(v.BaseSnapshotID), WorkspaceCleanup: v.WorkspaceCleanup,
-		Message:   sessionlog.Message{Text: string(body), Attachments: message.Attachments},
-		Execution: sessionlog.Execution{Build: v.Build, Model: v.Definition.Model, Tools: v.Definition.Tools, ToolPolicy: v.Definition.ToolPolicy, ModelAttempts: v.Definition.ModelAttempts}}
-	err = r.commit(ctx, s, v.ID, entry)
-	if int64(len(s.records)) == entry.Seq {
-		r.restoreAccepted(s, entry)
-	}
-	if err != nil {
-		return "", "", err
-	}
-	if err := r.insertRun(ctx, s.session.ID, v.ID); err != nil {
-		return "", "", err
-	}
-	return batch.SessionID, v.ID, nil
+		defer s.Unlock()
+		msgEvent, runEvent := batch.Events[0], batch.Events[1]
+		message := fromJSON[journal.UserMessageData](msgEvent.Data)
+		defer r.inline.Delete(space + "/" + message.ContentID)
+		for _, existing := range s.runs {
+			if existing.key == key && existing.view.ActorID == actor {
+				if existing.digest != digest {
+					return storage.ErrConflict
+				}
+				if err := r.ensureRun(ctx, s, existing.view.ID); err != nil {
+					return err
+				}
+				acceptedSession, acceptedRun = batch.SessionID, existing.view.ID
+				return nil
+			}
+		}
+		if s.active != "" || s.maintenance {
+			return storage.ErrActive
+		}
+		d := fromJSON[journal.RunData](runEvent.Data)
+		if d.Snapshot == nil || !storage.ValidShortID(d.Snapshot.ID) {
+			return storage.ErrInvalid
+		}
+		if err := run.CheckWorkspaceSubmission(s.session.WorkspaceError, d.Snapshot.WorkspaceCleanup); err != nil {
+			return err
+		}
+		if d.Snapshot.BaseSnapshotID != s.session.LatestSnapshotID {
+			return storage.ErrConflict
+		}
+		body, err := r.inlineBytes(space, message.ContentID)
+		if err != nil {
+			return err
+		}
+		if message.Attachments == nil {
+			message.Attachments = []run.Attachment{}
+		}
+		v := d.Snapshot
+		entry := sessionlog.Accepted{Header: sessionlog.Header{Seq: int64(len(s.records)) + 1, Type: sessionlog.RunAccepted, Role: "user", RunID: v.ID},
+			ActorID: actor, EventID: runEvent.EventID, MessageID: message.ID, UserEventID: msgEvent.EventID,
+			AcceptedAt: v.CreatedAt, RequestKey: key, RequestDigest: digest, BaseSnapshotID: orNil(v.BaseSnapshotID), WorkspaceCleanup: v.WorkspaceCleanup,
+			Message:   sessionlog.Message{Text: string(body), Attachments: message.Attachments},
+			Execution: sessionlog.Execution{Build: v.Build, Model: v.Definition.Model, Tools: v.Definition.Tools, ToolPolicy: v.Definition.ToolPolicy, ModelAttempts: v.Definition.ModelAttempts}}
+		err = r.commit(ctx, s, v.ID, entry)
+		if int64(len(s.records)) == entry.Seq {
+			r.restoreAccepted(s, entry)
+		}
+		if err != nil {
+			return err
+		}
+		if err := r.insertRun(ctx, s.session.ID, v.ID); err != nil {
+			return err
+		}
+		acceptedSession, acceptedRun = batch.SessionID, v.ID
+		return nil
+	})
+	return acceptedSession, acceptedRun, err
 }
 
 func (r *Runtime) ensureRun(ctx context.Context, s *conversation, id string) error {
@@ -186,7 +202,10 @@ func (r *Runtime) uploadLocal(ctx context.Context, s *conversation) error {
 		// On cold reads the records already came from the committed object.
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return r.advanceLogSeq(ctx, s)
 }
 
 func (r *Runtime) insertRun(ctx context.Context, session, id string) error {
@@ -195,26 +214,28 @@ func (r *Runtime) insertRun(ctx context.Context, session, id string) error {
 }
 
 func (r *Runtime) RegisterAttachment(ctx context.Context, actor, space string, a run.Attachment) error {
-	s, err := r.memberSession(ctx, actor, space, a.SessionID)
-	if err != nil {
-		return err
-	}
-	defer s.Unlock()
-	o, err := r.Objects.Object(ctx, actor, space, a.Ref.ObjectID, false)
-	if err != nil {
-		return err
-	}
-	defer r.Objects.Forget(space, o.ID)
-	if o.SHA256 != a.Ref.SHA256 || o.Size != a.Size {
-		return storage.ErrIntegrity
-	}
-	entry := sessionlog.Attachment{Header: sessionlog.Header{Seq: int64(len(s.records)) + 1, Type: sessionlog.AttachmentAdded, Role: "system"}, Value: a}
-	if err := r.commit(ctx, s, "", entry); err != nil {
-		return err
-	}
-	s.attachments[a.ID] = a
-	s.blobs[o.ID] = Reference(o)
-	return nil
+	return r.withSessionLock(ctx, a.SessionID, func(ctx context.Context) error {
+		s, err := r.memberSession(ctx, actor, space, a.SessionID)
+		if err != nil {
+			return err
+		}
+		defer s.Unlock()
+		o, err := r.Objects.Object(ctx, actor, space, a.Ref.ObjectID, false)
+		if err != nil {
+			return err
+		}
+		defer r.Objects.Forget(space, o.ID)
+		if o.SHA256 != a.Ref.SHA256 || o.Size != a.Size {
+			return storage.ErrIntegrity
+		}
+		entry := sessionlog.Attachment{Header: sessionlog.Header{Seq: int64(len(s.records)) + 1, Type: sessionlog.AttachmentAdded, Role: "system"}, Value: a}
+		if err := r.commit(ctx, s, "", entry); err != nil {
+			return err
+		}
+		s.attachments[a.ID] = a
+		s.blobs[o.ID] = Reference(o)
+		return nil
+	})
 }
 
 func (r *Runtime) RuntimeAttachment(ctx context.Context, actor, space, session, id string) (run.Attachment, error) {
@@ -237,7 +258,34 @@ func (r *Runtime) AppendEvents(ctx context.Context, actor string, batch journal.
 	return r.appendEvents(ctx, batch)
 }
 
+func batchPersistsSessionLog(batch journal.Batch) bool {
+	for _, p := range batch.Events {
+		switch p.Type {
+		case "run.finished", "workspace.snapshot.created":
+			return true
+		case "workspace.restored":
+			if p.RunID == "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (r *Runtime) appendEvents(ctx context.Context, batch journal.Batch) ([]journal.Event, error) {
+	if batchPersistsSessionLog(batch) {
+		var items []journal.Event
+		err := r.withSessionLock(ctx, batch.SessionID, func(ctx context.Context) error {
+			var e error
+			items, e = r.appendEventsLocked(ctx, batch)
+			return e
+		})
+		return items, err
+	}
+	return r.appendEventsLocked(ctx, batch)
+}
+
+func (r *Runtime) appendEventsLocked(ctx context.Context, batch journal.Batch) ([]journal.Event, error) {
 	s, err := r.lock(ctx, batch.SpaceID, batch.SessionID)
 	if err != nil {
 		return nil, err
@@ -492,7 +540,7 @@ func (r *Runtime) updateSummary(ctx context.Context, s *conversation, state *run
 	if end.Error != nil {
 		code = *end.Error
 	}
-	_, err := r.DB.DB.ExecContext(ctx, "UPDATE runs SET status=?,error_code=?,started_at=?,finished_at=? WHERE id=? AND session_id=?",
+	_, err := r.DB.DB.ExecContext(ctx, "UPDATE runs SET status=?,error_code=?,started_at=?,finished_at=?,owner_node_id=NULL,lease_expires_at=NULL WHERE id=? AND session_id=?",
 		end.Status, code, end.StartedAt, end.FinishedAt, end.RunID, s.session.ID)
 	if err != nil {
 		if !state.summaryFailure {

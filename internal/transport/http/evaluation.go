@@ -87,6 +87,9 @@ func registerEvaluation(register func(string, bool, endpoint), options IdentityO
 		return nil
 	})
 	register("GET "+base+"/experiments/{experiment_id}", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		if options.Runtime != nil && options.Runtime.PeerProxy.ForwardExperiment(w, r, r.PathValue("space_id"), r.PathValue("experiment_id")) {
+			return nil
+		}
 		v, err := svc.Experiment(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("experiment_id"))
 		if err != nil {
 			return err
@@ -95,6 +98,9 @@ func registerEvaluation(register func(string, bool, endpoint), options IdentityO
 		return nil
 	})
 	register("GET "+base+"/experiments/{experiment_id}/cases", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		if options.Runtime != nil && options.Runtime.PeerProxy.ForwardExperiment(w, r, r.PathValue("space_id"), r.PathValue("experiment_id")) {
+			return nil
+		}
 		q, n, scope, err := query(r, u)
 		if err != nil {
 			return err

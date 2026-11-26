@@ -49,8 +49,8 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 		return nil, errors.New("invalid database configuration")
 	}
 	db := sql.OpenDB(connector)
-	db.SetMaxOpenConns(16)
-	db.SetMaxIdleConns(4)
+	db.SetMaxOpenConns(32)
+	db.SetMaxIdleConns(8)
 	db.SetConnMaxLifetime(5 * time.Minute)
 	if err = db.PingContext(ctx); err != nil {
 		db.Close()

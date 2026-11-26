@@ -68,45 +68,49 @@ func (r *Runtime) PreviousCreativityPublication(ctx context.Context, actor, spac
 }
 
 func (r *Runtime) SaveCreativityPublication(ctx context.Context, actor, space, session string, publication run.CreativityPublication) error {
-	s, err := r.memberSession(ctx, actor, space, session)
-	if err != nil {
-		return err
-	}
-	defer s.Unlock()
-	if !s.maintenance || s.active != "" || s.session.LatestSnapshotID != publication.SnapshotID || s.publishPlans[publication.SnapshotID].Agent.ID != publication.Agent.ID {
-		return storage.ErrConflict
-	}
-	if n := len(s.publications); n > 0 && s.publications[n-1].SnapshotID == publication.SnapshotID {
-		prior := s.publications[n-1]
-		if prior.Agent != publication.Agent || !slices.Equal(prior.Skills, publication.Skills) {
+	return r.withSessionLock(ctx, session, func(ctx context.Context) error {
+		s, err := r.memberSession(ctx, actor, space, session)
+		if err != nil {
+			return err
+		}
+		defer s.Unlock()
+		if !s.maintenance || s.active != "" || s.session.LatestSnapshotID != publication.SnapshotID || s.publishPlans[publication.SnapshotID].Agent.ID != publication.Agent.ID {
 			return storage.ErrConflict
 		}
-		return r.uploadLocal(ctx, s)
-	}
-	entry := sessionlog.Published{Header: sessionlog.Header{Seq: int64(len(s.records)) + 1, Type: sessionlog.PublishCompleted, Role: "system"}, Publication: publication}
-	err = r.commit(ctx, s, "", entry)
-	if int64(len(s.records)) == entry.Seq {
-		s.publications = append(s.publications, publication)
-	}
-	return err
+		if n := len(s.publications); n > 0 && s.publications[n-1].SnapshotID == publication.SnapshotID {
+			prior := s.publications[n-1]
+			if prior.Agent != publication.Agent || !slices.Equal(prior.Skills, publication.Skills) {
+				return storage.ErrConflict
+			}
+			return r.uploadLocal(ctx, s)
+		}
+		entry := sessionlog.Published{Header: sessionlog.Header{Seq: int64(len(s.records)) + 1, Type: sessionlog.PublishCompleted, Role: "system"}, Publication: publication}
+		err = r.commit(ctx, s, "", entry)
+		if int64(len(s.records)) == entry.Seq {
+			s.publications = append(s.publications, publication)
+		}
+		return err
+	})
 }
 
 func (r *Runtime) SaveCreativityPublishPlan(ctx context.Context, actor, space, session string, plan run.CreativityPublishPlan) error {
-	s, err := r.memberSession(ctx, actor, space, session)
-	if err != nil {
+	return r.withSessionLock(ctx, session, func(ctx context.Context) error {
+		s, err := r.memberSession(ctx, actor, space, session)
+		if err != nil {
+			return err
+		}
+		defer s.Unlock()
+		if !s.maintenance || s.active != "" || s.session.LatestSnapshotID != plan.SnapshotID {
+			return storage.ErrConflict
+		}
+		if prior, exists := s.publishPlans[plan.SnapshotID]; exists && (len(prior.DebugDrafts) > 0 || len(plan.DebugDrafts) == 0) {
+			return r.uploadLocal(ctx, s)
+		}
+		entry := sessionlog.Planned{Header: sessionlog.Header{Seq: int64(len(s.records)) + 1, Type: sessionlog.PublishPlanned, Role: "system"}, Plan: plan}
+		err = r.commit(ctx, s, "", entry)
+		if int64(len(s.records)) == entry.Seq {
+			s.rememberPublishPlan(plan)
+		}
 		return err
-	}
-	defer s.Unlock()
-	if !s.maintenance || s.active != "" || s.session.LatestSnapshotID != plan.SnapshotID {
-		return storage.ErrConflict
-	}
-	if prior, exists := s.publishPlans[plan.SnapshotID]; exists && (len(prior.DebugDrafts) > 0 || len(plan.DebugDrafts) == 0) {
-		return r.uploadLocal(ctx, s)
-	}
-	entry := sessionlog.Planned{Header: sessionlog.Header{Seq: int64(len(s.records)) + 1, Type: sessionlog.PublishPlanned, Role: "system"}, Plan: plan}
-	err = r.commit(ctx, s, "", entry)
-	if int64(len(s.records)) == entry.Seq {
-		s.rememberPublishPlan(plan)
-	}
-	return err
+	})
 }

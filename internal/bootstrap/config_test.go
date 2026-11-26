@@ -166,3 +166,43 @@ func TestLANConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimePeerAddrValidationAndFallback(t *testing.T) {
+	data, err := os.ReadFile("../../configs/mass.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := ParseConfig(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, valid := range []string{"", "http://10.0.1.12:8080", "https://mass-0.internal:8443"} {
+		c := base
+		c.Runtime.PeerAddr = valid
+		if err := c.ValidateService(fixtureEnv); err != nil {
+			t.Fatalf("rejected valid peer_addr %q: %v", valid, err)
+		}
+	}
+	for _, invalid := range []string{"10.0.1.12:8080", "ftp://10.0.1.12:8080", "http://10.0.1.12:8080/api", "http://user@10.0.1.12:8080", "http://10.0.1.12:8080?x=1"} {
+		c := base
+		c.Runtime.PeerAddr = invalid
+		if err := c.ValidateService(fixtureEnv); err == nil {
+			t.Fatalf("accepted invalid peer_addr %q", invalid)
+		}
+	}
+
+	c := base
+	c.HTTP.Listen = "0.0.0.0:9090"
+	t.Setenv("MASS_PEER_ADDR", "")
+	if got := peerBaseURL(c); got != "http://127.0.0.1:9090" {
+		t.Fatalf("fallback peerBaseURL = %q, want http://127.0.0.1:9090", got)
+	}
+	t.Setenv("MASS_PEER_ADDR", "http://10.0.1.55:9090/")
+	if got := peerBaseURL(c); got != "http://10.0.1.55:9090" {
+		t.Fatalf("env peerBaseURL = %q, want http://10.0.1.55:9090", got)
+	}
+	c.Runtime.PeerAddr = "http://10.0.1.99:9090/"
+	if got := peerBaseURL(c); got != "http://10.0.1.99:9090" {
+		t.Fatalf("config peerBaseURL = %q, want http://10.0.1.99:9090", got)
+	}
+}

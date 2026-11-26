@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
 )
 
@@ -95,4 +96,14 @@ func localAPIBaseURL(c Config) string {
 		host = "127.0.0.1"
 	}
 	return httpOrigin(net.JoinHostPort(host, port))
+}
+
+func peerBaseURL(c Config) string {
+	if addr := strings.TrimSpace(c.Runtime.PeerAddr); addr != "" {
+		return strings.TrimRight(addr, "/")
+	}
+	if env := strings.TrimSpace(os.Getenv("MASS_PEER_ADDR")); env != "" {
+		return strings.TrimRight(env, "/")
+	}
+	return localAPIBaseURL(c)
 }

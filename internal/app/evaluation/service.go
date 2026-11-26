@@ -28,6 +28,7 @@ type task struct {
 type Service struct {
 	Repo            Repository
 	Calls           Calls
+	NodeID          string
 	SnapshotTimeout time.Duration
 	Logger          *slog.Logger
 	mu              sync.Mutex
@@ -121,7 +122,18 @@ func (s *Service) CreateExperiment(ctx context.Context, actor, space string, in 
 	if err != nil {
 		return Experiment{}, err
 	}
-	v, err := s.Repo.CreateEvaluationExperiment(ctx, Experiment{ID: storage.NewShortID(), SpaceID: space, ActorID: actor, CreatedAt: time.Now().UTC().Truncate(time.Microsecond), DatasetID: in.DatasetID, AgentID: in.AgentID, AgentVersionID: in.AgentVersionID, Concurrency: in.Concurrency, Key: in.Key, Digest: digest})
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	var leaseExpires *time.Time
+	if s.NodeID != "" {
+		exp := now.Add(30 * time.Second)
+		leaseExpires = &exp
+	}
+	v, err := s.Repo.CreateEvaluationExperiment(ctx, Experiment{
+		ID: storage.NewShortID(), SpaceID: space, ActorID: actor, CreatedAt: now,
+		DatasetID: in.DatasetID, AgentID: in.AgentID, AgentVersionID: in.AgentVersionID,
+		Concurrency: in.Concurrency, Key: in.Key, Digest: digest,
+		OwnerNodeID: s.NodeID, LeaseExpiresAt: leaseExpires,
+	})
 	if err != nil {
 		return v, err
 	}
@@ -164,6 +176,8 @@ func (s *Service) decorate(v Experiment) Experiment {
 		}
 		v.CaseProgress = copyProgress(t.progress)
 		progress = v.CaseProgress
+	} else if v.OwnerNodeID != "" && v.OwnerNodeID != s.NodeID && v.LeaseExpiresAt != nil && v.LeaseExpiresAt.After(time.Now().UTC()) {
+		v.Status = "running"
 	}
 	v.Succeeded, v.Failed = 0, 0
 	for _, p := range progress {

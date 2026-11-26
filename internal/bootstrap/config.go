@@ -62,6 +62,7 @@ type Config struct {
 	Runtime struct {
 		WorkspaceTempRoot string        `yaml:"workspace_temp_root"`
 		SnapshotTimeout   time.Duration `yaml:"snapshot_timeout"`
+		PeerAddr          string        `yaml:"peer_addr"`
 	} `yaml:"runtime"`
 	Creativity struct {
 		AgentID          string `yaml:"agent_id"`
@@ -163,6 +164,12 @@ func (c Config) ValidateService(getenv func(string) string) error {
 	}
 	if !filepath.IsAbs(c.Runtime.WorkspaceTempRoot) || filepath.Clean(c.Runtime.WorkspaceTempRoot) == string(filepath.Separator) {
 		return errors.New("workspace_temp_root must be an absolute dedicated directory")
+	}
+	if peer := strings.TrimSpace(c.Runtime.PeerAddr); peer != "" {
+		pu, err := url.Parse(peer)
+		if err != nil || pu.Host == "" || (pu.Scheme != "http" && pu.Scheme != "https") || pu.User != nil || pu.RawQuery != "" || pu.Fragment != "" || (pu.Path != "" && pu.Path != "/") {
+			return errors.New("runtime.peer_addr must be an HTTP(S) origin")
+		}
 	}
 	if c.LLM.MaxAttempts < 0 || c.LLM.MaxAttempts > 3 {
 		return errors.New("llm.max_attempts must be between 1 and 3 (0 uses 1)")

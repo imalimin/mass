@@ -31,6 +31,7 @@ secrets:
 runtime:
   workspace_temp_root: "/tmp/mass-workspaces"
   snapshot_timeout: "60s"
+  # peer_addr: "http://10.0.1.12:8080" # Optional internal HTTP(S) origin for cross-node SSE/cancel forwarding (or set MASS_PEER_ADDR).
 creativity:
   agent_id: ""
   agent_workspace_id: ""

@@ -424,3 +424,22 @@ func TestMultiTurnFailurePosition(t *testing.T) {
 		})
 	}
 }
+
+func TestDecorateRecognizesRemoteActiveExperimentLease(t *testing.T) {
+	svc := &Service{NodeID: "node-b", tasks: map[string]*task{}}
+	future := time.Now().UTC().Add(20 * time.Second)
+	expired := time.Now().UTC().Add(-5 * time.Second)
+
+	active := svc.decorate(Experiment{ID: "exp1", OwnerNodeID: "node-a", LeaseExpiresAt: &future})
+	if active.Status != "running" {
+		t.Fatalf("remote active status = %q, want running", active.Status)
+	}
+	stale := svc.decorate(Experiment{ID: "exp2", OwnerNodeID: "node-a", LeaseExpiresAt: &expired})
+	if stale.Status != "interrupted" {
+		t.Fatalf("expired lease status = %q, want interrupted", stale.Status)
+	}
+	ownLost := svc.decorate(Experiment{ID: "exp3", OwnerNodeID: "node-b", LeaseExpiresAt: &future})
+	if ownLost.Status != "interrupted" {
+		t.Fatalf("own missing task status = %q, want interrupted", ownLost.Status)
+	}
+}

@@ -7,4 +7,4 @@ import "embed"
 var Files embed.FS
 
 // CurrentVersion is the schema required by the current binary.
-const CurrentVersion int64 = 19
+const CurrentVersion int64 = 20

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"github.com/imalimin/mass/internal/app/identity"
 	"github.com/imalimin/mass/internal/domain/run"
@@ -21,6 +22,9 @@ type RuntimeLease struct {
 	store         *Store
 	conn          *sql.Conn
 	ID, name      string
+	database      string
+	peerAddr      string
+	multiNode     bool
 	connection    int64
 	mu            sync.Mutex
 	alive         atomic.Bool
@@ -30,9 +34,14 @@ type RuntimeLease struct {
 
 const (
 	leaseWaitTimeoutSeconds = 30
+	leaseDurationSeconds    = 30
+	nodeOnlineWindowSeconds = 45
 	leaseKeepaliveInterval  = 10 * time.Second
+	sessionLockTimeoutSecs  = 5
 )
 
+// OpenRuntime acquires an exclusive database-wide runtime lock for offline CLI
+// maintenance and legacy single-node callers.
 func (s *Store) OpenRuntime(ctx context.Context) (*RuntimeLease, error) {
 	conn, err := s.DB.Conn(ctx)
 	if err != nil {
@@ -47,9 +56,24 @@ func (s *Store) OpenRuntime(ctx context.Context) (*RuntimeLease, error) {
 		conn.Close()
 		return nil, err
 	}
+	l.database = database
 	l.name = "mass:" + database + ":runtime"
 	var acquired sql.NullInt64
 	if err = conn.QueryRowContext(ctx, "SELECT GET_LOCK(?,0)", l.name).Scan(&acquired); err != nil || !acquired.Valid || acquired.Int64 != 1 {
+		conn.Close()
+		return nil, run.ErrUnavailable
+	}
+	// Refuse exclusive maintenance while any multi-node runtime instance is active.
+	var activeNodes int
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_nodes WHERE heartbeat_at >= DATE_SUB(UTC_TIMESTAMP(6), INTERVAL ? SECOND)", nodeOnlineWindowSeconds).Scan(&activeNodes); err != nil {
+		var mysqlErr *mysql.MySQLError
+		if !errors.As(err, &mysqlErr) || mysqlErr.Number != 1146 {
+			_, _ = conn.ExecContext(context.Background(), "SELECT RELEASE_LOCK(?)", l.name)
+			conn.Close()
+			return nil, err
+		}
+	} else if activeNodes > 0 {
+		_, _ = conn.ExecContext(context.Background(), "SELECT RELEASE_LOCK(?)", l.name)
 		conn.Close()
 		return nil, run.ErrUnavailable
 	}
@@ -59,6 +83,40 @@ func (s *Store) OpenRuntime(ctx context.Context) (*RuntimeLease, error) {
 	go l.keepalive(keepCtx)
 	return l, nil
 }
+
+// OpenRuntimeNode registers this instance in runtime_nodes for multi-node active
+// execution without taking a database-wide exclusive lock.
+func (s *Store) OpenRuntimeNode(ctx context.Context, peerAddr string) (*RuntimeLease, error) {
+	var database string
+	if err := s.DB.QueryRowContext(ctx, "SELECT DATABASE()").Scan(&database); err != nil {
+		return nil, err
+	}
+	l := &RuntimeLease{
+		store:     s,
+		ID:        uuid.NewString(),
+		database:  database,
+		peerAddr:  peerAddr,
+		multiNode: true,
+	}
+	if _, err := s.DB.ExecContext(ctx,
+		"INSERT INTO runtime_nodes(node_id,peer_addr,started_at,heartbeat_at) VALUES(?,?,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))",
+		l.ID, peerAddr,
+	); err != nil {
+		return nil, err
+	}
+	l.alive.Store(true)
+	keepCtx, cancel := context.WithCancel(context.Background())
+	l.stopKeepalive = cancel
+	go l.keepalive(keepCtx)
+	return l, nil
+}
+
+func (l *RuntimeLease) NodeID() string { return l.ID }
+
+func (l *RuntimeLease) LeaseDuration() time.Duration {
+	return leaseDurationSeconds * time.Second
+}
+
 func (l *RuntimeLease) keepalive(ctx context.Context) {
 	ticker := time.NewTicker(leaseKeepaliveInterval)
 	defer ticker.Stop()
@@ -67,12 +125,45 @@ func (l *RuntimeLease) keepalive(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := l.Check(ctx); err != nil {
+			if l.multiNode {
+				if err := l.renewNode(ctx); err != nil {
+					return
+				}
+			} else if err := l.Check(ctx); err != nil {
 				return
 			}
 		}
 	}
 }
+
+func (l *RuntimeLease) renewNode(ctx context.Context) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.alive.Load() || l.closed {
+		return run.ErrUnavailable
+	}
+	probe, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	res, err := l.store.DB.ExecContext(probe, "UPDATE runtime_nodes SET heartbeat_at=UTC_TIMESTAMP(6) WHERE node_id=?", l.ID)
+	if err != nil {
+		return nil
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		l.alive.Store(false)
+		return run.ErrUnavailable
+	}
+	_, _ = l.store.DB.ExecContext(probe,
+		"UPDATE runs SET lease_expires_at=DATE_ADD(UTC_TIMESTAMP(6), INTERVAL ? SECOND) WHERE owner_node_id=? AND status='running'",
+		leaseDurationSeconds, l.ID,
+	)
+	_, _ = l.store.DB.ExecContext(probe,
+		"UPDATE evaluation_experiments SET lease_expires_at=DATE_ADD(UTC_TIMESTAMP(6), INTERVAL ? SECOND) WHERE owner_node_id=? AND completed_at IS NULL",
+		leaseDurationSeconds, l.ID,
+	)
+	_, _ = l.store.DB.ExecContext(probe, "DELETE FROM runtime_nodes WHERE heartbeat_at < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 5 MINUTE)")
+	return nil
+}
+
 func (l *RuntimeLease) Check(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -82,16 +173,29 @@ func (l *RuntimeLease) Check(ctx context.Context) error {
 	if !l.alive.Load() {
 		return run.ErrUnavailable
 	}
-	var owner sql.NullInt64
-	// Cancelling a request must not close the lock connection while workers still exit.
 	probe, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
+	if l.multiNode {
+		var one int
+		err := l.store.DB.QueryRowContext(probe, "SELECT 1 FROM runtime_nodes WHERE node_id=?", l.ID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			l.alive.Store(false)
+			return run.ErrUnavailable
+		}
+		if err != nil {
+			return run.ErrUnavailable
+		}
+		return nil
+	}
+	var owner sql.NullInt64
+	// Cancelling a request must not close the lock connection while workers still exit.
 	if err := l.conn.QueryRowContext(probe, "SELECT IS_USED_LOCK(?)", l.name).Scan(&owner); err != nil || !owner.Valid || owner.Int64 != l.connection {
 		l.alive.Store(false)
 		return run.ErrUnavailable
 	}
 	return nil
 }
+
 func (l *RuntimeLease) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -105,6 +209,12 @@ func (l *RuntimeLease) Close() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if l.multiNode {
+		_, _ = l.store.DB.ExecContext(ctx, "UPDATE runs SET lease_expires_at=UTC_TIMESTAMP(6) WHERE owner_node_id=? AND status='running'", l.ID)
+		_, _ = l.store.DB.ExecContext(ctx, "UPDATE evaluation_experiments SET lease_expires_at=UTC_TIMESTAMP(6) WHERE owner_node_id=? AND completed_at IS NULL", l.ID)
+		_, err := l.store.DB.ExecContext(ctx, "DELETE FROM runtime_nodes WHERE node_id=?", l.ID)
+		return err
+	}
 	_, err := l.conn.ExecContext(ctx, "SELECT RELEASE_LOCK(?)", l.name)
 	closeErr := l.conn.Close()
 	if errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) {
@@ -114,6 +224,89 @@ func (l *RuntimeLease) Close() error {
 		closeErr = nil
 	}
 	return errors.Join(err, closeErr)
+}
+
+// WithSessionLock serializes writes to a single Session across nodes via a
+// connection-scoped MySQL advisory lock.
+func (l *RuntimeLease) WithSessionLock(ctx context.Context, sessionID string, fn func(context.Context) error) error {
+	if l == nil || !l.multiNode || l.store == nil || l.store.DB == nil {
+		return fn(ctx)
+	}
+	conn, err := l.store.DB.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	lockName := "mass:" + l.database + ":session:" + sessionID
+	var acquired sql.NullInt64
+	if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK(?,?)", lockName, sessionLockTimeoutSecs).Scan(&acquired); err != nil {
+		return err
+	}
+	if !acquired.Valid || acquired.Int64 != 1 {
+		return storage.ErrActive
+	}
+	defer func() {
+		releaseCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_, _ = conn.ExecContext(releaseCtx, "SELECT RELEASE_LOCK(?)", lockName)
+	}()
+	return fn(ctx)
+}
+
+// RunPeer returns the peer address owning an active Run when it is executing on
+// a different node.
+func (l *RuntimeLease) RunPeer(ctx context.Context, space, runID string) (peerAddr string, remote bool, err error) {
+	if l == nil || !l.multiNode || l.store == nil || l.store.DB == nil {
+		return "", false, nil
+	}
+	var status, owner, addr string
+	err = l.store.DB.QueryRowContext(ctx, `
+		SELECT r.status, COALESCE(r.owner_node_id,''), COALESCE(n.peer_addr,'')
+		FROM runs r
+		JOIN sessions s ON s.id = r.session_id
+		LEFT JOIN runtime_nodes n ON n.node_id = r.owner_node_id
+			AND n.heartbeat_at >= DATE_SUB(UTC_TIMESTAMP(6), INTERVAL ? SECOND)
+		WHERE r.id = ? AND s.space_id = ?`,
+		nodeOnlineWindowSeconds, runID, space,
+	).Scan(&status, &owner, &addr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if (status == "queued" || status == "running") && owner != "" && owner != l.ID {
+		return addr, true, nil
+	}
+	return "", false, nil
+}
+
+// ExperimentPeer returns the peer address owning an active evaluation experiment
+// when it is executing on a different node.
+func (l *RuntimeLease) ExperimentPeer(ctx context.Context, space, experimentID string) (peerAddr string, remote bool, err error) {
+	if l == nil || !l.multiNode || l.store == nil || l.store.DB == nil {
+		return "", false, nil
+	}
+	var owner, addr string
+	err = l.store.DB.QueryRowContext(ctx, `
+		SELECT COALESCE(e.owner_node_id,''), COALESCE(n.peer_addr,'')
+		FROM evaluation_experiments e
+		LEFT JOIN runtime_nodes n ON n.node_id = e.owner_node_id
+			AND n.heartbeat_at >= DATE_SUB(UTC_TIMESTAMP(6), INTERVAL ? SECOND)
+		WHERE e.space_id = ? AND e.id = ? AND e.completed_at IS NULL
+			AND e.lease_expires_at >= UTC_TIMESTAMP(6)`,
+		nodeOnlineWindowSeconds, space, experimentID,
+	).Scan(&owner, &addr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if owner != "" && owner != l.ID {
+		return addr, true, nil
+	}
+	return "", false, nil
 }
 func (l *RuntimeLease) Candidates(ctx context.Context, limit int) (items []run.Snapshot, err error) {
 	if err = l.Check(ctx); err != nil {

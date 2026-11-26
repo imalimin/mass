@@ -83,7 +83,7 @@ func (r *Runtime) RuntimeRun(ctx context.Context, actor, space, id string) (run.
 // AcceptedRunStatus is an internal read for the experiment worker. The
 // worker supplies the Session and Run IDs returned by Create and Submit.
 func (r *Runtime) AcceptedRunStatus(ctx context.Context, space, session, id string) (run.View, error) {
-	s, err := r.acceptedSession(ctx, space, session)
+	s, err := r.lock(ctx, space, session)
 	if err != nil {
 		return run.View{}, err
 	}
@@ -92,27 +92,20 @@ func (r *Runtime) AcceptedRunStatus(ctx context.Context, space, session, id stri
 	if state == nil {
 		return run.View{}, identity.ErrNotFound
 	}
-	return state.view, nil
-}
-
-// Active experiments and their accepted conversations share a process.
-// Look in the live archive without loading or reconciling another session.
-func (r *Runtime) acceptedSession(ctx context.Context, space, session string) (*conversation, error) {
-	value, ok := r.sessions.Load(space + "/" + session)
-	if !ok {
-		return nil, identity.ErrNotFound
+	v := state.view
+	if !run.Terminal(v.Status) && r.DB != nil && r.DB.DB != nil {
+		var status string
+		var started sql.NullTime
+		if err := r.DB.DB.QueryRowContext(ctx, "SELECT status,started_at FROM runs WHERE id=?", id).Scan(&status, &started); err == nil {
+			if status == "running" && v.Status == "queued" {
+				v.Status = status
+				if started.Valid {
+					v.StartedAt = &started.Time
+				}
+			}
+		}
 	}
-	s := value.(*conversation)
-	s.Lock()
-	if err := ctx.Err(); err != nil {
-		s.Unlock()
-		return nil, err
-	}
-	if !s.loaded || s.session.SpaceID != space || s.session.ID != session {
-		s.Unlock()
-		return nil, identity.ErrNotFound
-	}
-	return s, nil
+	return v, nil
 }
 
 func view(s *conversation, id string) (run.View, error) {
@@ -170,6 +163,16 @@ func (r *Runtime) RuntimeRuns(ctx context.Context, actor, space, session string,
 		v, err := view(s, id)
 		if err != nil {
 			return nil, err
+		}
+		if id == s.active && v.Status == "queued" && r.DB != nil && r.DB.DB != nil {
+			var status string
+			var started sql.NullTime
+			if err := r.DB.DB.QueryRowContext(ctx, "SELECT status,started_at FROM runs WHERE id=?", id).Scan(&status, &started); err == nil && status == "running" {
+				v.Status = status
+				if started.Valid {
+					v.StartedAt = &started.Time
+				}
+			}
 		}
 		items = append(items, v)
 	}
@@ -275,7 +278,7 @@ func (r *Runtime) AcceptedRunDiagnostics(ctx context.Context, space, session str
 	if len(ids) == 0 {
 		return []json.RawMessage{}, nil
 	}
-	s, err := r.acceptedSession(ctx, space, session)
+	s, err := r.lock(ctx, space, session)
 	if err != nil {
 		return nil, err
 	}

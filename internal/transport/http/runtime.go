@@ -51,6 +51,7 @@ type RuntimeOptions struct {
 	Snapshots            *resource.SnapshotStore
 	Finisher             *resource.Finisher
 	Cancel               func(string)
+	PeerProxy            *PeerProxy
 }
 
 type runResponse struct {
@@ -144,6 +145,9 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		return nil
 	})
 	register("GET "+base+"/runs/{run_id}/plan", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		if runtime.PeerProxy.ForwardRun(w, r, r.PathValue("space_id"), r.PathValue("run_id")) {
+			return nil
+		}
 		v, err := runtime.Repo.RuntimePlan(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("run_id"))
 		if err != nil {
 			return err
@@ -287,6 +291,9 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		return nil
 	})
 	register("GET "+base+"/runs/{run_id}", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		if runtime.PeerProxy.ForwardRun(w, r, r.PathValue("space_id"), r.PathValue("run_id")) {
+			return nil
+		}
 		v, err := svc.Repo.RuntimeRun(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("run_id"))
 		if err != nil {
 			return err
@@ -297,7 +304,14 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 	register("GET /api/v1/diagnostics", true, runtime.diagnostics)
 	register("GET /api/v1/diagnostic-logs", true, runtime.diagnosticLogs)
 	registerBearer("POST "+base+"/runs/{run_id}/cancel", func(w http.ResponseWriter, r *http.Request, u identity.User) error {
-		v, err := svc.Repo.CancelRuntimeRun(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("run_id"))
+		space, id := r.PathValue("space_id"), r.PathValue("run_id")
+		if runtime.PeerProxy.ForwardRun(w, r, space, id) {
+			return nil
+		}
+		v, err := svc.Repo.CancelRuntimeRun(r.Context(), u.ID, space, id)
+		if errors.Is(err, run.ErrState) && runtime.PeerProxy.ForwardRun(w, r, space, id) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -373,6 +387,9 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 	})
 	for _, kind := range []string{"trace", "contexts"} {
 		register("GET "+base+"/runs/{run_id}/"+kind, true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+			if runtime.PeerProxy.ForwardRun(w, r, r.PathValue("space_id"), r.PathValue("run_id")) {
+				return nil
+			}
 			after, through, limit, err := journalQuery(r)
 			if err != nil {
 				return err
@@ -593,6 +610,9 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 		return nil
 	})
 	register("GET "+base+"/runs/{run_id}/ui-snapshot", true, func(w http.ResponseWriter, r *http.Request, u identity.User) error {
+		if runtime.PeerProxy.ForwardRun(w, r, r.PathValue("space_id"), r.PathValue("run_id")) {
+			return nil
+		}
 		cp, err := runtime.UI.CatchUp(r.Context(), u.ID, r.PathValue("space_id"), r.PathValue("run_id"))
 		if err != nil {
 			return err
@@ -623,6 +643,9 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 				apiError(w, err, logger)
 				return
 			}
+			if runtime.PeerProxy.ForwardRun(w, r, space, id) {
+				return
+			}
 			user = principal.User
 			ctx, unwatch, err = options.Service.WatchBearerAccess(r.Context(), bearer, space, principal)
 			if err != nil {
@@ -637,6 +660,9 @@ func registerRuntime(mux *http.ServeMux, register func(string, bool, endpoint), 
 			user, err = options.Service.Me(r.Context(), token(r))
 			if err != nil {
 				apiError(w, err, logger)
+				return
+			}
+			if runtime.PeerProxy.ForwardRun(w, r, space, id) {
 				return
 			}
 			ctx, unwatch, err = options.Service.WatchAccess(r.Context(), user.ID, space)

@@ -75,6 +75,8 @@ type Experiment struct {
 	Concurrency    int                 `json:"concurrency"`
 	Key            string              `json:"-"`
 	Digest         string              `json:"-"`
+	OwnerNodeID    string              `json:"-"`
+	LeaseExpiresAt *time.Time          `json:"-"`
 	Result         map[string]Progress `json:"result"`
 	CompletedAt    *time.Time          `json:"completed_at"`
 	Status         string              `json:"status"`

@@ -80,6 +80,7 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 	if err != nil {
 		return err
 	}
+	runtimeOptions.PeerProxy = httptransport.NewPeerProxy(lifecycle.PeerLocator(), key, logger)
 	defer func() {
 		shutdown, cancel := context.WithTimeout(context.Background(), c.HTTP.ShutdownTimeout)
 		defer cancel()
@@ -88,7 +89,7 @@ func Serve(ctx context.Context, c Config, version string, logger *slog.Logger) e
 		}
 	}()
 
-	evaluations := &evaluation.Service{Repo: store, SnapshotTimeout: c.Runtime.SnapshotTimeout, Logger: logger, Calls: evaluation.Calls{
+	evaluations := &evaluation.Service{Repo: store, NodeID: lifecycle.NodeID(), SnapshotTimeout: c.Runtime.SnapshotTimeout, Logger: logger, Calls: evaluation.Calls{
 		CheckAgent: func(ctx context.Context, actor, space, agent, version string) error {
 			d, err := catalogue.Draft(ctx, actor, space, "agent", agent)
 			if err != nil {

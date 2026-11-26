@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"github.com/imalimin/mass/internal/adapter/mariadb"
 	"github.com/imalimin/mass/internal/app/identity"
@@ -45,6 +46,8 @@ type Runtime struct {
 type conversation struct {
 	sync.Mutex
 	loaded        bool
+	persisted     bool
+	syncedSeq     int64
 	records       []json.RawMessage
 	session       run.Session
 	definition    run.Definition
@@ -125,21 +128,76 @@ func newConversation() *conversation {
 		blobs: make(map[string]Ref), snapshots: make(map[string]storage.Snapshot)}
 }
 
+func resetConversation(s *conversation) {
+	s.loaded = false
+	s.persisted = false
+	s.syncedSeq = 0
+	s.records = nil
+	s.session = run.Session{}
+	s.definition = run.Definition{}
+	s.runs = make(map[string]*runState)
+	s.events = nil
+	s.attachments = make(map[string]run.Attachment)
+	s.blobs = make(map[string]Ref)
+	s.snapshots = make(map[string]storage.Snapshot)
+	s.draftPackages = nil
+	s.publishPlans = nil
+	s.publications = nil
+	s.lastDebugPlan = run.CreativityPublishPlan{}
+	s.maintenance = false
+	s.active = ""
+	s.firstRunID = ""
+}
+
+func (r *Runtime) withSessionLock(ctx context.Context, sessionID string, fn func(context.Context) error) error {
+	if r.Lease == nil {
+		return fn(ctx)
+	}
+	return r.Lease.WithSessionLock(ctx, sessionID, fn)
+}
+
+func (r *Runtime) readLatestRecords(ctx context.Context, space, id string, remoteSeq int64) ([]json.RawMessage, error) {
+	if remoteSeq == 0 {
+		return r.Log.Read(ctx, space, id)
+	}
+	remote, remoteErr := r.Log.ReadRemote(ctx, space, id)
+	if remoteErr == nil {
+		return remote, nil
+	}
+	local, localErr := r.Log.Read(ctx, space, id)
+	if localErr == nil && int64(len(local)) >= remoteSeq {
+		return local, nil
+	}
+	return nil, remoteErr
+}
+
 // lock returns a conversation reconstructed from its log, with the write lock held.
 func (r *Runtime) lock(ctx context.Context, space, id string) (*conversation, error) {
 	if !storage.ValidShortID(space) || !storage.ValidShortID(id) {
 		return nil, storage.ErrInvalid
 	}
+	var remoteSeq int64
+	var storedTitle sql.NullString
+	hasDB := r.DB != nil && r.DB.DB != nil
+	if hasDB {
+		err := r.DB.DB.QueryRowContext(ctx, "SELECT log_seq,title FROM sessions WHERE space_id=? AND id=?", space, id).Scan(&remoteSeq, &storedTitle)
+		if err != nil {
+			return nil, notFound(err)
+		}
+	}
 	value, _ := r.sessions.LoadOrStore(space+"/"+id, newConversation())
 	s := value.(*conversation)
 	s.Lock()
-	if !s.loaded {
-		records, err := r.Log.Read(ctx, space, id)
+	if !s.loaded || (hasDB && remoteSeq > s.syncedSeq) {
+		records, err := r.readLatestRecords(ctx, space, id, remoteSeq)
 		if err == nil {
+			resetConversation(s)
 			err = r.rehydrate(s, records)
 		}
 		if err != nil {
-			r.sessions.Delete(space + "/" + id)
+			if !s.loaded {
+				r.sessions.Delete(space + "/" + id)
+			}
 			s.Unlock()
 			return nil, notFound(err)
 		}
@@ -150,34 +208,106 @@ func (r *Runtime) lock(ctx context.Context, space, id string) (*conversation, er
 		}
 		s.records = records
 		s.loaded = true
-		if err := r.reconcileAccepted(ctx, s); err != nil {
+		s.persisted = true
+		s.syncedSeq = remoteSeq
+		applyStoredTitle(&s.session, storedTitle)
+		if err := r.maybeReconcileAccepted(ctx, space, id, s); err != nil {
 			s.loaded = false
 			r.sessions.Delete(space + "/" + id)
 			s.Unlock()
 			return nil, err
 		}
+	} else if hasDB {
+		applyStoredTitle(&s.session, storedTitle)
 	}
 	return s, nil
 }
 
 // An accepted record can survive a process exit just before its SQL summary
 // was inserted. Index it as interrupted so reopening the session never replays it.
-func (r *Runtime) reconcileAccepted(ctx context.Context, s *conversation) error {
-	if s.active == "" {
+func (r *Runtime) maybeReconcileAccepted(ctx context.Context, space, id string, s *conversation) error {
+	if s.active == "" || r.DB == nil || r.DB.DB == nil {
 		return nil
 	}
-	var id string
-	err := r.DB.DB.QueryRowContext(ctx, "SELECT id FROM runs WHERE id=?", s.active).Scan(&id)
+	state := s.runs[s.active]
+	if state == nil || time.Since(state.view.CreatedAt) < 10*time.Second {
+		return nil
+	}
+	var existing string
+	err := r.DB.DB.QueryRowContext(ctx, "SELECT id FROM runs WHERE id=?", s.active).Scan(&existing)
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	state := s.runs[s.active]
-	if err = r.insertRun(ctx, s.session.ID, state.view.ID); err != nil {
+	// Release s before acquiring the distributed session lock to preserve strict
+	// lock order (distributed session lock -> s.Lock).
+	s.Unlock()
+	reconcileErr := r.withSessionLock(ctx, id, func(ctx context.Context) error {
+		s.Lock()
+		defer s.Unlock()
+		if !s.loaded || s.active == "" {
+			return nil
+		}
+		cur := s.runs[s.active]
+		if cur == nil {
+			return nil
+		}
+		var runID string
+		if e := r.DB.DB.QueryRowContext(ctx, "SELECT id FROM runs WHERE id=?", s.active).Scan(&runID); !errors.Is(e, sql.ErrNoRows) {
+			return e
+		}
+		if e := r.insertRun(ctx, s.session.ID, cur.view.ID); e != nil {
+			var me *mysql.MySQLError
+			if errors.As(e, &me) && me.Number == 1062 {
+				return nil
+			}
+			return e
+		}
+		p := journal.New(cur.view.ActorID, "run.finished", cur.view.ID, journal.FinishData{Status: "failed", Error: "interrupted"})
+		diagnostic.Record(diagnostic.WithRun(ctx, r.DiagnosticLog, cur.view.Snapshot), "warn", "run.interrupted", "reason=recovery state=queued")
+		return r.finish(ctx, s, cur, p)
+	})
+	s.Lock()
+	if reconcileErr != nil {
+		return reconcileErr
+	}
+	// Refresh title/seq if another node advanced the session while unlocked.
+	var remoteSeq int64
+	var storedTitle sql.NullString
+	if err := r.DB.DB.QueryRowContext(ctx, "SELECT log_seq,title FROM sessions WHERE space_id=? AND id=?", space, id).Scan(&remoteSeq, &storedTitle); err == nil {
+		applyStoredTitle(&s.session, storedTitle)
+		if remoteSeq > s.syncedSeq {
+			if records, err := r.readLatestRecords(ctx, space, id, remoteSeq); err == nil {
+				resetConversation(s)
+				if err := r.rehydrate(s, records); err == nil {
+					s.records = records
+					s.loaded = true
+					s.persisted = true
+					s.syncedSeq = remoteSeq
+					applyStoredTitle(&s.session, storedTitle)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) advanceLogSeq(ctx context.Context, s *conversation) error {
+	if !s.persisted || r.DB == nil || r.DB.DB == nil {
+		return nil
+	}
+	nextSeq := max(s.syncedSeq+1, int64(len(s.records)))
+	res, err := r.DB.DB.ExecContext(ctx,
+		"UPDATE sessions SET log_seq=? WHERE space_id=? AND id=? AND log_seq<=?",
+		nextSeq, s.session.SpaceID, s.session.ID, s.syncedSeq,
+	)
+	if err != nil {
 		return err
 	}
-	p := journal.New(state.view.ActorID, "run.finished", state.view.ID, journal.FinishData{Status: "failed", Error: "interrupted"})
-	diagnostic.Record(diagnostic.WithRun(ctx, r.DiagnosticLog, state.view.Snapshot), "warn", "run.interrupted", "reason=recovery state=queued")
-	return r.finish(ctx, s, state, p)
+	if n, _ := res.RowsAffected(); n != 1 {
+		return storage.ErrConflict
+	}
+	s.syncedSeq = nextSeq
+	return nil
 }
 
 func (r *Runtime) commit(ctx context.Context, s *conversation, runID string, records ...any) error {
@@ -193,8 +323,13 @@ func (r *Runtime) commit(ctx context.Context, s *conversation, runID string, rec
 	err := r.Log.Upload(ctx, space, session)
 	if err != nil {
 		r.persistFailed(s, runID, "upload", int64(len(s.records)), err)
+		return err
 	}
-	return err
+	if err := r.advanceLogSeq(ctx, s); err != nil {
+		r.persistFailed(s, runID, "log_seq", int64(len(s.records)), err)
+		return err
+	}
+	return nil
 }
 
 func (r *Runtime) persistFailed(s *conversation, runID, stage string, seq int64, err error) {

@@ -43,6 +43,20 @@ type runtimeLifecycle struct {
 	wg         sync.WaitGroup
 }
 
+func (r *runtimeLifecycle) NodeID() string {
+	if r == nil || r.lease == nil {
+		return ""
+	}
+	return r.lease.NodeID()
+}
+
+func (r *runtimeLifecycle) PeerLocator() httptransport.PeerLocator {
+	if r == nil || r.lease == nil {
+		return nil
+	}
+	return r.lease
+}
+
 func (r *runtimeLifecycle) Close(ctx context.Context) error {
 	r.cancel()
 	r.supervisor.Stop()
@@ -76,7 +90,12 @@ type runCoordinator interface {
 }
 
 func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *identity.Service, catalogue *catalog.Service, content *resource.ContentStore, workspaces resource.Workspaces, snapshots *resource.SnapshotStore, build string, logger *slog.Logger, transport modelgateway.Transport, persisted ...*storearchive.Runtime) (options *httptransport.RuntimeOptions, lifecycle *runtimeLifecycle, err error) {
-	lease, err := store.OpenRuntime(parent)
+	var lease *mariadb.RuntimeLease
+	if len(persisted) > 0 {
+		lease, err = store.OpenRuntimeNode(parent, peerBaseURL(c))
+	} else {
+		lease, err = store.OpenRuntime(parent)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -197,39 +216,40 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		tools := &dispatcher.Dispatcher{Registry: registryService, Handler: &builtin.Handler{Files: fileService, Command: commands, Journal: runJournal}, Control: budget, Journal: runJournal, Trace: recorder}
 		return &executor.Executor{Planner: contextPlanner, Model: gateway, Tools: tools, Control: budget}, nil
 	}
-	// The connection-scoped lock proves the old dispatcher is gone before recovery.
-	interrupted, err := coordinator.RecoveryCandidates(ctx)
-	if err != nil {
+	recoverExpired := func(rctx context.Context) error {
+		interrupted, err := coordinator.RecoveryCandidates(rctx)
+		if err != nil {
+			return err
+		}
+		for _, s := range interrupted {
+			if sessions != nil {
+				done, err := sessions.Recover(rctx, s)
+				if err != nil {
+					return err
+				}
+				if done {
+					continue
+				}
+			} else if err = lease.AdoptInterrupted(rctx, s); err != nil {
+				return err
+			}
+			plan := run.CleanupPlan{Outcome: run.Outcome{Status: "failed", Error: "interrupted"}, At: time.Now().UTC().Truncate(time.Microsecond), WorkspaceReady: false}
+			diagnostic.Record(diagnostic.WithRun(rctx, diagnosticLog, s), "warn", "run.interrupted", "reason=recovery state=running")
+			if err = scope(s).SavePlan(rctx, plan); err != nil {
+				return err
+			}
+			cleanup, stop := context.WithTimeout(rctx, c.Runtime.SnapshotTimeout)
+			err = finisher.Finish(cleanup, s, plan)
+			stop()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := recoverExpired(ctx); err != nil {
 		cancel()
 		return nil, nil, err
-	}
-	for _, s := range interrupted {
-		if sessions != nil {
-			done, err := sessions.Recover(ctx, s)
-			if err != nil {
-				cancel()
-				return nil, nil, err
-			}
-			if done {
-				continue
-			}
-		} else if err = lease.AdoptInterrupted(ctx, s); err != nil {
-			cancel()
-			return nil, nil, err
-		}
-		plan := run.CleanupPlan{Outcome: run.Outcome{Status: "failed", Error: "interrupted"}, At: time.Now().UTC().Truncate(time.Microsecond), WorkspaceReady: false}
-		diagnostic.Record(diagnostic.WithRun(ctx, diagnosticLog, s), "warn", "run.interrupted", "reason=recovery state=running")
-		if err = scope(s).SavePlan(ctx, plan); err != nil {
-			cancel()
-			return nil, nil, err
-		}
-		cleanup, stop := context.WithTimeout(ctx, c.Runtime.SnapshotTimeout)
-		err = finisher.Finish(cleanup, s, plan)
-		stop()
-		if err != nil {
-			cancel()
-			return nil, nil, err
-		}
 	}
 	if sessions == nil {
 		if _, err = store.DB.ExecContext(ctx, "UPDATE sessions SET workspace_maintenance=FALSE,workspace_maintenance_actor=NULL"); err != nil {
@@ -290,6 +310,7 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 		defer lifecycle.wg.Done()
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
+		lastRecovery := time.Now()
 		for {
 			ready := saveTraces(ctx)
 			for _, runs := range ready {
@@ -302,6 +323,14 @@ func StartRuntime(parent context.Context, c Config, store *mariadb.Store, auth *
 				if err != nil && ctx.Err() == nil {
 					logger.Warn("session trace upload pending", "session_id", runs[0].SessionID, "error", err)
 				}
+			}
+			if sessions != nil && time.Since(lastRecovery) >= 10*time.Second {
+				lastRecovery = time.Now()
+				recCtx, stop := context.WithTimeout(ctx, 30*time.Second)
+				if err := recoverExpired(recCtx); err != nil && ctx.Err() == nil {
+					logger.Warn("expired run recovery pending", "error", err)
+				}
+				stop()
 			}
 			select {
 			case <-ctx.Done():

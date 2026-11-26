@@ -85,12 +85,12 @@ func (s *Store) EvaluationDatasets(ctx context.Context, actor, space string, q i
 	return
 }
 
-const experimentColumns = "e.id,e.space_id,e.actor_id,e.created_at,e.dataset_id,d.name,e.dataset_version,e.agent_id,e.agent_version_id,e.concurrency,e.idempotency_key,e.request_digest,e.result,e.completed_at,JSON_LENGTH(d.cases)"
+const experimentColumns = "e.id,e.space_id,e.actor_id,e.created_at,e.dataset_id,d.name,e.dataset_version,e.agent_id,e.agent_version_id,e.concurrency,e.idempotency_key,e.request_digest,e.result,e.completed_at,JSON_LENGTH(d.cases),COALESCE(e.owner_node_id,''),e.lease_expires_at"
 const experimentFrom = " FROM evaluation_experiments e JOIN evaluation_datasets d ON d.space_id=e.space_id AND d.id=e.dataset_id AND d.version=e.dataset_version"
 
 func experimentRow(scan func(...any) error) (v evaluation.Experiment, err error) {
 	var raw []byte
-	err = scan(&v.ID, &v.SpaceID, &v.ActorID, &v.CreatedAt, &v.DatasetID, &v.DatasetName, &v.DatasetVersion, &v.AgentID, &v.AgentVersionID, &v.Concurrency, &v.Key, &v.Digest, &raw, &v.CompletedAt, &v.CaseCount)
+	err = scan(&v.ID, &v.SpaceID, &v.ActorID, &v.CreatedAt, &v.DatasetID, &v.DatasetName, &v.DatasetVersion, &v.AgentID, &v.AgentVersionID, &v.Concurrency, &v.Key, &v.Digest, &raw, &v.CompletedAt, &v.CaseCount, &v.OwnerNodeID, &v.LeaseExpiresAt)
 	if err == nil && raw != nil {
 		err = json.Unmarshal(raw, &v.Result)
 	}
@@ -139,7 +139,7 @@ func (s *Store) CreateEvaluationExperiment(ctx context.Context, in evaluation.Ex
 			return e
 		}
 		v.DatasetName, v.DatasetVersion, v.CaseCount = d.Name, d.Version, len(d.Cases)
-		_, e = tx.ExecContext(ctx, "INSERT INTO evaluation_experiments(id,space_id,actor_id,created_at,dataset_id,dataset_version,agent_id,agent_version_id,concurrency,idempotency_key,request_digest) VALUES(?,?,?,?,?,?,?,?,?,?,?)", v.ID, v.SpaceID, v.ActorID, v.CreatedAt, v.DatasetID, v.DatasetVersion, v.AgentID, v.AgentVersionID, v.Concurrency, v.Key, v.Digest)
+		_, e = tx.ExecContext(ctx, "INSERT INTO evaluation_experiments(id,space_id,actor_id,created_at,dataset_id,dataset_version,agent_id,agent_version_id,concurrency,idempotency_key,request_digest,owner_node_id,lease_expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", v.ID, v.SpaceID, v.ActorID, v.CreatedAt, v.DatasetID, v.DatasetVersion, v.AgentID, v.AgentVersionID, v.Concurrency, v.Key, v.Digest, nullable(v.OwnerNodeID), v.LeaseExpiresAt)
 		return e
 	})
 	return
@@ -195,7 +195,7 @@ func (s *Store) FinishEvaluationExperiment(ctx context.Context, actor, space, id
 	if err != nil {
 		return err
 	}
-	res, err := s.DB.ExecContext(ctx, "UPDATE evaluation_experiments SET result=?,completed_at=? WHERE space_id=? AND id=? AND actor_id=? AND completed_at IS NULL", raw, at, space, id, actor)
+	res, err := s.DB.ExecContext(ctx, "UPDATE evaluation_experiments SET result=?,completed_at=?,owner_node_id=NULL,lease_expires_at=NULL WHERE space_id=? AND id=? AND actor_id=? AND completed_at IS NULL", raw, at, space, id, actor)
 	if err != nil {
 		return err
 	}

@@ -60,36 +60,65 @@ func (r *Runtime) Candidates(ctx context.Context, limit int) ([]run.Snapshot, er
 	return r.candidates(ctx, "r.status='queued'", limit)
 }
 func (r *Runtime) RecoveryCandidates(ctx context.Context) ([]run.Snapshot, error) {
-	return r.candidates(ctx, "r.status IN ('queued','running')", 1<<31-1)
+	return r.candidates(ctx, "r.status='running' AND (r.lease_expires_at IS NULL OR r.lease_expires_at < UTC_TIMESTAMP(6))", 1<<31-1)
 }
 
 func (r *Runtime) Recover(ctx context.Context, snapshot run.Snapshot) (bool, error) {
-	s, err := r.lock(ctx, snapshot.SpaceID, snapshot.SessionID)
+	if err := r.Check(ctx); err != nil {
+		return false, err
+	}
+	leaseSec := 30
+	if r.Lease != nil {
+		leaseSec = max(1, int(r.Lease.LeaseDuration()/time.Second))
+	}
+	res, err := r.DB.DB.ExecContext(ctx,
+		"UPDATE runs SET owner_node_id=?,lease_expires_at=DATE_ADD(UTC_TIMESTAMP(6), INTERVAL ? SECOND) WHERE id=? AND status='running' AND (lease_expires_at IS NULL OR lease_expires_at < UTC_TIMESTAMP(6))",
+		r.Lease.ID, leaseSec, snapshot.ID,
+	)
 	if err != nil {
 		return false, err
 	}
-	defer s.Unlock()
-	state := s.runs[snapshot.ID]
-	if state == nil {
-		return false, identity.ErrNotFound
-	}
-	if state.final != nil {
-		return true, r.publishSummary(ctx, s, state)
-	}
-	var start sql.NullTime
-	if err := r.DB.DB.QueryRowContext(ctx, "SELECT started_at FROM runs WHERE id=?", snapshot.ID).Scan(&start); err != nil {
-		return false, err
-	}
-	if !start.Valid {
-		diagnostic.Record(diagnostic.WithRun(ctx, r.DiagnosticLog, snapshot), "warn", "run.interrupted", "reason=recovery state=queued")
-		event := journal.New(snapshot.ActorID, "run.finished", snapshot.ID, journal.FinishData{Status: "failed", Error: "interrupted"})
-		if err := r.finish(ctx, s, state, event); err != nil {
-			return false, err
-		}
+	if n, _ := res.RowsAffected(); n != 1 {
 		return true, nil
 	}
-	state.view.StartedAt = &start.Time
-	return false, nil
+	var done bool
+	err = r.withSessionLock(ctx, snapshot.SessionID, func(ctx context.Context) error {
+		s, err := r.lock(ctx, snapshot.SpaceID, snapshot.SessionID)
+		if err != nil {
+			return err
+		}
+		defer s.Unlock()
+		state := s.runs[snapshot.ID]
+		if state == nil {
+			return identity.ErrNotFound
+		}
+		if run.Terminal(state.view.Status) {
+			done = true
+			return nil
+		}
+		if state.final != nil {
+			done = true
+			return r.publishSummary(ctx, s, state)
+		}
+		var start sql.NullTime
+		if err := r.DB.DB.QueryRowContext(ctx, "SELECT started_at FROM runs WHERE id=?", snapshot.ID).Scan(&start); err != nil {
+			return err
+		}
+		if !start.Valid {
+			diagnostic.Record(diagnostic.WithRun(ctx, r.DiagnosticLog, snapshot), "warn", "run.interrupted", "reason=recovery state=queued")
+			event := journal.New(snapshot.ActorID, "run.finished", snapshot.ID, journal.FinishData{Status: "failed", Error: "interrupted"})
+			if err := r.finish(ctx, s, state, event); err != nil {
+				return err
+			}
+			done = true
+			return nil
+		}
+		state.view.Status = "running"
+		state.view.OwnerID = r.Lease.ID
+		state.view.StartedAt = &start.Time
+		return nil
+	})
+	return done, err
 }
 
 func (r *Runtime) Claim(ctx context.Context, snapshot run.Snapshot) (run.View, error) {
@@ -106,7 +135,14 @@ func (r *Runtime) Claim(ctx context.Context, snapshot run.Snapshot) (run.View, e
 		return run.View{}, run.ErrState
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	result, err := r.DB.DB.ExecContext(ctx, "UPDATE runs SET status='running',started_at=? WHERE id=? AND status='queued'", now, snapshot.ID)
+	leaseSec := 30
+	if r.Lease != nil {
+		leaseSec = max(1, int(r.Lease.LeaseDuration()/time.Second))
+	}
+	result, err := r.DB.DB.ExecContext(ctx,
+		"UPDATE runs SET status='running',started_at=?,owner_node_id=?,lease_expires_at=DATE_ADD(UTC_TIMESTAMP(6), INTERVAL ? SECOND) WHERE id=? AND status='queued'",
+		now, r.Lease.ID, leaseSec, snapshot.ID,
+	)
 	if err != nil {
 		return run.View{}, err
 	}
@@ -138,6 +174,13 @@ func (r *Runtime) CheckRun(ctx context.Context, snapshot run.Snapshot) error {
 	if v.CancelRequested {
 		return run.ErrCancelled
 	}
+	var dbStatus, dbOwner string
+	if err := r.DB.DB.QueryRowContext(ctx, "SELECT status,COALESCE(owner_node_id,'') FROM runs WHERE id=?", snapshot.ID).Scan(&dbStatus, &dbOwner); err != nil {
+		return err
+	}
+	if dbStatus != "running" || dbOwner != r.Lease.ID {
+		return run.ErrState
+	}
 	var model identity.Model
 	if v.AgentSourceSpaceID == "" {
 		model, err = r.DB.Model(ctx, v.ActorID, v.SpaceID, v.Definition.Model.ID)
@@ -154,42 +197,71 @@ func (r *Runtime) CheckRun(ctx context.Context, snapshot run.Snapshot) error {
 }
 
 func (r *Runtime) RejectQueued(ctx context.Context, snapshot run.Snapshot, code string) error {
-	s, err := r.lock(ctx, snapshot.SpaceID, snapshot.SessionID)
-	if err != nil {
-		return err
-	}
-	defer s.Unlock()
-	state := s.runs[snapshot.ID]
-	if state == nil || state.view.Status != "queued" {
-		return run.ErrState
-	}
-	diagnostic.Record(diagnostic.WithRun(ctx, r.DiagnosticLog, snapshot), "warn", "run.start_failed", "stage=claim cause=%s", code)
-	event := journal.New(snapshot.ActorID, "run.finished", snapshot.ID, journal.FinishData{Status: "failed", Error: code})
-	return r.finish(ctx, s, state, event)
+	return r.withSessionLock(ctx, snapshot.SessionID, func(ctx context.Context) error {
+		s, err := r.lock(ctx, snapshot.SpaceID, snapshot.SessionID)
+		if err != nil {
+			return err
+		}
+		defer s.Unlock()
+		state := s.runs[snapshot.ID]
+		if state == nil || state.view.Status != "queued" {
+			return run.ErrState
+		}
+		diagnostic.Record(diagnostic.WithRun(ctx, r.DiagnosticLog, snapshot), "warn", "run.start_failed", "stage=claim cause=%s", code)
+		event := journal.New(snapshot.ActorID, "run.finished", snapshot.ID, journal.FinishData{Status: "failed", Error: code})
+		return r.finish(ctx, s, state, event)
+	})
 }
 
 func (r *Runtime) CancelRuntimeRun(ctx context.Context, actor, space, id string) (run.View, error) {
-	s, err := r.runSession(ctx, actor, space, id)
+	if err := r.access(ctx, actor, space); err != nil {
+		return run.View{}, err
+	}
+	actual, session, err := r.locateRun(ctx, id)
 	if err != nil {
 		return run.View{}, err
 	}
-	defer s.Unlock()
-	state := s.runs[id]
-	if state == nil {
+	if actual != space {
 		return run.View{}, identity.ErrNotFound
 	}
-	if run.Terminal(state.view.Status) || state.view.CancelRequested {
-		return state.view, nil
-	}
-	state.view.CancelRequested = true
-	s.append(journal.New(actor, "run.cancel.requested", id, struct{}{}))
-	if state.view.Status == "queued" {
-		event := journal.New(actor, "run.finished", id, journal.FinishData{Status: "cancelled", Error: "run_cancelled"})
-		if err := r.finish(ctx, s, state, event); err != nil {
-			return run.View{}, err
+	var out run.View
+	err = r.withSessionLock(ctx, session, func(ctx context.Context) error {
+		s, err := r.lock(ctx, space, session)
+		if err != nil {
+			return err
 		}
-	}
-	return state.view, nil
+		defer s.Unlock()
+		state := s.runs[id]
+		if state == nil {
+			return identity.ErrNotFound
+		}
+		if run.Terminal(state.view.Status) || state.view.CancelRequested {
+			out = state.view
+			return nil
+		}
+		var dbStatus, dbOwner string
+		if err := r.DB.DB.QueryRowContext(ctx, "SELECT status,COALESCE(owner_node_id,'') FROM runs WHERE id=?", id).Scan(&dbStatus, &dbOwner); err != nil {
+			return notFound(err)
+		}
+		if run.Terminal(dbStatus) {
+			out = state.view
+			return nil
+		}
+		if dbStatus == "running" && dbOwner != "" && r.Lease != nil && dbOwner != r.Lease.ID {
+			return run.ErrState
+		}
+		state.view.CancelRequested = true
+		s.append(journal.New(actor, "run.cancel.requested", id, struct{}{}))
+		if dbStatus == "queued" {
+			event := journal.New(actor, "run.finished", id, journal.FinishData{Status: "cancelled", Error: "run_cancelled"})
+			if err := r.finish(ctx, s, state, event); err != nil {
+				return err
+			}
+		}
+		out = state.view
+		return nil
+	})
+	return out, err
 }
 
 func (r *Runtime) BeginWorkspaceMaintenance(ctx context.Context, actor, space, session string) error {
@@ -349,19 +421,45 @@ func (c *cleanup) OpenInline(_ context.Context, _, space, id string) (storage.Ob
 }
 
 func (r *Runtime) RetryUploads(ctx context.Context) error {
-	var result error
+	type pending struct {
+		sessionID string
+		conv      *conversation
+	}
+	var targets []pending
 	r.sessions.Range(func(_, value any) bool {
 		s := value.(*conversation)
 		s.Lock()
-		defer s.Unlock()
 		for _, state := range s.runs {
 			if state.final != nil && !state.finished {
-				if err := r.publishSummary(ctx, s, state); err != nil {
-					result = errors.Join(result, err)
-				}
+				targets = append(targets, pending{sessionID: s.session.ID, conv: s})
+				break
 			}
 		}
+		s.Unlock()
 		return ctx.Err() == nil
 	})
+	var result error
+	for _, target := range targets {
+		if ctx.Err() != nil {
+			break
+		}
+		err := r.withSessionLock(ctx, target.sessionID, func(ctx context.Context) error {
+			s := target.conv
+			s.Lock()
+			defer s.Unlock()
+			var sessionErr error
+			for _, state := range s.runs {
+				if state.final != nil && !state.finished {
+					if err := r.publishSummary(ctx, s, state); err != nil {
+						sessionErr = errors.Join(sessionErr, err)
+					}
+				}
+			}
+			return sessionErr
+		})
+		if err != nil {
+			result = errors.Join(result, err)
+		}
+	}
 	return result
 }
